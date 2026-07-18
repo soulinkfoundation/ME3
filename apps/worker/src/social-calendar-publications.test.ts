@@ -74,6 +74,7 @@ describe("Social Publication Calendar projection", () => {
       sourceLabel: "Journal",
       scheduledFor: "2026-07-20T09:30:00.000Z",
       timezone: "Europe/Dublin",
+      updatedAt: "2026-07-01T08:00:00.000Z",
     });
     expect(publications.some((entry) => entry.id === "publication-cancelled")).toBe(false);
     expect(publications.some((entry) => entry.id === "publication-other-owner")).toBe(false);

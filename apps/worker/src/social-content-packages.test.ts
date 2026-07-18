@@ -525,6 +525,89 @@ class Statement {
       return { enabled: 1, status: "installed" } as T;
     }
     if (
+      this.sql.includes("INSERT INTO social_publications") &&
+      this.sql.includes("RETURNING id, platform, target_account_id_snapshot")
+    ) {
+      const [
+        id,
+        scheduledFor,
+        timezone,
+        requestedByType,
+        ownerId,
+        requestContextJson,
+        createdAt,
+        updatedAt,
+        versionId,
+        guardedOwnerId,
+        guardedPlatform,
+        duplicateScheduledFor,
+      ] = this.values;
+      const variant = this.state.variants.find((row) => row.id === versionId);
+      const pkg = this.state.packages.find((row) => row.id === variant?.package_id);
+      const site = this.state.sites.find(
+        (row) => row.id === pkg?.site_id && row.user_id === guardedOwnerId,
+      );
+      const account = this.state.accounts.find(
+        (row) =>
+          row.id === variant?.target_account_id &&
+          row.user_id === site?.user_id &&
+          row.site_id === pkg?.site_id &&
+          row.platform === variant?.platform &&
+          row.status === "active",
+      );
+      const duplicate = this.state.publications.some(
+        (row) =>
+          row.variant_id === versionId &&
+          row.scheduled_for === duplicateScheduledFor &&
+          row.status === "scheduled",
+      );
+      if (
+        !variant ||
+        !pkg ||
+        !site ||
+        !account ||
+        site.user_id !== ownerId ||
+        pkg.source_type === "legacy_content_bank_read_only" ||
+        variant.approval_status !== "approved" ||
+        variant.platform !== guardedPlatform ||
+        duplicate
+      ) {
+        return null as T | null;
+      }
+      this.state.publications.push({
+        id,
+        variant_id: variant.id,
+        site_id: pkg.site_id,
+        platform: variant.platform,
+        status: "scheduled",
+        scheduled_for: scheduledFor,
+        timezone,
+        target_account_id_snapshot: variant.target_account_id,
+        format_snapshot: variant.format,
+        body_text_snapshot: variant.body_text,
+        asset_manifest_json_snapshot: variant.asset_manifest_json,
+        approval_status_snapshot: variant.approval_status,
+        approved_at_snapshot: variant.approved_at,
+        approved_by_user_id_snapshot: variant.approved_by_user_id,
+        requested_by_type: requestedByType,
+        requested_by_user_id: ownerId,
+        request_context_json: requestContextJson,
+        platform_post_id: null,
+        platform_post_url: null,
+        queued_at: null,
+        published_at: null,
+        error_code: null,
+        error_message: null,
+        created_at: createdAt,
+        updated_at: updatedAt,
+      });
+      return {
+        id,
+        platform: variant.platform,
+        target_account_id_snapshot: variant.target_account_id,
+      } as T;
+    }
+    if (
       this.sql.includes("UPDATE social_publications") &&
       this.sql.includes("RETURNING id")
     ) {

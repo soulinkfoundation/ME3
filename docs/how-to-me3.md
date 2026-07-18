@@ -347,16 +347,19 @@ ME3 exposes its first-party capability catalog through `/api/plugins`. Account -
 | ME3 Calendar | Bundled | Events, reminders, bookings, birthdays, tasks, imports, recurring event expansion, and ready-plugin Social Publication visibility. |
 | Local Executor | Bundled, optional setup | Pairs a local runner for approved local tasks with policies, run history, and audit. |
 | ME3 Landing Pages | Bundled but coming soon; activation blocked | Landing-page draft generation and rendering package, not a live owner feature unless runtime state proves otherwise. |
-| ME3 Social Publishing | Bundled/catalog depending runtime; setup required | Source-backed Posts, account-specific Versions, connected accounts, approval-first Publications, and delivery history. |
+| ME3 Social Publishing | Bundled/catalog depending runtime; setup required | Grounded Suggestions, Source-backed Posts, account-specific Versions, connected accounts, approval-first Publications, and delivery history. |
 
 ### Social Publishing
 
-Social Publishing uses four owner-facing domain terms:
+Social Publishing uses five owner-facing domain terms:
 
 - A **Source** is explicit human-authored material such as a Journal entry, Mission Control task,
   site article, file, script, or pasted text. An agent-saved Post requires a stable Source reference,
   immutable snapshot, and visible Source text. Brainstorming from a blank prompt may remain
   conversational, but it cannot be saved as a publishable Post.
+- A **Suggestion** is review material extracted or transformed from one Source. Quote, Short Post,
+  Thread, and carousel outline Suggestions keep visible Source text. The owner can edit, discard, or
+  choose each one; choosing creates a separate Post linked to that same Source.
 - A **Post** is reusable social content derived from a Source.
 - A **Version** is the exact platform- and account-specific copy, media, format, and rendered output
   for a Post. Approval applies to that exact Version. Editing its copy, media, format, or account
@@ -371,18 +374,24 @@ when an active account and the Social Publishing queue are ready. X, Instagram, 
 Business currently support drafting and review only; ME3 rejects attempts to schedule or publish
 those Versions until their provider workflows work end to end.
 
-The canonical owner API is `GET|POST /api/social/posts`, `GET /api/social/posts/:id`,
+The canonical owner API includes `GET|POST /api/social/suggestions`,
+`PATCH|DELETE /api/social/suggestions/:id`, and
+`POST /api/social/suggestions/:id/post` for grounded review and choosing. Posts use
+`GET|POST /api/social/posts`, `GET /api/social/posts/:id`,
 `PATCH /api/social/versions/:id`, `GET|POST /api/social/versions/:id/publications`, and the immediate
 publish convenience route `POST /api/social/versions/:id/publish`. Cancel a future Publication with
-`DELETE /api/social/publications/:id`; resolve an ambiguous provider outcome for that exact attempt
-with `POST /api/social/publications/:id/resolve`. Account connection and runtime readiness remain
+`DELETE /api/social/publications/:id`, or reschedule only its planned time with
+`PATCH /api/social/publications/:id`; resolve an ambiguous provider outcome for that exact attempt
+with `POST /api/social/publications/:id/resolve`. Calendar's approved-Version chooser reads
+`GET /api/social/scheduling/approved-versions`. Account connection and runtime readiness remain
 under `/api/social/accounts` and `/api/social/status`.
 
 When Social Publishing is ready, `/api/calendar/feed` includes a bounded, read-only projection of
 planned, publishing, published, failed, and attention-required Publications. Calendar presents a
 toggleable Social publishing source in its existing schedule, day, week, and month views. Each
 entry deep-links to the exact Post Version and Publication; Calendar never copies a Publication
-into `user_calendar_events`.
+into `user_calendar_events`. Scheduling, rescheduling, and cancellation from Calendar call those
+plugin-owned Social Publishing APIs rather than mutating a personal calendar row.
 
 Plugin boundaries:
 

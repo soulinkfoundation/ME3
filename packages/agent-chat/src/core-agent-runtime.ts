@@ -46,6 +46,7 @@ import {
 import {
   agentSocialSourceKey,
   createAgentSocialPost,
+  createAgentSocialSuggestions,
   readAgentSocialSource,
   type AgentSocialSource,
   type AgentSocialSourceType,
@@ -668,6 +669,54 @@ async function executeSocialToolCall(input: {
     );
     cacheSocialSource(source, input.socialSources);
   }
+  if (input.tool.capabilityId === "core.social.suggestions.create") {
+    const suggestions = await createAgentSocialSuggestions(
+      input.db,
+      input.userId,
+      source,
+      {
+        siteId: optionalToolString(args.siteId),
+        quoteText: requiredToolString(args.quoteText, "Quote Suggestion text"),
+        quoteSourceExcerpt: requiredToolString(
+          args.quoteSourceExcerpt,
+          "Quote Suggestion Source text",
+        ),
+        quoteTrimmed: optionalToolBoolean(args.quoteTrimmed),
+        shortPostText: requiredToolString(args.shortPostText, "Short Post Suggestion text"),
+        shortPostSourceExcerpt: requiredToolString(
+          args.shortPostSourceExcerpt,
+          "Short Post Suggestion Source text",
+        ),
+        threadText: requiredToolString(args.threadText, "Thread Suggestion text"),
+        threadSourceExcerpt: requiredToolString(
+          args.threadSourceExcerpt,
+          "Thread Suggestion Source text",
+        ),
+        carouselOutlineText: requiredToolString(
+          args.carouselOutlineText,
+          "Carousel outline Suggestion text",
+        ),
+        carouselSourceExcerpt: requiredToolString(
+          args.carouselSourceExcerpt,
+          "Carousel outline Suggestion Source text",
+        ),
+      },
+    );
+    return {
+      capabilityId: "core.social.suggestions.create",
+      result: {
+        ok: true,
+        saved: true,
+        sourceTitle: source.title,
+        suggestionCount: suggestions.length,
+        postCreated: false,
+      },
+      fallbackReply: `Saved ${suggestions.length} grounded Suggestions from ${source.title} for you to review. No Posts were created.`,
+      reminderAction: null,
+      actionCards: [buildSocialSuggestionsActionCard(suggestions, source)],
+      sourceReference: { sourceType: source.sourceType, sourceId: source.id },
+    };
+  }
   const detail = await createAgentSocialPost(input.db, input.userId, source, {
     siteId: optionalToolString(args.siteId),
     ideaText: requiredToolString(args.ideaText, "Social draft ideaText"),
@@ -695,6 +744,31 @@ async function executeSocialToolCall(input: {
     },
     actionCards: [buildSocialDraftActionCard(detail, source)],
     sourceReference: { sourceType: source.sourceType, sourceId: source.id },
+  };
+}
+
+function buildSocialSuggestionsActionCard(
+  suggestions: Awaited<ReturnType<typeof createAgentSocialSuggestions>>,
+  source: AgentSocialSource,
+): AgentChatActionCard {
+  return {
+    id: `social-suggestions:${suggestions[0]?.sourceRef || source.id}`,
+    kind: "social.suggestions_created",
+    capabilityId: "core.social.suggestions.create",
+    title: "Social Suggestions ready",
+    summary: source.title,
+    status: "draft",
+    statusLabel: "Needs review",
+    changed: [
+      { label: "Suggestions", value: String(suggestions.length) },
+      { label: "Source", value: source.title },
+    ],
+    records: suggestions.map((suggestion) => ({
+      kind: "social_suggestion" as const,
+      id: suggestion.id,
+    })),
+    primaryAction: { label: "Review Suggestions", href: "/social?suggestions=open" },
+    secondaryActions: [],
   };
 }
 
@@ -937,14 +1011,16 @@ function withCoreToolInstructions(
     "- Draft requires a complete recipient, subject, and plain-text body. Use replyToMessageId only after reading that exact message.",
     "- Draft creation saves a reviewable mailbox draft only. Never claim the email was sent; sending is not an available tool.",
     "Social publishing tool rules:",
-    "- Use social tools when the owner asks to turn a Journal entry or Mission Control task into social posts.",
+    "- Use social tools when the owner asks to turn a Journal entry or Mission Control task into social Posts or Suggestions.",
     "- Search owner content when the owner gives a remembered task or Journal title. For Journal, an entry ID, YYYY-MM-DD date, or today can also be used directly. Never invent a source ID.",
-    "- Read the exact source with core_social_source_read before calling core_social_draft_create. Build every draft from that returned source, not from assumptions or a summary invented by the model.",
+    "- Read the exact Source with core_social_source_read before calling core_social_suggestions_create or core_social_draft_create. Build every Suggestion and Version from that returned Source, not from assumptions or a summary invented by the model.",
     "- If source reading is the last action in a turn, confirm the source by its human title only. ME3 preserves the stable source ID privately for safe cross-turn revalidation.",
     "- Preserve the owner's words, voice, claims, tone, and intended meaning by default. Reuse exact source phrases where they fit and make only light edits for length, clarity, or platform formatting unless the owner asks for a rewrite.",
     "- Do not add generic hooks, emojis, hashtags, advice, claims, or framing that are not in the source. When one source wording already fits several platforms, keep it instead of rewriting for novelty.",
+    "- When the owner asks for ideas, options, repurposing, a Quote, Short Post, Thread, or carousel outline, call core_social_suggestions_create. Provide exact Source text for each Suggestion. Quotes must stay verbatim; set quoteTrimmed only when words were removed without adding or reordering words.",
+    "- Suggestions remain owner-controlled review material. Never claim that a Suggestion became a Post until the owner chooses and saves it.",
     "- Create only the platforms the owner requested. Draft creation saves reviewable internal drafts only; it never approves, schedules, or publishes them.",
-    "- Never mention internal Social Post or Version IDs in the user-facing reply. Confirm the saved Post and use the review action instead.",
+    "- Never mention internal Social Suggestion, Post, or Version IDs in the user-facing reply. Confirm the review action in ordinary language instead.",
     "- Never mention internal Mission task or Journal source IDs in the user-facing reply. Disambiguate with human titles, projects, dates, and snippets.",
     "- A tool result is the source of truth. Do not claim an action succeeded unless its result says ok=true.",
     "- For current ME3 data, call the relevant tool in this turn instead of answering from earlier conversation or context alone.",
@@ -1178,7 +1254,7 @@ function userFacingToolReply(
   if (
     outcome &&
     (
-      /\b(?:social-package|social-variant)-[0-9a-z-]+\b/i.test(replyText) ||
+      /\bsocial-(?:package|variant|post|suggestion)-[0-9a-z-]+\b/i.test(replyText) ||
       /\b(?:mission_task|journal):[0-9a-z-]+\b/i.test(replyText) ||
       Boolean(
         outcome.sourceReference?.sourceId &&

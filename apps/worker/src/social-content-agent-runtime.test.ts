@@ -329,6 +329,124 @@ describe("Social content Agent Runtime v2", () => {
       error_message: expect.stringContaining("No Journal entry was found"),
     });
   });
+
+  it("golden transcript: creates four reviewable Suggestions from one explicit Source", async () => {
+    const sourceText = "We shipped the smallest useful slice and learned from real feedback.";
+    const database = createSocialAgentDb({
+      journals: [{
+        id: "journal-suggestions",
+        user_id: "owner",
+        entry_date: "2026-07-18",
+        title: "Small useful slices",
+        body: sourceText,
+        body_format: "markdown",
+        updated_at: "2026-07-18T10:00:00Z",
+        archived_at: null,
+      }],
+    });
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "social-suggestions-grounded",
+      turnId: "turn-social-suggestions-grounded",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute([
+        toolCall("read-suggestion-source", "core_social_source_read", {
+          sourceType: "journal",
+          sourceId: "journal-suggestions",
+        }),
+        toolCall("create-suggestions", "core_social_suggestions_create", {
+          sourceType: "journal",
+          sourceId: "journal-suggestions",
+          quoteText: sourceText,
+          quoteSourceExcerpt: sourceText,
+          shortPostText: "Ship the smallest useful slice. Learn from real feedback.",
+          shortPostSourceExcerpt: sourceText,
+          threadText: "1. Ship the smallest useful slice.\n2. Learn from real feedback.",
+          threadSourceExcerpt: sourceText,
+          carouselOutlineText:
+            "Slide 1: The smallest useful slice\nSlide 2: Learn from real feedback",
+          carouselSourceExcerpt: sourceText,
+        }),
+        { response: "Suggestions saved: social-suggestion-should-not-render." },
+      ]) as never,
+      messages: baseMessages(
+        "Repurpose my Journal entry Small useful slices into a Quote, Short Post, Thread, and carousel outline.",
+      ),
+    });
+
+    expect(response).toMatchObject({
+      specialist: "core.social.suggestions.create",
+      replyText:
+        "Saved 4 grounded Suggestions from Small useful slices for you to review. No Posts were created.",
+      contentAction: null,
+      actionCards: [expect.objectContaining({
+        kind: "social.suggestions_created",
+        title: "Social Suggestions ready",
+        summary: "Small useful slices",
+        status: "draft",
+        changed: [
+          { label: "Suggestions", value: "4" },
+          { label: "Source", value: "Small useful slices" },
+        ],
+        primaryAction: {
+          label: "Review Suggestions",
+          href: "/social?suggestions=open",
+        },
+      })],
+    });
+    expect(database.suggestions).toHaveLength(4);
+    expect(response.replyText).not.toContain("social-suggestion-");
+    expect(database.suggestions.map((suggestion) => suggestion.suggestion_kind)).toEqual([
+      "quote",
+      "short_post",
+      "thread",
+      "carousel_outline",
+    ]);
+    expect(database.suggestions.every((suggestion) => suggestion.source_text === sourceText))
+      .toBe(true);
+    expect(database.suggestions.every((suggestion) => suggestion.source_excerpt === sourceText))
+      .toBe(true);
+    expect(database.packages).toHaveLength(0);
+  });
+
+  it("golden transcript: rejects prohibited Source-less Suggestion generation", async () => {
+    const database = createSocialAgentDb();
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "social-suggestions-source-less",
+      turnId: "turn-social-suggestions-source-less",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute([
+        toolCall("invent-suggestions", "core_social_suggestions_create", {
+          sourceType: "journal",
+          sourceId: "invented-source",
+          quoteText: "An invented quote.",
+          quoteSourceExcerpt: "An invented Source.",
+          shortPostText: "An invented Post.",
+          shortPostSourceExcerpt: "An invented Source.",
+          threadText: "1. An invented Thread.",
+          threadSourceExcerpt: "An invented Source.",
+          carouselOutlineText: "Slide 1: An invented carousel.",
+          carouselSourceExcerpt: "An invented Source.",
+        }),
+        { response: "I cannot create Suggestions without one of your Sources." },
+      ]) as never,
+      messages: baseMessages("Invent some social content for me from a blank prompt."),
+    });
+
+    expect(response.replyText).toBe(
+      "I cannot create Suggestions without one of your Sources.",
+    );
+    expect(response.contentAction).toBeNull();
+    expect(database.suggestions).toHaveLength(0);
+    expect(database.packages).toHaveLength(0);
+    expect(database.executions[0]).toMatchObject({
+      status: "failed",
+      error_message: expect.stringContaining("Journal entry not found"),
+    });
+  });
 });
 
 function baseMessages(message: string): AgentToolMessage[] {
@@ -361,6 +479,7 @@ function createSocialAgentDb(input: { journals?: Row[]; tasks?: Row[] } = {}) {
     tasks: input.tasks || [],
     executions: [] as Row[],
     packages: [] as Row[],
+    suggestions: [] as Row[],
     variants: [] as Row[],
     events: [] as Row[],
   };
@@ -387,6 +506,7 @@ class Statement {
       tasks: Row[];
       executions: Row[];
       packages: Row[];
+      suggestions: Row[];
       variants: Row[];
       events: Row[];
     },
@@ -431,6 +551,14 @@ class Statement {
       const site = this.state.sites.find((row) => row.id === pkg?.site_id && row.user_id === userId);
       return (site ? pkg : null) as T | null;
     }
+    if (this.sql.includes("FROM social_suggestions suggestion")) {
+      const [suggestionId, userId] = this.values;
+      const suggestion = this.state.suggestions.find((row) => row.id === suggestionId);
+      const site = this.state.sites.find(
+        (row) => row.id === suggestion?.site_id && row.user_id === userId,
+      );
+      return (site ? suggestion : null) as T | null;
+    }
     return null as T | null;
   }
 
@@ -471,6 +599,41 @@ class Statement {
         source_type: sourceType, source_ref: sourceRef, source_snapshot: sourceSnapshot,
         source_text: sourceText,
         idea_text: ideaText, created_at: createdAt, updated_at: updatedAt,
+      });
+    } else if (this.sql.includes("INSERT INTO social_suggestions")) {
+      const [
+        id,
+        siteId,
+        sourceType,
+        sourceRef,
+        sourceTitle,
+        sourceSnapshot,
+        sourceText,
+        suggestionKind,
+        bodyText,
+        sourceExcerpt,
+        quoteTrimmed,
+        createdBy,
+        createdAt,
+        updatedAt,
+      ] = this.values;
+      this.state.suggestions.push({
+        id,
+        site_id: siteId,
+        source_type: sourceType,
+        source_ref: sourceRef,
+        source_title: sourceTitle,
+        source_snapshot: sourceSnapshot,
+        source_text: sourceText,
+        suggestion_kind: suggestionKind,
+        body_text: bodyText,
+        source_excerpt: sourceExcerpt,
+        quote_trimmed: quoteTrimmed,
+        status: "suggested",
+        selected_post_id: null,
+        created_by: createdBy,
+        created_at: createdAt,
+        updated_at: updatedAt,
       });
     } else if (this.sql.includes("INSERT INTO social_variants")) {
       const [id, packageId, platform, targetAccountId, format, bodyText, assets, sourceExcerpt, createdAt, updatedAt] = this.values;

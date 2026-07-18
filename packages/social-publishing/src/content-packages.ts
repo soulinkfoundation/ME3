@@ -164,7 +164,7 @@ type VariantRow = {
 export class SocialPostInputError extends Error {
   constructor(
     message: string,
-    public readonly status: 400 | 403 | 404 = 400,
+    public readonly status: 400 | 403 | 404 | 409 = 400,
   ) {
     super(message);
   }
@@ -176,6 +176,7 @@ async function createSocialContentPackage(
   env: SocialContentPackageEnv,
   ownerId: string,
   input: CreateSocialContentPackageInput,
+  options: { postId?: string } = {},
 ): Promise<SocialContentPackageDetail> {
   const siteId = requiredText(input.siteId, "siteId is required");
   const site = await env.DB.prepare("SELECT id FROM sites WHERE id = ? AND user_id = ?")
@@ -210,7 +211,7 @@ async function createSocialContentPackage(
     }
   }
 
-  const id = `social-post-${crypto.randomUUID()}`;
+  const id = options.postId || `social-post-${crypto.randomUUID()}`;
   const sourceRef = optionalText(input.sourceRef) ||
     (input.sourceType === "pasted" ? `pasted:${id}` : null);
   if (!sourceRef) {
@@ -569,11 +570,12 @@ export async function createSocialPost(
   env: SocialPostEnv,
   ownerId: string,
   input: CreateSocialPostInput,
+  options: { postId?: string } = {},
 ): Promise<SocialPostDetail> {
   return canonicalDetail(await createSocialContentPackage(env, ownerId, {
     ...input,
     variants: input.versions,
-  }));
+  }, options));
 }
 
 export async function getSocialPost(

@@ -46,6 +46,41 @@ describe("Core chat tool contracts", () => {
     });
   });
 
+  it("requires explicit Source evidence for grounded Social Suggestions", () => {
+    expect(getCoreChatToolByName("core_social_suggestions_create")).toMatchObject({
+      capabilityId: "core.social.suggestions.create",
+      handlerRoute: "core.social.suggestions.create",
+      parameters: {
+        required: expect.arrayContaining([
+          "sourceType",
+          "sourceId",
+          "quoteText",
+          "quoteSourceExcerpt",
+          "shortPostText",
+          "shortPostSourceExcerpt",
+          "threadText",
+          "threadSourceExcerpt",
+          "carouselOutlineText",
+          "carouselSourceExcerpt",
+        ]),
+        additionalProperties: false,
+        properties: {
+          sourceType: { enum: ["journal", "mission_task"] },
+          quoteSourceExcerpt: { type: "string" },
+          shortPostSourceExcerpt: { type: "string" },
+          threadSourceExcerpt: { type: "string" },
+          carouselSourceExcerpt: { type: "string" },
+        },
+      },
+    });
+    const capability = CORE_CHAT_CAPABILITIES.find(
+      (item) => item.id === "core.social.suggestions.create",
+    );
+    expect(capability?.examples.positive.join(" ")).toContain("Repurpose");
+    expect(capability?.examples.negative.join(" ")).toContain("without reading");
+    expect(capability?.examples.negative.join(" ")).toContain("Make up");
+  });
+
   it("defines full reminder CRUD tools and accepts offset-aware timestamps", () => {
     expect(
       CORE_CHAT_TOOLS.filter((tool) =>

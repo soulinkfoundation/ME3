@@ -4,6 +4,7 @@ import { definePage } from "unplugin-vue-router/runtime";
 import AppDialog from "../components/AppDialog.vue";
 import Button from "../components/Button.vue";
 import SocialAccountsPanel from "../components/SocialAccountsPanel.vue";
+import SocialSuggestionsPanel from "../components/SocialSuggestionsPanel.vue";
 import UiIcon from "../components/UiIcon.vue";
 import WorkspaceTabs from "../components/WorkspaceTabs.vue";
 import { useSitesStore } from "../stores/sites";
@@ -52,6 +53,8 @@ const composeOpen = ref(false);
 const composeBody = ref("");
 const composePlatforms = ref<SocialPlatform[]>([]);
 const composeError = ref("");
+const suggestionsOpen = ref(currentQueryParam("suggestions") === "open");
+const suggestionCount = ref(0);
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 const linkedPublicationId = ref(currentQueryParam("publicationId"));
@@ -78,6 +81,21 @@ const visiblePosts = computed(() =>
         Date.parse(right.post.updatedAt) - Date.parse(left.post.updatedAt),
     ),
 );
+
+const visiblePostGroups = computed(() => {
+  const groups = new Map<string, { key: string; label: string; posts: SocialPostDetail[] }>();
+  for (const detail of visiblePosts.value) {
+    const key = detail.post.sourceRef || `${detail.post.sourceType}:${detail.post.sourceSnapshot}`;
+    const existing = groups.get(key) || {
+      key,
+      label: `${sourceLabel(detail)} · ${sourcePreview(detail)}`,
+      posts: [],
+    };
+    existing.posts.push(detail);
+    groups.set(key, existing);
+  }
+  return [...groups.values()];
+});
 
 const modeTabs = computed(() =>
   (["drafts", "scheduled", "published"] as WorkspaceMode[]).map((id) => ({
@@ -203,6 +221,12 @@ function sourceLabel(detail: SocialPostDetail): string {
   if (detail.post.sourceType === "script") return "Script";
   if (detail.post.sourceType === "legacy_content_bank_read_only") return "Imported post";
   return "Pasted text";
+}
+
+function sourcePreview(detail: SocialPostDetail): string {
+  const firstLine = detail.post.sourceText.split("\n").map((line) => line.trim()).find(Boolean) ||
+    detail.post.ideaText;
+  return firstLine.length > 58 ? `${firstLine.slice(0, 55)}…` : firstLine;
 }
 
 function versionState(version: PostVersion): string {
@@ -335,14 +359,16 @@ async function loadWorkspace() {
   loading.value = true;
   error.value = "";
   try {
-    const [nextPosts, nextAccounts, status] = await Promise.all([
+    const [nextPosts, nextAccounts, status, nextSuggestions] = await Promise.all([
       social.fetchSocialPosts(selectedSiteId.value),
       social.fetchSocialAccounts(),
       social.fetchSocialStatus(),
+      social.fetchSocialSuggestions(selectedSiteId.value),
     ]);
     posts.value = nextPosts;
     accounts.value = nextAccounts;
     capabilities.value = status.plugin.platformCapabilities || [];
+    suggestionCount.value = nextSuggestions.length;
     if (!selectLinkedSocialRecord()) ensureVisibleSelection();
   } catch (value) {
     social.setErrorFromApi(value, "Failed to load social posts");
@@ -350,6 +376,13 @@ async function loadWorkspace() {
   } finally {
     loading.value = false;
   }
+}
+
+function handleChosenSuggestion(post: SocialPostDetail) {
+  posts.value = [post, ...posts.value.filter((detail) => detail.post.id !== post.post.id)];
+  activeMode.value = "drafts";
+  selectPost(post);
+  notice.value = "Suggestion saved as a separate Source-backed Post for review.";
 }
 
 function replaceVersion(version: PostVersion) {
@@ -602,6 +635,7 @@ async function focusLinkedPublication() {
 <template>
   <div class="social-page">
     <main class="social-main">
+      <h1 class="sr-only">Social Publishing</h1>
       <div v-if="error" class="state-banner state-banner--error" role="alert">{{ error }}</div>
       <div v-if="notice" class="state-banner" role="status" aria-live="polite">
         {{ notice }}
@@ -627,6 +661,16 @@ async function focusLinkedPublication() {
             @click="showAccounts = true"
           >
             <UiIcon name="Settings" :size="18" aria-hidden="true" />
+          </Button>
+          <Button
+            color="outline"
+            shape="soft"
+            size="compact"
+            type="button"
+            :disabled="!currentSite"
+            @click="suggestionsOpen = true"
+          >
+            Suggestions<span v-if="suggestionCount"> ({{ suggestionCount }})</span>
           </Button>
           <Button
             color="outline"
@@ -677,30 +721,39 @@ async function focusLinkedPublication() {
               Write a Post
             </Button>
           </div>
-          <button
-            v-for="detail in visiblePosts"
-            v-else
-            :key="detail.post.id"
-            type="button"
-            class="post-row"
-            :class="{ 'post-row--active': selectedPostId === detail.post.id }"
-            :aria-current="selectedPostId === detail.post.id ? 'true' : undefined"
-            @click="selectPost(detail)"
-          >
-            <span class="post-row__meta">
-              <span>{{ sourceLabel(detail) }}</span>
-              <time :datetime="detail.post.updatedAt">{{ formatDate(detail.post.updatedAt) }}</time>
-            </span>
-            <strong>{{ detail.post.ideaText }}</strong>
-            <span class="post-row__footer">
-              <span class="platform-list">
-                <span v-for="version in detail.versions" :key="version.id" class="platform-chip">
-                  {{ platformLabel(version.platform) }}
+          <template v-else>
+            <section
+              v-for="group in visiblePostGroups"
+              :key="group.key"
+              class="post-source-group"
+              :aria-label="`Posts from ${group.label}`"
+            >
+              <h2>{{ group.label }}</h2>
+              <button
+                v-for="detail in group.posts"
+                :key="detail.post.id"
+                type="button"
+                class="post-row"
+                :class="{ 'post-row--active': selectedPostId === detail.post.id }"
+                :aria-current="selectedPostId === detail.post.id ? 'true' : undefined"
+                @click="selectPost(detail)"
+              >
+                <span class="post-row__meta">
+                  <span>Post</span>
+                  <time :datetime="detail.post.updatedAt">{{ formatDate(detail.post.updatedAt) }}</time>
                 </span>
-              </span>
-              <span class="row-status">{{ postStatus(detail) }}</span>
-            </span>
-          </button>
+                <strong>{{ detail.post.ideaText }}</strong>
+                <span class="post-row__footer">
+                  <span class="platform-list">
+                    <span v-for="version in detail.versions" :key="version.id" class="platform-chip">
+                      {{ platformLabel(version.platform) }}
+                    </span>
+                  </span>
+                  <span class="row-status">{{ postStatus(detail) }}</span>
+                </span>
+              </button>
+            </section>
+          </template>
         </section>
 
         <section v-if="selectedPost" class="post-detail" aria-live="polite">
@@ -710,7 +763,7 @@ async function focusLinkedPublication() {
                 <span>{{ sourceLabel(selectedPost) }}</span>
                 <span>Created by {{ selectedPost.post.createdBy === 'agent' ? 'agent' : 'you' }}</span>
               </div>
-              <h1>{{ selectedPost.post.ideaText }}</h1>
+              <h2>{{ selectedPost.post.ideaText }}</h2>
             </div>
           </header>
 
@@ -972,6 +1025,16 @@ async function focusLinkedPublication() {
         <SocialAccountsPanel v-if="currentSite" :site-id="currentSite.id" />
       </section>
     </AppDialog>
+
+    <SocialSuggestionsPanel
+      :open="suggestionsOpen"
+      :site-id="selectedSiteId"
+      :capabilities="capabilities"
+      :accounts="accounts"
+      @close="suggestionsOpen = false"
+      @count="suggestionCount = $event"
+      @chosen="handleChosenSuggestion"
+    />
   </div>
 </template>
 
@@ -1053,6 +1116,16 @@ async function focusLinkedPublication() {
 .post-list {
   border-right: 1px solid var(--ui-border);
   background: var(--ui-surface-muted);
+}
+
+.post-source-group > h2 {
+  margin: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-text-muted);
+  font-size: 0.74rem;
+  font-weight: 650;
+  line-height: 1.35;
 }
 
 .post-row {

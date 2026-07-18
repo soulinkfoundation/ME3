@@ -1,4 +1,5 @@
 import type { SocialPlatform } from "./index";
+import { canScheduleSocialPlatform } from "./capabilities";
 
 export type SocialPublicationCalendarState =
   | "planned"
@@ -28,6 +29,20 @@ export type SocialPublicationCalendarEntry = {
   timezone: string | null;
   platformPostUrl: string | null;
   errorMessage: string | null;
+  updatedAt: string;
+};
+
+export type ApprovedPostVersionScheduleOption = {
+  versionId: string;
+  postId: string;
+  siteId: string;
+  postTitle: string;
+  versionLabel: string;
+  platform: SocialPlatform;
+  accountId: string;
+  accountLabel: string;
+  sourceLabel: string;
+  approvedAt: string;
 };
 
 export type SocialPublicationCalendarWindow = {
@@ -55,6 +70,20 @@ type SocialPublicationCalendarRow = {
   platform_post_url: string | null;
   error_code: string | null;
   error_message: string | null;
+  updated_at: string;
+};
+
+type ApprovedPostVersionScheduleRow = {
+  version_id: string;
+  post_id: string;
+  site_id: string;
+  post_title: string | null;
+  version_title: string | null;
+  platform: SocialPlatform;
+  account_id: string;
+  account_label: string | null;
+  source_type: string;
+  approved_at: string;
 };
 
 type SocialCalendarEnv = {
@@ -66,6 +95,74 @@ type SocialCalendarEnv = {
     };
   };
 };
+
+/**
+ * Lists exact approved Versions that Calendar may safely turn into a planned
+ * Publication. Draft-only platforms, inactive accounts, imported read-only
+ * Posts, and records owned by another user are excluded at the source.
+ */
+export async function listApprovedPostVersionsForScheduling(
+  env: SocialCalendarEnv,
+  ownerId: string,
+  siteIdInput?: unknown,
+): Promise<ApprovedPostVersionScheduleOption[]> {
+  const siteId = typeof siteIdInput === "string" ? siteIdInput.trim() : "";
+  const rows = await env.DB.prepare(
+    `SELECT version.id AS version_id,
+            post.id AS post_id,
+            post.site_id,
+            COALESCE(
+              NULLIF(post.idea_text, ''),
+              NULLIF(post.post_title_snapshot, ''),
+              NULLIF(substr(version.body_text, 1, 120), ''),
+              'Untitled Post'
+            ) AS post_title,
+            version.title AS version_title,
+            version.platform,
+            account.id AS account_id,
+            COALESCE(
+              NULLIF(account.display_name, ''),
+              NULLIF(account.platform_handle, ''),
+              NULLIF(account.platform_account_id, ''),
+              account.id
+            ) AS account_label,
+            post.source_type,
+            version.approved_at
+     FROM social_variants version
+     JOIN social_packages post ON post.id = version.package_id
+     JOIN sites site ON site.id = post.site_id
+     JOIN social_accounts account
+       ON account.id = version.target_account_id
+      AND account.user_id = site.user_id
+      AND account.site_id = post.site_id
+      AND account.platform = version.platform
+      AND account.status = 'active'
+     WHERE site.user_id = ?
+       AND version.approval_status = 'approved'
+       AND version.approved_at IS NOT NULL
+       AND post.source_type <> 'legacy_content_bank_read_only'
+       AND post.status <> 'archived'
+       AND (? = '' OR post.site_id = ?)
+     ORDER BY julianday(version.approved_at) DESC, version.id DESC`,
+  )
+    .bind(ownerId, siteId, siteId)
+    .all<ApprovedPostVersionScheduleRow>();
+
+  return (rows.results || [])
+    .filter((row) => canScheduleSocialPlatform(row.platform))
+    .map((row) => ({
+      versionId: row.version_id,
+      postId: row.post_id,
+      siteId: row.site_id,
+      postTitle: row.post_title?.trim() || "Untitled Post",
+      versionLabel: row.version_title?.trim() || `${platformLabel(row.platform)} Version`,
+      platform: row.platform,
+      accountId: row.account_id,
+      accountLabel: row.account_label?.trim() || row.account_id,
+      sourceLabel: sourceLabel(row.source_type),
+      approvedAt: row.approved_at,
+    }));
+}
 
 /**
  * Returns the Social Publishing plugin's read-only Calendar projection.
@@ -155,7 +252,7 @@ export async function listCalendarSocialPublications(
             publication_status, source_type, source_ref,
             strftime('%Y-%m-%dT%H:%M:%fZ', display_at) AS display_at,
             scheduled_for, published_at, timezone, platform_post_url,
-            error_code, error_message
+            error_code, error_message, updated_at
      FROM timed_publications
      WHERE display_at IS NOT NULL
        AND julianday(display_at) >= julianday(?)
@@ -193,6 +290,7 @@ function serializeCalendarPublication(
     timezone: row.timezone,
     platformPostUrl: row.platform_post_url,
     errorMessage: row.error_message,
+    updatedAt: row.updated_at,
   };
 }
 

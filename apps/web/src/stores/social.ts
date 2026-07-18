@@ -95,6 +95,36 @@ export type SocialPostDetail = {
   versions: PostVersion[];
 };
 
+export type SocialSuggestionKind = "quote" | "short_post" | "thread" | "carousel_outline";
+
+export type SocialSuggestion = {
+  id: string;
+  siteId: string;
+  sourceType: "journal" | "mission_task" | "site" | "file" | "script" | "pasted";
+  sourceRef: string;
+  sourceTitle: string;
+  sourceSnapshot: string;
+  sourceText: string;
+  kind: SocialSuggestionKind;
+  bodyText: string;
+  sourceExcerpt: string;
+  quoteTrimmed: boolean;
+  status: "suggested" | "choosing" | "chosen" | "discarded";
+  selectedPostId: string | null;
+  choosingPlatforms: SocialPlatform[] | null;
+  choosingAt: string | null;
+  createdBy: "user" | "agent";
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SocialSuggestionUpdate = {
+  expectedUpdatedAt: string;
+  bodyText?: string;
+  sourceExcerpt?: string;
+  quoteTrimmed?: boolean;
+};
+
 export type CreateSocialPostInput = {
   siteId: string;
   sourceType: "pasted";
@@ -184,6 +214,59 @@ export const useSocialStore = defineStore("social", () => {
     const data = await api.post<{ post: SocialPostDetail }>("/social/posts", input);
     if (!data.post) throw new Error("No Social Post returned");
     return data.post;
+  }
+
+  async function fetchSocialSuggestions(siteId: string): Promise<SocialSuggestion[]> {
+    error.value = null;
+    const query = siteId ? `?siteId=${encodeURIComponent(siteId)}` : "";
+    const data = await api.get<{ suggestions: SocialSuggestion[] }>(
+      `/social/suggestions${query}`,
+    );
+    return data.suggestions || [];
+  }
+
+  async function updateSocialSuggestion(
+    suggestionId: string,
+    input: SocialSuggestionUpdate,
+  ): Promise<SocialSuggestion> {
+    error.value = null;
+    const data = await api.patch<{ suggestion: SocialSuggestion }>(
+      `/social/suggestions/${encodeURIComponent(suggestionId)}`,
+      input,
+    );
+    if (!data.suggestion) throw new Error("No Social Suggestion returned");
+    return data.suggestion;
+  }
+
+  async function discardSocialSuggestion(
+    suggestionId: string,
+    expectedUpdatedAt: string,
+  ): Promise<SocialSuggestion> {
+    error.value = null;
+    const data = await api.delete<{ suggestion: SocialSuggestion }>(
+      `/social/suggestions/${encodeURIComponent(suggestionId)}?expectedUpdatedAt=${encodeURIComponent(expectedUpdatedAt)}`,
+    );
+    if (!data.suggestion) throw new Error("No Social Suggestion returned");
+    return data.suggestion;
+  }
+
+  async function chooseSocialSuggestion(
+    suggestionId: string,
+    platforms: SocialPlatform[],
+    expectedUpdatedAt: string,
+  ): Promise<{ suggestion: SocialSuggestion; post: SocialPostDetail }> {
+    error.value = null;
+    const data = await api.post<{
+      suggestion: SocialSuggestion;
+      post: SocialPostDetail;
+    }>(`/social/suggestions/${encodeURIComponent(suggestionId)}/post`, {
+      platforms,
+      expectedUpdatedAt,
+    });
+    if (!data.suggestion || !data.post) {
+      throw new Error("No chosen Social Suggestion Post returned");
+    }
+    return data;
   }
 
   async function updatePostVersion(
@@ -301,7 +384,11 @@ export const useSocialStore = defineStore("social", () => {
     fetchSocialAccounts,
     fetchProviderSettings,
     fetchSocialPosts,
+    fetchSocialSuggestions,
     createSocialPost,
+    updateSocialSuggestion,
+    discardSocialSuggestion,
+    chooseSocialSuggestion,
     updatePostVersion,
     publishPostVersion,
     listPostVersionPublications,

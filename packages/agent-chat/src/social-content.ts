@@ -1,6 +1,8 @@
 import { normalizeTimeZone } from "@me3-core/plugin-calendar";
 import {
+  createSocialSuggestions,
   createSocialPost,
+  type SocialSuggestion,
   type CreateSocialPostInput,
   type SocialPostDetail,
   type SocialPostEnv,
@@ -36,6 +38,19 @@ export type CreateAgentSocialPostInput = {
   linkedinBody?: string;
   xBody?: string;
   instagramBody?: string;
+};
+
+export type CreateAgentSocialSuggestionsInput = {
+  siteId?: string;
+  quoteText: string;
+  quoteSourceExcerpt: string;
+  quoteTrimmed?: boolean;
+  shortPostText: string;
+  shortPostSourceExcerpt: string;
+  threadText: string;
+  threadSourceExcerpt: string;
+  carouselOutlineText: string;
+  carouselSourceExcerpt: string;
 };
 
 type JournalRow = {
@@ -180,6 +195,72 @@ export async function createAgentSocialPost(
       ideaText: requiredText(input.ideaText, "Social draft ideaText is required."),
       createdBy: "agent",
       versions,
+    },
+  );
+}
+
+export async function createAgentSocialSuggestions(
+  db: AgentSocialDb,
+  userId: string,
+  source: AgentSocialSource,
+  input: CreateAgentSocialSuggestionsInput,
+): Promise<SocialSuggestion[]> {
+  if (typeof db.batch !== "function") {
+    throw new Error("Social Suggestion storage is not configured for this runtime.");
+  }
+  const siteId = optionalText(input.siteId) || await primaryProfileSiteId(db, userId);
+  return createSocialSuggestions(
+    { DB: db as unknown as SocialPostEnv["DB"] },
+    userId,
+    {
+      siteId,
+      sourceType: source.sourceType,
+      sourceRef: `${source.sourceType}:${source.id}`,
+      sourceTitle: source.title,
+      sourceSnapshot: source.snapshot,
+      sourceText: source.content,
+      createdBy: "agent",
+      suggestions: [
+        {
+          kind: "quote",
+          bodyText: requiredText(input.quoteText, "Quote Suggestion text is required."),
+          sourceExcerpt: requiredText(
+            input.quoteSourceExcerpt,
+            "Quote Suggestion Source text is required.",
+          ),
+          quoteTrimmed: input.quoteTrimmed === true,
+        },
+        {
+          kind: "short_post",
+          bodyText: requiredText(
+            input.shortPostText,
+            "Short Post Suggestion text is required.",
+          ),
+          sourceExcerpt: requiredText(
+            input.shortPostSourceExcerpt,
+            "Short Post Suggestion Source text is required.",
+          ),
+        },
+        {
+          kind: "thread",
+          bodyText: requiredText(input.threadText, "Thread Suggestion text is required."),
+          sourceExcerpt: requiredText(
+            input.threadSourceExcerpt,
+            "Thread Suggestion Source text is required.",
+          ),
+        },
+        {
+          kind: "carousel_outline",
+          bodyText: requiredText(
+            input.carouselOutlineText,
+            "Carousel outline Suggestion text is required.",
+          ),
+          sourceExcerpt: requiredText(
+            input.carouselSourceExcerpt,
+            "Carousel outline Suggestion Source text is required.",
+          ),
+        },
+      ],
     },
   );
 }

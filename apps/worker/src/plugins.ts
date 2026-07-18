@@ -200,6 +200,24 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       auth: "owner",
     },
     {
+      id: "social.suggestions.api",
+      path: "/api/social/suggestions",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "social.suggestion.api",
+      path: "/api/social/suggestions/:id",
+      methods: ["PATCH", "DELETE"],
+      auth: "owner",
+    },
+    {
+      id: "social.suggestion.post.api",
+      path: "/api/social/suggestions/:id/post",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
       id: "social.post.api",
       path: "/api/social/posts/:id",
       methods: ["GET"],
@@ -209,6 +227,12 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       id: "social.version.api",
       path: "/api/social/versions/:id",
       methods: ["PATCH"],
+      auth: "owner",
+    },
+    {
+      id: "social.scheduling.approved-versions.api",
+      path: "/api/social/scheduling/approved-versions",
+      methods: ["GET"],
       auth: "owner",
     },
     {
@@ -226,7 +250,7 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
     {
       id: "social.publication.api",
       path: "/api/social/publications/:id",
-      methods: ["DELETE"],
+      methods: ["PATCH", "DELETE"],
       auth: "owner",
     },
     {
@@ -288,9 +312,9 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   agentTools: [
     agentTool({
       id: "social.post.suggest",
-      label: "Suggest Posts from a Source",
-      sideEffect: "none",
-      approvalMode: "approval_required",
+      label: "Create grounded Suggestions from a Source",
+      sideEffect: "write_internal_draft",
+      approvalMode: "none",
     }),
     agentTool({
       id: "social.version.publish",
@@ -326,11 +350,19 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       description:
         "Moves schedules and immutable delivery snapshots into independently audited Publications while preserving existing history.",
     },
+    {
+      id: "social.grounded-suggestions",
+      path: "./apps/worker/migrations/0024_social_suggestions.sql",
+      destructive: false,
+      description:
+        "Stores editable, discardable, Source-grounded Suggestions and their chosen Post links.",
+    },
   ],
   queuesAndCrons: [...SOCIAL_PUBLISHING_RUNTIME.queuesAndCrons],
   notes: [
     "Bundled through @me3-core/plugin-social-publishing as a first-party Core package.",
     "The canonical owner path is Source-backed Posts, exact account Versions, and independently audited immutable Publications.",
+    "Grounded Suggestions retain visible Source text and only become Posts when the owner chooses them.",
     "LinkedIn supports draft, schedule, and publish; X and Instagram remain draft-only until their delivery paths work end to end.",
     "ME3-hosted provider OAuth should supply social app credentials; Core installs should only connect their own social accounts.",
     "External publishing workers and cron dispatch remain gated by plugin readiness, exact Version approval, and account state.",

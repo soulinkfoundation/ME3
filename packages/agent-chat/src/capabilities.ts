@@ -689,6 +689,103 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.social.suggestions.create",
+    owner: "plugin",
+    pluginId: "me3.social-publishing",
+    ownerFacingLabel: "Create grounded social Suggestions",
+    summary: "Create a Quote, Short Post, Thread, and carousel outline Suggestion from one explicitly read owner Source.",
+    category: "content",
+    handler: {
+      surface: "chat",
+      route: "core.social.suggestions.create",
+    },
+    sideEffect: "write_internal_draft",
+    approvalMode: "none",
+    requiresSetup: ["social-publishing"],
+    inputSchema: {
+      type: "object",
+      required: [
+        "sourceType",
+        "sourceId",
+        "quoteText",
+        "quoteSourceExcerpt",
+        "shortPostText",
+        "shortPostSourceExcerpt",
+        "threadText",
+        "threadSourceExcerpt",
+        "carouselOutlineText",
+        "carouselSourceExcerpt",
+      ],
+      properties: {
+        sourceType: {
+          type: "string",
+          description: "Source kind already read with the social Source tool.",
+          enum: ["journal", "mission_task"],
+        },
+        sourceId: {
+          type: "string",
+          description: "The exact source ID/date used with the social Source tool.",
+        },
+        siteId: {
+          type: "string",
+          description: "Optional owner site ID. Omit to use the primary profile site.",
+        },
+        quoteText: {
+          type: "string",
+          description: "A verbatim Source quote, or a disclosed trimming that only removes words.",
+        },
+        quoteSourceExcerpt: {
+          type: "string",
+          description: "Exact visible Source text supporting the Quote Suggestion.",
+        },
+        quoteTrimmed: {
+          type: "boolean",
+          description: "True only when the quote removes Source words and visibly discloses trimming.",
+        },
+        shortPostText: {
+          type: "string",
+          description: "A short Post Suggestion that only condenses or reorganizes Source meaning.",
+        },
+        shortPostSourceExcerpt: {
+          type: "string",
+          description: "Exact visible Source text supporting the Short Post Suggestion.",
+        },
+        threadText: {
+          type: "string",
+          description: "A numbered Thread Suggestion grounded only in the Source.",
+        },
+        threadSourceExcerpt: {
+          type: "string",
+          description: "Exact visible Source text supporting the Thread Suggestion.",
+        },
+        carouselOutlineText: {
+          type: "string",
+          description: "A slide-by-slide carousel outline grounded only in the Source.",
+        },
+        carouselSourceExcerpt: {
+          type: "string",
+          description: "Exact visible Source text supporting the carousel outline Suggestion.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "social_suggestions_created",
+    examples: {
+      positive: [
+        "Turn today's Journal into a Quote, Short Post, Thread, and carousel outline I can review.",
+        "Repurpose the Mission Control task we just read into grounded social Suggestions.",
+      ],
+      negative: [
+        "Invent four social Suggestions without reading one of my Sources.",
+        "Make up a personal story and opinions for my social voice.",
+      ],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.mission.task.create",
     owner: "core",
     pluginId: "me3.mission-control",

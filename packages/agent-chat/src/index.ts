@@ -268,7 +268,7 @@ export type AgentChatActionCardLink = {
 };
 
 export type AgentChatActionCardRecord = {
-  kind: "mailbox_draft" | "reminder" | "mission_task" | "social_post";
+  kind: "mailbox_draft" | "reminder" | "mission_task" | "social_post" | "social_suggestion";
   id: string;
 };
 
@@ -282,7 +282,8 @@ export type AgentChatActionCard = {
     | "mission.task_created"
     | "mission.task_updated"
     | "mission.task_archived"
-    | "social.draft_saved";
+    | "social.draft_saved"
+    | "social.suggestions_created";
   capabilityId: string;
   title: string;
   summary: string | null;

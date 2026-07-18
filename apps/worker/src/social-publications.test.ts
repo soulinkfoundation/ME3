@@ -8,7 +8,9 @@ import {
   cancelPublication,
   createPostVersionPublication,
   dispatchDueSocialPublications,
+  listApprovedPostVersionsForScheduling,
   listPostVersionPublications,
+  reschedulePublication,
   resolvePublicationOutcome,
   updatePostVersion,
   type Publication,
@@ -78,6 +80,340 @@ describe("reusable social Publications", () => {
     await expect(
       cancelPublication(fixture.env as never, "owner", first.id),
     ).resolves.toMatchObject({ id: first.id, status: "cancelled" });
+    expect(
+      JSON.parse(
+        fixture.db.first<{ payload_json: string }>(
+          `SELECT payload_json FROM social_publication_events
+           WHERE publication_id = ? AND event_type = 'cancelled'
+           ORDER BY rowid DESC LIMIT 1`,
+          first.id,
+        )?.payload_json || "{}",
+      ),
+    ).toMatchObject({ action: "cancelled", reason: "owner_request" });
+  });
+
+  it("lets an interleaved Version edit win before guarded schedule creation", async () => {
+    fixture.db.beforeNextFirstMatching = {
+      pattern: /INSERT INTO social_publications/,
+      run: async () => {
+        await updatePostVersion(
+          fixture.env as never,
+          "owner",
+          "version-1",
+          { bodyText: "Edited while Calendar was scheduling" },
+        );
+      },
+    };
+
+    await expect(
+      createPostVersionPublication(
+        fixture.env as never,
+        "owner",
+        "version-1",
+        {
+          scheduledFor: "2099-08-01T09:00:00.000Z",
+          timezone: "Europe/Dublin",
+        },
+      ),
+    ).rejects.toMatchObject({
+      status: 403,
+      message: "Approve this exact LinkedIn Version before scheduling",
+    });
+
+    expect(
+      fixture.db.first<{ body_text: string; approval_status: string }>(
+        `SELECT body_text, approval_status FROM social_variants
+         WHERE id = 'version-1'`,
+      ),
+    ).toEqual({
+      body_text: "Edited while Calendar was scheduling",
+      approval_status: "draft",
+    });
+    expect(
+      fixture.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM social_publications",
+      ),
+    ).toEqual({ count: 0 });
+    expect(
+      fixture.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM social_publication_events",
+      ),
+    ).toEqual({ count: 0 });
+  });
+
+  it("describes the blocked action as scheduling for imported read-only Posts", async () => {
+    fixture.db.run(
+      "UPDATE social_packages SET source_type = 'legacy_content_bank_read_only' WHERE id = 'post-1'",
+    );
+
+    await expect(
+      createPostVersionPublication(
+        fixture.env as never,
+        "owner",
+        "version-1",
+        {
+          scheduledFor: "2099-08-01T09:00:00.000Z",
+          timezone: "Europe/Dublin",
+        },
+      ),
+    ).rejects.toMatchObject({
+      status: 403,
+      message: "This imported Post is read-only. Create a source-backed Post before scheduling.",
+    });
+  });
+
+  it("rolls back both owner cancellation and its audit event when the batch fails", async () => {
+    const publication = await createPublication(fixture, "version-1", {
+      scheduledFor: "2099-08-01T09:00:00.000Z",
+      timezone: "Europe/Dublin",
+    });
+    fixture.db.failNextBatchAfterFirst = true;
+
+    await expect(
+      cancelPublication(fixture.env as never, "owner", publication.id),
+    ).rejects.toThrow();
+
+    expect(
+      fixture.db.first<{ status: string; error_code: string | null }>(
+        `SELECT status, error_code FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({ status: "scheduled", error_code: null });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'cancelled'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 0 });
+  });
+
+  it("reschedules only time and timezone while preserving exact-Version approval", async () => {
+    const originalTime = "2099-08-01T09:00:00.000Z";
+    const nextTime = "2099-08-03T14:15:00.000Z";
+    const publication = await createPublication(fixture, "version-1", {
+      scheduledFor: originalTime,
+      timezone: "Europe/Dublin",
+    });
+    const approvalBefore = fixture.db.first<{
+      approval_status: string;
+      approved_at: string;
+      approved_by_user_id: string;
+    }>(
+      `SELECT approval_status, approved_at, approved_by_user_id
+       FROM social_variants WHERE id = 'version-1'`,
+    );
+
+    const change = await reschedulePublication(
+      fixture.env as never,
+      "owner",
+      publication.id,
+      {
+        scheduledFor: nextTime,
+        timezone: "America/New_York",
+        expectedUpdatedAt: publication.updatedAt,
+        requestContext: { source: "calendar", view: "week" },
+      },
+    );
+
+    expect(change).toMatchObject({
+      action: "rescheduled",
+      previousScheduledFor: originalTime,
+      previousTimezone: "Europe/Dublin",
+      approvalPreserved: true,
+      auditEvent: "scheduled",
+      publication: {
+        id: publication.id,
+        versionId: "version-1",
+        status: "scheduled",
+        scheduledFor: nextTime,
+        timezone: "America/New_York",
+      },
+    });
+    expect(
+      fixture.db.first(
+        `SELECT approval_status, approved_at, approved_by_user_id
+         FROM social_variants WHERE id = 'version-1'`,
+      ),
+    ).toEqual(approvalBefore);
+    const audit = fixture.db.first<{ event_type: string; payload_json: string }>(
+      `SELECT event_type, payload_json FROM social_publication_events
+       WHERE publication_id = ? ORDER BY rowid DESC LIMIT 1`,
+      publication.id,
+    );
+    expect(audit?.event_type).toBe("scheduled");
+    expect(JSON.parse(audit?.payload_json || "{}")).toMatchObject({
+      action: "rescheduled",
+      surface: "calendar",
+      previous: { scheduledFor: originalTime, timezone: "Europe/Dublin" },
+      next: { scheduledFor: nextTime, timezone: "America/New_York" },
+      approvalPreserved: true,
+      requestContext: { source: "calendar", view: "week" },
+    });
+  });
+
+  it("rejects stale, unauthorized, invalid-timezone, unapproved, and unsafe reschedules", async () => {
+    const publication = await createPublication(fixture, "version-1", {
+      scheduledFor: "2099-08-01T09:00:00.000Z",
+      timezone: "Europe/Dublin",
+    });
+
+    await expect(
+      reschedulePublication(
+        fixture.env as never,
+        "another-owner",
+        publication.id,
+        {
+          scheduledFor: "2099-08-02T09:00:00.000Z",
+          timezone: "Europe/Dublin",
+          expectedUpdatedAt: publication.updatedAt,
+        },
+      ),
+    ).resolves.toBeNull();
+    await expect(
+      reschedulePublication(fixture.env as never, "owner", publication.id, {
+        scheduledFor: "2099-08-02T09:00:00.000Z",
+        timezone: "Not/A_Timezone",
+        expectedUpdatedAt: publication.updatedAt,
+      }),
+    ).rejects.toMatchObject({ status: 400, message: "Choose a valid timezone" });
+
+    const changed = await reschedulePublication(
+      fixture.env as never,
+      "owner",
+      publication.id,
+      {
+        scheduledFor: "2099-08-02T09:00:00.000Z",
+        timezone: "Europe/Dublin",
+        expectedUpdatedAt: publication.updatedAt,
+      },
+    );
+    await expect(
+      reschedulePublication(fixture.env as never, "owner", publication.id, {
+        scheduledFor: "2099-08-03T09:00:00.000Z",
+        timezone: "Europe/Dublin",
+        expectedUpdatedAt: publication.updatedAt,
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "This Publication changed after Calendar loaded it. Refresh and try again.",
+    });
+
+    fixture.db.run(
+      "UPDATE social_variants SET approval_status = 'draft' WHERE id = 'version-1'",
+    );
+    await expect(
+      reschedulePublication(fixture.env as never, "owner", publication.id, {
+        scheduledFor: "2099-08-03T09:00:00.000Z",
+        timezone: "Europe/Dublin",
+        expectedUpdatedAt: changed!.publication.updatedAt,
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "Approve this exact Version before changing its schedule",
+    });
+
+    fixture.db.run(
+      `UPDATE social_variants SET approval_status = 'approved' WHERE id = 'version-1'`,
+    );
+    fixture.db.run(
+      `UPDATE social_variants SET platform = 'x' WHERE id = 'version-1'`,
+    );
+    fixture.db.run(
+      `UPDATE social_publications SET platform = 'x' WHERE id = ?`,
+      publication.id,
+    );
+    await expect(
+      reschedulePublication(fixture.env as never, "owner", publication.id, {
+        scheduledFor: "2099-08-03T09:00:00.000Z",
+        timezone: "Europe/Dublin",
+        expectedUpdatedAt: changed!.publication.updatedAt,
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "X Versions cannot be scheduled yet",
+    });
+    fixture.db.run(
+      `UPDATE social_variants SET platform = 'linkedin' WHERE id = 'version-1'`,
+    );
+    fixture.db.run(
+      `UPDATE social_publications SET platform = 'linkedin' WHERE id = ?`,
+      publication.id,
+    );
+    fixture.db.run(
+      `UPDATE social_publications
+       SET status = 'publishing', error_code = 'outcome_unknown:delivery_interrupted',
+           updated_at = '2099-01-01T00:00:00.000Z'
+       WHERE id = ?`,
+      publication.id,
+    );
+    await expect(
+      reschedulePublication(fixture.env as never, "owner", publication.id, {
+        scheduledFor: "2099-08-03T09:00:00.000Z",
+        timezone: "Europe/Dublin",
+        expectedUpdatedAt: "2099-01-01T00:00:00.000Z",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "Only a planned Publication can be rescheduled",
+    });
+  });
+
+  it("offers Calendar only owner-owned approved Versions on schedule-capable platforms", async () => {
+    seedApprovedVersion(fixture.db, {
+      postId: "post-x",
+      versionId: "version-x",
+      bodyText: "Approved but unsupported",
+      platform: "x",
+      accountId: "account-x",
+    });
+    seedApprovedVersion(fixture.db, {
+      postId: "post-draft",
+      versionId: "version-draft",
+      bodyText: "Not approved",
+      approvalStatus: "draft",
+    });
+    fixture.db.run(
+      `INSERT INTO sites (id, user_id) VALUES ('site-other', 'another-owner')`,
+    );
+    fixture.db.run(
+      `INSERT INTO social_accounts (
+         id, user_id, site_id, platform, platform_account_id, display_name,
+         status, scopes_json, metadata_json, created_at, updated_at
+       ) VALUES (
+         'account-other', 'another-owner', 'site-other', 'linkedin',
+         'linkedin-account-other', 'Another owner', 'active', '[]', '{}',
+         datetime('now'), datetime('now')
+       )`,
+    );
+    seedApprovedVersion(fixture.db, {
+      postId: "post-other",
+      versionId: "version-other",
+      bodyText: "Someone else's approved Post",
+      siteId: "site-other",
+      accountId: "account-other",
+    });
+
+    const versions = await listApprovedPostVersionsForScheduling(
+      fixture.env as never,
+      "owner",
+      "site-1",
+    );
+
+    expect(versions).toEqual([
+      expect.objectContaining({
+        versionId: "version-1",
+        postId: "post-1",
+        siteId: "site-1",
+        platform: "linkedin",
+        accountId: "account-1",
+        accountLabel: "LinkedIn account",
+        sourceLabel: "Journal",
+      }),
+    ]);
+    expect(JSON.stringify(versions).toLowerCase()).not.toContain("variant");
+    expect(JSON.stringify(versions).toLowerCase()).not.toContain("package");
+    expect(JSON.stringify(versions).toLowerCase()).not.toContain("occurrence");
   });
 
   it("allows another immediate Publication after a completed Publication", async () => {
@@ -311,6 +647,44 @@ describe("reusable social Publications", () => {
     ).toEqual({ count: 1 });
   });
 
+  it("does not record owner cancellation when due dispatch wins the state race", async () => {
+    const publication = await createPublication(fixture, "version-1", {
+      scheduledFor: "2099-09-15T09:00:00.000Z",
+      timezone: "Europe/Dublin",
+    });
+    fixture.db.run(
+      `UPDATE social_publications
+       SET scheduled_for = '2000-01-01T00:00:00.000Z'
+       WHERE id = ?`,
+      publication.id,
+    );
+    fixture.db.beforeNextBatch = async () => {
+      await dispatchDueSocialPublications(fixture.env as never);
+    };
+
+    await expect(
+      cancelPublication(fixture.env as never, "owner", publication.id),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "This Publication is already being dispatched and can no longer be cancelled",
+    });
+
+    expect(
+      fixture.db.first<{ status: string }>(
+        `SELECT status FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({ status: "queued" });
+    expect(fixture.queueMessages).toEqual([{ publicationId: publication.id }]);
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'cancelled'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 0 });
+  });
+
   it("does not record cancellation when due dispatch wins before the edit batch", async () => {
     const publication = await createPublication(fixture, "version-1", {
       scheduledFor: "2099-09-15T09:00:00.000Z",
@@ -384,6 +758,46 @@ describe("reusable social Publications", () => {
     ).toEqual({ count: 1 });
   });
 
+  it("does not dispatch a stale due-time selection after Calendar reschedules it", async () => {
+    const publication = await createPublication(fixture, "version-1", {
+      scheduledFor: "2099-10-02T09:00:00.000Z",
+      timezone: "Europe/Dublin",
+    });
+    const oldDueTime = "2000-01-01T00:00:00.000Z";
+    const rescheduledTime = "2099-10-03T09:00:00.000Z";
+    fixture.db.run(
+      `UPDATE social_publications SET scheduled_for = ? WHERE id = ?`,
+      oldDueTime,
+      publication.id,
+    );
+    fixture.db.afterNextAll = async () => {
+      fixture.db.run(
+        `UPDATE social_publications SET scheduled_for = ?, updated_at = ? WHERE id = ?`,
+        rescheduledTime,
+        "2099-01-01T00:00:00.000Z",
+        publication.id,
+      );
+    };
+
+    await expect(
+      dispatchDueSocialPublications(fixture.env as never),
+    ).resolves.toEqual({ queued: 0, skipped: 1 });
+    expect(
+      fixture.db.first<{ status: string; scheduled_for: string }>(
+        `SELECT status, scheduled_for FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({ status: "scheduled", scheduled_for: rescheduledTime });
+    expect(fixture.queueMessages).toEqual([]);
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'queued'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 0 });
+  });
+
   it("records a scheduled rollback when a due queue handoff fails", async () => {
     const publication = await createPublication(fixture, "version-1", {
       scheduledFor: "2099-10-02T09:00:00.000Z",
@@ -452,12 +866,14 @@ function createFixture() {
   db.run("INSERT INTO sites (id, user_id) VALUES ('site-1', 'owner')");
   db.run(
     `INSERT INTO social_accounts (
-       id, user_id, site_id, platform, platform_account_id, status,
+       id, user_id, site_id, platform, platform_account_id, display_name, status,
        scopes_json, metadata_json, created_at, updated_at
      ) VALUES
-       ('account-1', 'owner', 'site-1', 'linkedin', 'linkedin-account-1', 'active',
+       ('account-1', 'owner', 'site-1', 'linkedin', 'linkedin-account-1', 'LinkedIn account', 'active',
         '[]', '{}', datetime('now'), datetime('now')),
-       ('account-2', 'owner', 'site-1', 'linkedin', 'linkedin-account-2', 'active',
+       ('account-2', 'owner', 'site-1', 'linkedin', 'linkedin-account-2', 'Backup account', 'active',
+        '[]', '{}', datetime('now'), datetime('now')),
+       ('account-x', 'owner', 'site-1', 'x', 'x-account-1', 'X account', 'active',
         '[]', '{}', datetime('now'), datetime('now'))`,
   );
   seedApprovedVersion(db, {
@@ -481,25 +897,44 @@ function createFixture() {
 
 function seedApprovedVersion(
   db: TestD1Database,
-  input: { postId: string; versionId: string; bodyText: string },
+  input: {
+    postId: string;
+    versionId: string;
+    bodyText: string;
+    platform?: "linkedin" | "x";
+    approvalStatus?: "approved" | "draft";
+    siteId?: string;
+    accountId?: string;
+  },
 ) {
+  const siteId = input.siteId || "site-1";
+  const platform = input.platform || "linkedin";
+  const approvalStatus = input.approvalStatus || "approved";
+  const accountId = input.accountId || "account-1";
   db.run(
     `INSERT INTO social_packages (
-       id, site_id, source_type, status, created_at, updated_at
-     ) VALUES (?, 'site-1', 'journal', 'ready', datetime('now'), datetime('now'))`,
+       id, site_id, source_type, status, idea_text, created_at, updated_at
+     ) VALUES (?, ?, 'journal', 'ready', ?, datetime('now'), datetime('now'))`,
     input.postId,
+    siteId,
+    input.bodyText,
   );
   db.run(
     `INSERT INTO social_variants (
        id, package_id, platform, target_account_id, format, body_text,
        asset_manifest_json, source_excerpt, approval_status, approved_at,
        approved_by_user_id, created_at, updated_at
-     ) VALUES (?, ?, 'linkedin', 'account-1', 'post', ?,
-               '[{"url":"/original.png"}]', 'Original source', 'approved',
-               '2026-07-18T09:00:00.000Z', 'owner', datetime('now'), datetime('now'))`,
+     ) VALUES (?, ?, ?, ?, 'post', ?,
+               '[{"url":"/original.png"}]', 'Original source', ?,
+               ?, ?, datetime('now'), datetime('now'))`,
     input.versionId,
     input.postId,
+    platform,
+    accountId,
     input.bodyText,
+    approvalStatus,
+    approvalStatus === "approved" ? "2026-07-18T09:00:00.000Z" : null,
+    approvalStatus === "approved" ? "owner" : null,
   );
 }
 
@@ -524,19 +959,35 @@ class TestD1Database {
   private readonly directory = mkdtempSync(join(tmpdir(), "me3-social-publications-"));
   private readonly database = join(this.directory, "fixture.sqlite");
   beforeNextBatch: (() => Promise<void>) | undefined;
+  afterNextAll: (() => Promise<void>) | undefined;
+  beforeNextFirstMatching: {
+    pattern: RegExp;
+    run: () => Promise<void>;
+  } | undefined;
+  failNextBatchAfterFirst = false;
 
   exec(sql: string) {
     sqliteExec(this.database, sql);
   }
 
   prepare(sql: string) {
-    return new TestD1Statement(this.database, sql);
+    return new TestD1Statement(this.database, sql, this);
   }
 
   async batch(statements: TestD1Statement[]) {
     const beforeBatch = this.beforeNextBatch;
     this.beforeNextBatch = undefined;
     if (beforeBatch) await beforeBatch();
+    const failAfterFirst = this.failNextBatchAfterFirst;
+    this.failNextBatchAfterFirst = false;
+    if (failAfterFirst) {
+      sqliteExec(
+        this.database,
+        `BEGIN IMMEDIATE;\n${statements[0]?.boundSql()};\n` +
+          "INSERT INTO __missing_atomicity_probe__ DEFAULT VALUES;\nROLLBACK;",
+      );
+      return [];
+    }
     sqliteExec(
       this.database,
       `BEGIN IMMEDIATE;\n${statements.map((statement) => `${statement.boundSql()};`).join("\n")}\nCOMMIT;`,
@@ -563,6 +1014,7 @@ class TestD1Statement {
   constructor(
     private readonly database: string,
     private readonly sql: string,
+    private readonly owner: TestD1Database,
   ) {}
 
   bind(...values: unknown[]) {
@@ -571,6 +1023,11 @@ class TestD1Statement {
   }
 
   async first<T = unknown>(): Promise<T | null> {
+    const hook = this.owner.beforeNextFirstMatching;
+    if (hook && hook.pattern.test(this.sql)) {
+      this.owner.beforeNextFirstMatching = undefined;
+      await hook.run();
+    }
     return this.firstSync<T>();
   }
 
@@ -579,7 +1036,11 @@ class TestD1Statement {
   }
 
   async all<T = unknown>(): Promise<{ results: T[] }> {
-    return { results: sqliteRows<T>(this.database, this.boundSql()) };
+    const results = sqliteRows<T>(this.database, this.boundSql());
+    const afterAll = this.owner.afterNextAll;
+    this.owner.afterNextAll = undefined;
+    if (afterAll) await afterAll();
+    return { results };
   }
 
   async run(): Promise<unknown> {
@@ -664,6 +1125,8 @@ const schemaSql = `
     site_id TEXT NOT NULL,
     source_type TEXT NOT NULL,
     status TEXT NOT NULL,
+    idea_text TEXT NOT NULL DEFAULT '',
+    post_title_snapshot TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -674,6 +1137,8 @@ const schemaSql = `
     site_id TEXT NOT NULL,
     platform TEXT NOT NULL,
     platform_account_id TEXT NOT NULL,
+    platform_handle TEXT,
+    display_name TEXT,
     status TEXT NOT NULL,
     scopes_json TEXT NOT NULL DEFAULT '[]',
     metadata_json TEXT NOT NULL DEFAULT '{}',
@@ -690,6 +1155,7 @@ const schemaSql = `
     platform TEXT NOT NULL,
     target_account_id TEXT,
     format TEXT NOT NULL,
+    title TEXT,
     body_text TEXT NOT NULL,
     asset_manifest_json TEXT NOT NULL DEFAULT '[]',
     source_excerpt TEXT,

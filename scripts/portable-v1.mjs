@@ -43,6 +43,7 @@ export const RUNTIME_MIGRATIONS = [
   ["0021_managed_email_inbound_deliveries", "2026-07-18-managed-email-inbound-deliveries-v1"],
   ["0022_social_posts_canonical", "2026-07-18-social-posts-canonical-v1"],
   ["0023_social_publications_reusable", "2026-07-18-social-publications-reusable-v1"],
+  ["0024_social_suggestions", "2026-07-18-social-suggestions-v2"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];
@@ -86,6 +87,7 @@ const TRANSFORMED_TABLES = [
   "mailbox_aliases",
   "sites",
   "social_provider_settings",
+  "social_suggestions",
 ];
 const COPIED_TABLES = [
   "ai_model_defaults",
@@ -190,6 +192,15 @@ const TRANSFORMS = {
       enabled: "0",
     },
   },
+  social_suggestions: {
+    columns: {
+      status: "CASE WHEN status = 'choosing' THEN 'suggested' ELSE status END",
+      choose_token: "NULL",
+      choosing_at: "NULL",
+      choose_platforms_json:
+        "CASE WHEN status = 'choosing' THEN NULL ELSE choose_platforms_json END",
+    },
+  },
 };
 
 const SENSITIVE_FIELD_POLICIES = new Map([
@@ -222,6 +233,7 @@ const SENSITIVE_FIELD_POLICIES = new Map([
   ["social_accounts.access_token_ciphertext", "exclude and reconnect"],
   ["social_accounts.refresh_token_ciphertext", "exclude and reconnect"],
   ["social_accounts.token_expires_at", "exclude and reconnect"],
+  ["social_suggestions.choose_token", "reset ephemeral choose claim"],
   ["social_oauth_states.state", "exclude one-time state"],
   ["social_provider_settings.encrypted_client_secret", "exclude and reconnect"],
   ["social_provider_settings.secret_hint", "exclude credential metadata"],

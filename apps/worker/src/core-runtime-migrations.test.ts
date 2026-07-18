@@ -23,6 +23,7 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("agent_tool_executions")).toBe(true);
     expect(db.tables.has("owner_content_search")).toBe(true);
     expect(db.tables.has("managed_email_inbound_deliveries")).toBe(true);
+    expect(db.tables.has("social_suggestions")).toBe(true);
     expect(
       db.statements.some(
         (sql) =>
@@ -75,6 +76,19 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.get("0023_social_publications_reusable")).toBe(
       "2026-07-18-social-publications-reusable-v1",
     );
+    expect(db.migrations.get("0024_social_suggestions")).toBe(
+      "2026-07-18-social-suggestions-v2",
+    );
+    expect(
+      db.statements.some(
+        (sql) =>
+          sql.includes("CREATE TABLE IF NOT EXISTS social_suggestions") &&
+          sql.includes("'choosing'") &&
+          sql.includes("choose_token") &&
+          sql.includes("choosing_at") &&
+          sql.includes("choose_platforms_json"),
+      ),
+    ).toBe(true);
     expect(
       db.statements.some((sql) =>
         sql.includes("idx_mailbox_messages_mailbox_thread_activity"),
@@ -314,6 +328,10 @@ class RuntimeMigrationStatement {
     }
     if (this.sql.includes("CREATE TABLE IF NOT EXISTS agent_tool_executions")) {
       this.db.tables.add("agent_tool_executions");
+      return { success: true };
+    }
+    if (this.sql.includes("CREATE TABLE IF NOT EXISTS social_suggestions")) {
+      this.db.tables.add("social_suggestions");
       return { success: true };
     }
     if (this.sql.includes("CREATE VIRTUAL TABLE IF NOT EXISTS owner_content_search")) {

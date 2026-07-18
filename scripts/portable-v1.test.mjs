@@ -150,6 +150,100 @@ test("exports sanitized owner data and restores the exact identity, D1 rows, and
   );
 });
 
+test("portable restore resets an interrupted suggestion claim without deleting its deterministic Post", async () => {
+  const interruptedSource = cloneSource("interrupted-social-suggestion");
+  const interruptedArchive = join(root, "interrupted-social-suggestion.me3-portable");
+  const target = freshTarget("interrupted-social-suggestion-target");
+
+  runSqlite(
+    interruptedSource,
+    `
+      INSERT INTO social_packages (
+        id, site_id, post_slug, post_title_snapshot, source_hash, status, created_by,
+        source_type, source_ref, source_snapshot, source_text, idea_text,
+        created_at, updated_at
+      ) VALUES (
+        'social-post-portable-reset', 'site-1', 'portable-reset', 'Portable reset',
+        'portable-reset-source-hash', 'ready', 'agent', 'journal', 'journal:journal-1',
+        '{}', 'Portable source', 'Portable suggestion body',
+        '2026-07-18T10:00:00.000Z', '2026-07-18T10:00:00.000Z'
+      );
+      INSERT INTO social_variants (
+        id, package_id, platform, format, body_text, approval_status, created_at, updated_at
+      ) VALUES (
+        'social-variant-portable-reset-x', 'social-post-portable-reset', 'x', 'post',
+        'Portable suggestion body', 'draft',
+        '2026-07-18T10:00:00.000Z', '2026-07-18T10:00:00.000Z'
+      );
+      INSERT INTO social_suggestions (
+        id, site_id, source_type, source_ref, source_title, source_snapshot, source_text,
+        suggestion_kind, body_text, source_excerpt, quote_trimmed, status,
+        choose_token, choosing_at, choose_platforms_json, created_by, created_at, updated_at
+      ) VALUES (
+        'social-suggestion-portable-reset', 'site-1', 'journal', 'journal:journal-1',
+        'Portable source', '{}', 'Portable source', 'short_post',
+        'Portable suggestion body', 'Portable source', 0, 'choosing',
+        'ephemeral-claim-token', '2026-07-18T10:00:00.000Z', '["x"]', 'agent',
+        '2026-07-18T10:00:00.000Z', '2026-07-18T10:00:00.000Z'
+      );
+    `,
+  );
+
+  await exportPortableV1({
+    database: interruptedSource,
+    r2Directory: sourceR2,
+    output: interruptedArchive,
+    passphrase: PROOF_PASSPHRASE,
+    createdAt: "2026-07-18T10:05:00.000Z",
+  });
+  restorePortableV1({
+    archive: interruptedArchive,
+    targetDatabase: target,
+    targetR2Directory: join(root, "interrupted-social-suggestion-r2"),
+    passphrase: PROOF_PASSPHRASE,
+  });
+
+  assert.equal(
+    queryScalar(
+      target,
+      "SELECT status FROM social_suggestions WHERE id = 'social-suggestion-portable-reset';",
+    ),
+    "suggested",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      `
+        SELECT choose_token IS NULL
+          AND choosing_at IS NULL
+          AND choose_platforms_json IS NULL
+          AND selected_post_id IS NULL
+        FROM social_suggestions
+        WHERE id = 'social-suggestion-portable-reset';
+      `,
+    ),
+    "1",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      "SELECT COUNT(*) FROM social_packages WHERE id = 'social-post-portable-reset';",
+    ),
+    "1",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      `
+        SELECT COUNT(*)
+        FROM social_variants
+        WHERE package_id = 'social-post-portable-reset' AND platform = 'x';
+      `,
+    ),
+    "1",
+  );
+});
+
 test("archive omits platform, session, device, and managed-only credentials", () => {
   const textFiles = listFiles(archive)
     .filter((path) => !path.includes(`${join("objects", "blobs")}`))
