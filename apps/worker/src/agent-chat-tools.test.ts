@@ -81,6 +81,31 @@ describe("Core chat tool contracts", () => {
     expect(capability?.examples.negative.join(" ")).toContain("Make up");
   });
 
+  it("keeps Posting plan proposal and confirmation as separate capabilities", () => {
+    expect(getCoreChatToolByName("core_social_library_search")).toMatchObject({
+      capabilityId: "core.social.library.search",
+      approvalMode: "none",
+      sideEffect: "read_private",
+    });
+    expect(getCoreChatToolByName("core_social_posting_plan_create")).toMatchObject({
+      capabilityId: "core.social.posting_plan.create",
+      approvalMode: "none",
+      sideEffect: "write_internal_draft",
+      parameters: {
+        required: ["accountId", "windowStart", "windowEnd", "count"],
+      },
+    });
+    expect(getCoreChatToolByName("core_social_posting_plan_confirm")).toMatchObject({
+      capabilityId: "core.social.posting_plan.confirm",
+      approvalMode: "approval_required",
+      sideEffect: "write_internal_active",
+      parameters: {
+        required: ["planId", "expectedUpdatedAt", "confirmed"],
+        properties: { confirmed: { type: "boolean" } },
+      },
+    });
+  });
+
   it("defines full reminder CRUD tools and accepts offset-aware timestamps", () => {
     expect(
       CORE_CHAT_TOOLS.filter((tool) =>

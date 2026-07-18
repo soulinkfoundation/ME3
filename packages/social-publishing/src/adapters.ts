@@ -1,4 +1,6 @@
 import type { SocialMediaAsset, SocialPlatform } from "./index";
+import { sniffCarouselRasterMimeType } from "./carousel-renderer";
+import type { CarouselRasterMimeType } from "./carousel-render-model";
 
 export type SocialPublishAdapterResult = {
   ok: boolean;
@@ -28,10 +30,19 @@ export type SocialPublishAdapter = {
     bodyText: string;
     assets: SocialMediaAsset[];
     fetcher: typeof fetch;
+    markProviderWriteStarted?: () => Promise<void>;
   }): Promise<SocialPublishAdapterResult>;
 };
 
 const X_CHAR_LIMIT = 280;
+const X_IMAGE_COUNT_LIMIT = 4;
+const X_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const X_ALT_TEXT_LIMIT = 1_000;
+const X_IMAGE_MIME_TYPES = new Set<CarouselRasterMimeType>([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+]);
 const LINKEDIN_MAX_CHARS = 3000;
 const LINKEDIN_VERSION = "202606";
 const INSTAGRAM_MAX_CHARS = 2200;
@@ -60,6 +71,121 @@ function failureClassForStatus(status: number): SocialPublishFailureClass {
 
 async function readJson<T>(response: Response): Promise<T> {
   return response.json().catch(() => ({})) as Promise<T>;
+}
+
+type XErrorBody = {
+  data?: { id?: string };
+  errors?: Array<{ title?: string; detail?: string }>;
+  title?: string;
+  detail?: string;
+};
+
+function xErrorMessage(body: XErrorBody, fallback: string): string {
+  return body.errors?.[0]?.detail ||
+    body.errors?.[0]?.title ||
+    body.detail ||
+    body.title ||
+    fallback;
+}
+
+function normalizeMimeType(value: string | null | undefined): string | null {
+  const mimeType = value?.split(";", 1)[0]?.trim().toLowerCase();
+  return mimeType || null;
+}
+
+function characterLength(value: string): number {
+  return Array.from(value).length;
+}
+
+function xHeaders(accessToken: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  };
+}
+
+function validateXDraft(input: {
+  bodyText: string;
+  assets: SocialMediaAsset[];
+}): { ok: true } | { ok: false; error: string } {
+  const body = input.bodyText.trim();
+  if (!body) return { ok: false, error: "This X draft is empty." };
+  if (characterLength(body) > X_CHAR_LIMIT) {
+    return { ok: false, error: `This X draft is too long (max ${X_CHAR_LIMIT} characters).` };
+  }
+  if (input.assets.length > X_IMAGE_COUNT_LIMIT) {
+    return {
+      ok: false,
+      error: `X publishing currently supports up to ${X_IMAGE_COUNT_LIMIT} raster images per post.`,
+    };
+  }
+  for (const [index, asset] of input.assets.entries()) {
+    if (!asset.url?.trim()) {
+      return { ok: false, error: `X image ${index + 1} needs a URL.` };
+    }
+    if (asset.kind === "video") {
+      return { ok: false, error: "X publishing currently supports text and raster images only." };
+    }
+    const mimeType = normalizeMimeType(asset.mimeType);
+    if (mimeType && !X_IMAGE_MIME_TYPES.has(mimeType as CarouselRasterMimeType)) {
+      return {
+        ok: false,
+        error: "X publishing currently supports PNG, JPEG, and WebP raster images only.",
+      };
+    }
+    const altText = asset.altText?.trim();
+    if (altText && characterLength(altText) > X_ALT_TEXT_LIMIT) {
+      return {
+        ok: false,
+        error: `X image ${index + 1} alt text is too long (max ${X_ALT_TEXT_LIMIT} characters).`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+async function readBoundedImageBytes(
+  response: Response,
+  maxBytes: number,
+): Promise<Uint8Array | null> {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) return null;
+  if (!response.body) return new Uint8Array(await response.arrayBuffer());
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    byteLength += value.byteLength;
+    if (byteLength > maxBytes) {
+      await reader.cancel("X image exceeds the upload limit").catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function fetchFailureClass(status: number): SocialPublishFailureClass {
+  return status === 409 || status === 429 || status >= 500 ? "retryable" : "rejected";
 }
 
 function linkedInHeaders(accessToken: string): Record<string, string> {
@@ -91,9 +217,19 @@ const linkedInAdapter: SocialPublishAdapter = {
   },
 
   async publish(input) {
-    const userinfoResponse = await input.fetcher("https://api.linkedin.com/v2/userinfo", {
-      headers: { Authorization: `Bearer ${input.accessToken}` },
-    });
+    let userinfoResponse: Response;
+    try {
+      userinfoResponse = await input.fetcher("https://api.linkedin.com/v2/userinfo", {
+        headers: { Authorization: `Bearer ${input.accessToken}` },
+      });
+    } catch (error) {
+      return providerError(
+        "linkedin_userinfo_unavailable",
+        "LinkedIn account verification did not finish. ME3 can safely try again.",
+        { message: error instanceof Error ? error.message : String(error) },
+        "retryable",
+      );
+    }
     if (!userinfoResponse.ok) {
       return providerError(
         "linkedin_userinfo",
@@ -113,7 +249,17 @@ const linkedInAdapter: SocialPublishAdapter = {
     let content: { media: { id: string } } | undefined;
     const asset = input.assets[0];
     if (asset) {
-      const imageResponse = await input.fetcher(asset.url);
+      let imageResponse: Response;
+      try {
+        imageResponse = await input.fetcher(asset.url);
+      } catch (error) {
+        return providerError(
+          "linkedin_image_fetch",
+          "Could not load the LinkedIn image. ME3 can safely try again.",
+          { message: error instanceof Error ? error.message : String(error) },
+          "retryable",
+        );
+      }
       if (!imageResponse.ok) {
         return providerError(
           "linkedin_image_fetch",
@@ -122,14 +268,24 @@ const linkedInAdapter: SocialPublishAdapter = {
           failureClassForStatus(imageResponse.status),
         );
       }
-      const initializeResponse = await input.fetcher(
-        "https://api.linkedin.com/rest/images?action=initializeUpload",
-        {
-          method: "POST",
-          headers: linkedInHeaders(input.accessToken),
-          body: JSON.stringify({ initializeUploadRequest: { owner: author } }),
-        },
-      );
+      let initializeResponse: Response;
+      try {
+        initializeResponse = await input.fetcher(
+          "https://api.linkedin.com/rest/images?action=initializeUpload",
+          {
+            method: "POST",
+            headers: linkedInHeaders(input.accessToken),
+            body: JSON.stringify({ initializeUploadRequest: { owner: author } }),
+          },
+        );
+      } catch (error) {
+        return providerError(
+          "linkedin_image_initialize",
+          "LinkedIn did not finish preparing the image. ME3 can safely try again.",
+          { message: error instanceof Error ? error.message : String(error) },
+          "retryable",
+        );
+      }
       const initialized = await readJson<{
         value?: { uploadUrl?: string; image?: string };
         message?: string;
@@ -142,14 +298,24 @@ const linkedInAdapter: SocialPublishAdapter = {
           failureClassForStatus(initializeResponse.status),
         );
       }
-      const uploadResponse = await input.fetcher(initialized.value.uploadUrl, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${input.accessToken}`,
-          "Content-Type": asset.mimeType || imageResponse.headers.get("content-type") || "application/octet-stream",
-        },
-        body: await imageResponse.arrayBuffer(),
-      });
+      let uploadResponse: Response;
+      try {
+        uploadResponse = await input.fetcher(initialized.value.uploadUrl, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${input.accessToken}`,
+            "Content-Type": asset.mimeType || imageResponse.headers.get("content-type") || "application/octet-stream",
+          },
+          body: await imageResponse.arrayBuffer(),
+        });
+      } catch (error) {
+        return providerError(
+          "linkedin_image_upload",
+          "LinkedIn did not finish uploading the image. ME3 can safely try again.",
+          { message: error instanceof Error ? error.message : String(error) },
+          "retryable",
+        );
+      }
       if (!uploadResponse.ok) {
         return providerError(
           "linkedin_image_upload",
@@ -162,6 +328,7 @@ const linkedInAdapter: SocialPublishAdapter = {
     }
 
     let postResponse: Response;
+    await input.markProviderWriteStarted?.();
     try {
       postResponse = await input.fetcher("https://api.linkedin.com/rest/posts", {
         method: "POST",
@@ -220,49 +387,206 @@ const linkedInAdapter: SocialPublishAdapter = {
 };
 
 const xAdapter: SocialPublishAdapter = {
-  validateDraft(input) {
-    const body = input.bodyText.trim();
-    if (!body) return { ok: false, error: "This X draft is empty." };
-    if (body.length > X_CHAR_LIMIT) {
-      return { ok: false, error: `This X draft is too long (max ${X_CHAR_LIMIT} characters).` };
-    }
-    if (input.assets.some((asset) => asset.kind === "video")) {
-      return { ok: false, error: "X publishing currently supports text and image posts only." };
-    }
-    return { ok: true };
-  },
+  validateDraft: validateXDraft,
 
   async publish(input) {
-    const response = await input.fetcher("https://api.twitter.com/2/tweets", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ text: input.bodyText.trim() }),
-    });
-    const json = await readJson<{
-      data?: { id?: string };
-      errors?: Array<{ title?: string; detail?: string }>;
-      title?: string;
-      detail?: string;
-    }>(response);
+    const validation = validateXDraft(input);
+    if (!validation.ok) {
+      return providerError(
+        "x_validation_failed",
+        validation.error,
+        undefined,
+        validation.error.includes("currently supports") ? "unsupported" : "rejected",
+      );
+    }
+
+    const mediaIds: string[] = [];
+    const mediaResponses: unknown[] = [];
+    for (const [index, asset] of input.assets.entries()) {
+      let imageResponse: Response;
+      try {
+        imageResponse = await input.fetcher(asset.url);
+      } catch (error) {
+        return providerError(
+          "x_image_fetch",
+          `Could not load X image ${index + 1}.`,
+          { message: error instanceof Error ? error.message : String(error) },
+          "retryable",
+        );
+      }
+      if (!imageResponse.ok) {
+        return providerError(
+          "x_image_fetch",
+          `Could not load X image ${index + 1} (${imageResponse.status}).`,
+          await imageResponse.text().catch(() => ""),
+          fetchFailureClass(imageResponse.status),
+        );
+      }
+
+      let bytes: Uint8Array | null;
+      try {
+        bytes = await readBoundedImageBytes(imageResponse, X_IMAGE_MAX_BYTES);
+      } catch (error) {
+        return providerError(
+          "x_image_fetch",
+          `Could not finish loading X image ${index + 1}.`,
+          { message: error instanceof Error ? error.message : String(error) },
+          "retryable",
+        );
+      }
+      if (!bytes) {
+        return providerError(
+          "x_image_too_large",
+          `X image ${index + 1} is larger than 5 MB.`,
+          undefined,
+          "unsupported",
+        );
+      }
+      if (bytes.byteLength === 0) {
+        return providerError(
+          "x_image_empty",
+          `X image ${index + 1} is empty.`,
+        );
+      }
+
+      const sniffedMimeType = sniffCarouselRasterMimeType(bytes);
+      const declaredMimeType = normalizeMimeType(asset.mimeType);
+      const responseMimeType = normalizeMimeType(imageResponse.headers.get("content-type"));
+      if (
+        !sniffedMimeType ||
+        (declaredMimeType && declaredMimeType !== sniffedMimeType) ||
+        (responseMimeType &&
+          X_IMAGE_MIME_TYPES.has(responseMimeType as CarouselRasterMimeType) &&
+          responseMimeType !== sniffedMimeType)
+      ) {
+        return providerError(
+          "x_image_type",
+          `X image ${index + 1} must be a valid PNG, JPEG, or WebP raster image.`,
+          { declaredMimeType, responseMimeType, sniffedMimeType },
+          "unsupported",
+        );
+      }
+
+      let uploadResponse: Response;
+      try {
+        uploadResponse = await input.fetcher("https://api.x.com/2/media/upload", {
+          method: "POST",
+          headers: xHeaders(input.accessToken),
+          body: JSON.stringify({
+            media: bytesToBase64(bytes),
+            media_category: "tweet_image",
+            media_type: sniffedMimeType,
+          }),
+        });
+      } catch (error) {
+        return providerError(
+          "x_media_upload",
+          `X did not finish uploading image ${index + 1}.`,
+          { message: error instanceof Error ? error.message : String(error) },
+          "retryable",
+        );
+      }
+      const uploadJson = await readJson<XErrorBody>(uploadResponse);
+      if (!uploadResponse.ok) {
+        return providerError(
+          "x_media_upload",
+          xErrorMessage(uploadJson, `X image upload failed (${uploadResponse.status}).`),
+          uploadJson,
+          failureClassForStatus(uploadResponse.status),
+        );
+      }
+      const mediaId = uploadJson.data?.id?.trim();
+      if (!mediaId) {
+        return providerError(
+          "x_media_missing_id",
+          "X uploaded an image but did not return its media id.",
+          uploadJson,
+          "retryable",
+        );
+      }
+      mediaIds.push(mediaId);
+      mediaResponses.push(uploadJson);
+
+      const altText = asset.altText?.trim();
+      if (!altText) continue;
+      let metadataResponse: Response;
+      try {
+        metadataResponse = await input.fetcher("https://api.x.com/2/media/metadata", {
+          method: "POST",
+          headers: xHeaders(input.accessToken),
+          body: JSON.stringify({
+            id: mediaId,
+            metadata: { alt_text: { text: altText } },
+          }),
+        });
+      } catch (error) {
+        return providerError(
+          "x_media_metadata",
+          `X did not finish adding alt text to image ${index + 1}.`,
+          { message: error instanceof Error ? error.message : String(error), mediaId },
+          "retryable",
+        );
+      }
+      const metadataJson = await readJson<XErrorBody>(metadataResponse);
+      if (!metadataResponse.ok) {
+        return providerError(
+          "x_media_metadata",
+          xErrorMessage(
+            metadataJson,
+            `X could not add alt text to image ${index + 1} (${metadataResponse.status}).`,
+          ),
+          metadataJson,
+          failureClassForStatus(metadataResponse.status),
+        );
+      }
+      mediaResponses.push(metadataJson);
+    }
+
+    let response: Response;
+    await input.markProviderWriteStarted?.();
+    try {
+      response = await input.fetcher("https://api.x.com/2/tweets", {
+        method: "POST",
+        headers: xHeaders(input.accessToken),
+        body: JSON.stringify({
+          text: input.bodyText.trim(),
+          ...(mediaIds.length > 0 ? { media: { media_ids: mediaIds } } : {}),
+        }),
+      });
+    } catch (error) {
+      return providerError(
+        "x_outcome_unknown",
+        "X did not confirm whether the post was published. Check X before trying again.",
+        {
+          message: error instanceof Error ? error.message : String(error),
+          mediaIds,
+        },
+        "outcome_unknown",
+      );
+    }
+    const json = await readJson<XErrorBody>(response);
     if (!response.ok) {
-      const message =
-        json.errors?.[0]?.detail ||
-        json.errors?.[0]?.title ||
-        json.detail ||
-        json.title ||
-        `X API error (${response.status})`;
-      return providerError("x_api_error", message, json, failureClassForStatus(response.status));
+      return providerError(
+        "x_api_error",
+        xErrorMessage(json, `X API error (${response.status})`),
+        { media: mediaResponses, post: json },
+        failureClassForStatus(response.status),
+      );
     }
     const id = json.data?.id;
-    if (!id) return providerError("x_missing_id", "X did not return a post id.", json);
+    if (!id) {
+      return providerError(
+        "x_missing_id",
+        "X accepted the request but did not return a post id. Check X before trying again.",
+        { media: mediaResponses, post: json },
+        "outcome_unknown",
+      );
+    }
     return {
       ok: true,
       platformPostId: id,
       platformPostUrl: `https://x.com/i/web/status/${id}`,
-      providerResponse: json,
+      providerResponse: { media: mediaResponses, post: json },
     };
   },
 };
@@ -299,18 +623,28 @@ const instagramAdapter: SocialPublishAdapter = {
       return providerError("instagram_missing_image", "Instagram publishing needs an image URL.");
     }
 
-    const createResponse = await input.fetcher(
-      `https://graph.facebook.com/v21.0/${encodeURIComponent(input.accountId)}/media`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          image_url: imageUrl,
-          caption: input.bodyText,
-          access_token: input.accessToken,
-        }),
-      },
-    );
+    let createResponse: Response;
+    try {
+      createResponse = await input.fetcher(
+        `https://graph.facebook.com/v21.0/${encodeURIComponent(input.accountId)}/media`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            image_url: imageUrl,
+            caption: input.bodyText,
+            access_token: input.accessToken,
+          }),
+        },
+      );
+    } catch (error) {
+      return providerError(
+        "instagram_media_create",
+        "Instagram did not finish preparing the media. ME3 can safely try again.",
+        { message: error instanceof Error ? error.message : String(error) },
+        "retryable",
+      );
+    }
     const createJson = await readJson<{ id?: string; error?: { message?: string } }>(createResponse);
     if (!createResponse.ok || !createJson.id) {
       return providerError(
@@ -321,17 +655,28 @@ const instagramAdapter: SocialPublishAdapter = {
       );
     }
 
-    const publishResponse = await input.fetcher(
-      `https://graph.facebook.com/v21.0/${encodeURIComponent(input.accountId)}/media_publish`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          creation_id: createJson.id,
-          access_token: input.accessToken,
-        }),
-      },
-    );
+    let publishResponse: Response;
+    await input.markProviderWriteStarted?.();
+    try {
+      publishResponse = await input.fetcher(
+        `https://graph.facebook.com/v21.0/${encodeURIComponent(input.accountId)}/media_publish`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            creation_id: createJson.id,
+            access_token: input.accessToken,
+          }),
+        },
+      );
+    } catch (error) {
+      return providerError(
+        "instagram_outcome_unknown",
+        "Instagram did not confirm whether the post was published. Check Instagram before trying again.",
+        { message: error instanceof Error ? error.message : String(error) },
+        "outcome_unknown",
+      );
+    }
     const publishJson = await readJson<{ id?: string; error?: { message?: string } }>(publishResponse);
     if (!publishResponse.ok) {
       return providerError(
@@ -341,10 +686,18 @@ const instagramAdapter: SocialPublishAdapter = {
         failureClassForStatus(publishResponse.status),
       );
     }
+    if (!publishJson.id) {
+      return providerError(
+        "instagram_missing_post_id",
+        "Instagram accepted the publish request but did not return a post id. Check Instagram before trying again.",
+        { create: createJson, publish: publishJson },
+        "outcome_unknown",
+      );
+    }
 
     return {
       ok: true,
-      platformPostId: publishJson.id || createJson.id,
+      platformPostId: publishJson.id,
       providerResponse: { create: createJson, publish: publishJson },
     };
   },

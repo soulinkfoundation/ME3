@@ -82,10 +82,14 @@ function createEnv() {
   const state = { sites, accounts, packages, variants, events, publications };
 
   const db = {
+    beforeNextBatch: undefined as (() => Promise<void>) | undefined,
     prepare(sql: string) {
       return new Statement(sql, state);
     },
     async batch(statements: Statement[]) {
+      const beforeBatch = this.beforeNextBatch;
+      this.beforeNextBatch = undefined;
+      await beforeBatch?.();
       for (const statement of statements) await statement.run();
       return [];
     },
@@ -102,6 +106,7 @@ function createEnv() {
         },
       },
     },
+    db,
     accounts,
     packages,
     variants,
@@ -234,6 +239,59 @@ describe("Social Posts", () => {
       scheduledFor: null,
       timezone: null,
     });
+  });
+
+  it("atomically cancels a schedule committed immediately before a Version edit batch", async () => {
+    const { db, env, publishingEnv, publications, events } = createEnv();
+    const created = await createSocialPost(env, "owner", {
+      siteId: "site-1",
+      sourceType: "pasted",
+      sourceSnapshot: "An exact approved Post",
+      sourceText: "An exact approved Post",
+      ideaText: "Edit and schedule race",
+      versions: [{
+        platform: "linkedin",
+        targetAccountId: "linkedin-1",
+        bodyText: "The reviewed Version.",
+      }],
+    });
+    const approved = await updatePostVersion(env, "owner", created.versions[0]!.id, {
+      approvalStatus: "approved",
+    });
+    events.length = 0;
+    db.beforeNextBatch = async () => {
+      await createPostVersionPublication(
+        publishingEnv as never,
+        "owner",
+        approved!.id,
+        {
+          scheduledFor: "2099-07-11T08:30:00.000Z",
+          timezone: "Europe/Dublin",
+        },
+      );
+    };
+
+    const edited = await updatePostVersion(env, "owner", approved!.id, {
+      bodyText: "The Version changed before delivery.",
+    });
+
+    expect(edited).toMatchObject({
+      approvalStatus: "draft",
+      scheduledFor: null,
+    });
+    expect(publications).toHaveLength(1);
+    expect(publications[0]).toMatchObject({
+      status: "cancelled",
+      error_code: "cancelled:version_changed",
+    });
+    expect(publications.filter((publication) => publication.status === "scheduled"))
+      .toHaveLength(0);
+    expect(events.filter((event) => event.event_type === "cancelled")).toEqual([
+      expect.objectContaining({
+        publication_id: publications[0]!.id,
+        payload_json: JSON.stringify({ reason: "version_changed" }),
+      }),
+    ]);
   });
 
   it("requires an active target account before approval", async () => {
@@ -521,6 +579,46 @@ class Statement {
   }
 
   async first<T>() {
+    if (
+      this.sql.includes("INSERT INTO social_publication_events") &&
+      this.sql.includes("RETURNING id")
+    ) {
+      const [id, publicationId, variantId, payload, createdAt] = this.values;
+      const publication = this.state.publications.find((row) => row.id === publicationId);
+      const eventType = this.sql.includes("'publishing'") ? "publishing" : "generated";
+      if (!publication || (eventType === "publishing" && publication.status !== "publishing")) {
+        return null as T | null;
+      }
+      this.state.events.push({
+        id,
+        publication_id: publicationId,
+        variant_id: variantId,
+        event_type: eventType,
+        payload_json: payload,
+        created_at: createdAt,
+      });
+      return { id } as T;
+    }
+    if (
+      this.sql.includes("FROM social_publications publication") &&
+      this.sql.includes("JOIN social_publication_events event")
+    ) {
+      const [eventId, publicationId] = this.values;
+      const publication = this.state.publications.find((row) => row.id === publicationId);
+      const event = this.state.events.find(
+        (row) =>
+          row.id === eventId &&
+          row.publication_id === publicationId &&
+          row.event_type === "scheduled",
+      );
+      return (publication && event
+        ? {
+            id: publication.id,
+            platform: publication.platform,
+            target_account_id_snapshot: publication.target_account_id_snapshot,
+          }
+        : null) as T | null;
+    }
     if (this.sql.includes("FROM plugin_installations")) {
       return { enabled: 1, status: "installed" } as T;
     }
@@ -611,10 +709,24 @@ class Statement {
       this.sql.includes("UPDATE social_publications") &&
       this.sql.includes("RETURNING id")
     ) {
-      const [publicationId] = this.values;
+      const providerWriteStarted = this.sql.includes(
+        "outcome_unknown:provider_write_started",
+      );
+      const publishingClaim = this.sql.includes("SET status = 'publishing'");
+      const publicationId = providerWriteStarted || publishingClaim
+        ? this.values[1]
+        : this.values[0];
       const publication = this.state.publications.find((row) => row.id === publicationId);
       if (!publication) return null as T | null;
-      if (this.sql.includes("SET queued_at = datetime('now')")) {
+      if (providerWriteStarted) {
+        if (
+          publication.status !== "publishing" ||
+          publication.updated_at !== this.values[2] ||
+          String(publication.error_code || "").startsWith("outcome_unknown")
+        ) return null as T | null;
+        publication.error_code = "outcome_unknown:provider_write_started";
+        publication.error_message = this.values[0];
+      } else if (this.sql.includes("SET queued_at = datetime('now')")) {
         if (publication.status !== "queued" || publication.queued_at) return null as T | null;
         publication.queued_at = new Date().toISOString();
       } else if (this.sql.includes("SET status = 'queued'")) {
@@ -624,20 +736,32 @@ class Statement {
       } else if (this.sql.includes("SET status = 'publishing'")) {
         if (publication.status !== "queued") return null as T | null;
         publication.status = "publishing";
+        publication.error_code = null;
+        publication.error_message = null;
+        publication.provider_response_json = null;
       } else if (this.sql.includes("SET status = 'cancelled'")) {
         if (publication.status !== "scheduled") return null as T | null;
         publication.status = "cancelled";
         publication.error_code = "cancelled:owner_request";
         publication.error_message = "Cancelled by the owner.";
       }
-      publication.updated_at = new Date().toISOString();
-      return { id: publication.id, variant_id: publication.variant_id } as T;
+      publication.updated_at = publishingClaim
+        ? this.values[0]
+        : new Date().toISOString();
+      return {
+        id: publication.id,
+        variant_id: publication.variant_id,
+        updated_at: publication.updated_at,
+      } as T;
     }
     if (this.sql.includes("COUNT(*) AS count") && this.sql.includes("social_publication_events")) {
       const [publicationId] = this.values;
+      const eventType = this.sql.includes("event_type = 'retried'")
+        ? "retried"
+        : "publishing";
       return {
         count: this.state.events.filter(
-          (event) => event.publication_id === publicationId && event.event_type === "publishing",
+          (event) => event.publication_id === publicationId && event.event_type === eventType,
         ).length,
       } as T;
     }
@@ -674,6 +798,7 @@ class Statement {
             platform: publication.platform,
             pub_status: publication.status,
             pub_updated_at: publication.updated_at,
+            pub_error_code: publication.error_code || null,
             body: publication.body_text_snapshot,
             media_manifest_json: publication.asset_manifest_json_snapshot,
             platforms_json: "[]",
@@ -904,6 +1029,7 @@ class Statement {
         format,
         body_text: bodyText,
         asset_manifest_json: assets,
+        carousel_render_set_id: null,
         source_excerpt: sourceExcerpt,
         approval_status: "draft",
         approved_at: null,
@@ -914,6 +1040,77 @@ class Statement {
         updated_at: updatedAt,
       });
     } else if (this.sql.includes("INSERT INTO social_publications")) {
+      if (this.sql.includes("SELECT ?, v.id")) {
+        const [
+          id,
+          scheduledFor,
+          timezone,
+          requestedByType,
+          ownerId,
+          requestContextJson,
+          createdAt,
+          updatedAt,
+          versionId,
+        ] = this.values;
+        const variant = this.state.variants.find((row) => row.id === versionId);
+        const pkg = this.state.packages.find((row) => row.id === variant?.package_id);
+        const site = this.state.sites.find(
+          (row) => row.id === pkg?.site_id && row.user_id === ownerId,
+        );
+        const account = this.state.accounts.find(
+          (row) =>
+            row.id === variant?.target_account_id &&
+            row.user_id === ownerId &&
+            row.site_id === pkg?.site_id &&
+            row.platform === variant?.platform &&
+            row.status === "active",
+        );
+        const duplicate = this.state.publications.some(
+          (row) =>
+            row.variant_id === versionId &&
+            row.scheduled_for === scheduledFor &&
+            row.status === "scheduled",
+        );
+        if (
+          !variant ||
+          !pkg ||
+          !site ||
+          !account ||
+          pkg.source_type === "legacy_content_bank_read_only" ||
+          variant.approval_status !== "approved" ||
+          duplicate
+        ) {
+          return {};
+        }
+        this.state.publications.push({
+          id,
+          variant_id: variant.id,
+          site_id: pkg.site_id,
+          platform: variant.platform,
+          status: "scheduled",
+          scheduled_for: scheduledFor,
+          timezone,
+          target_account_id_snapshot: variant.target_account_id,
+          format_snapshot: variant.format,
+          body_text_snapshot: variant.body_text,
+          asset_manifest_json_snapshot: variant.asset_manifest_json,
+          approval_status_snapshot: variant.approval_status,
+          approved_at_snapshot: variant.approved_at,
+          approved_by_user_id_snapshot: variant.approved_by_user_id,
+          requested_by_type: requestedByType,
+          requested_by_user_id: ownerId,
+          request_context_json: requestContextJson,
+          platform_post_id: null,
+          platform_post_url: null,
+          queued_at: null,
+          published_at: null,
+          error_code: null,
+          error_message: null,
+          created_at: createdAt,
+          updated_at: updatedAt,
+        });
+        return {};
+      }
       const [
         id,
         variantId,
@@ -974,6 +1171,41 @@ class Statement {
         updated_at: updatedAt,
       });
     } else if (this.sql.includes("INSERT INTO social_publication_events")) {
+      if (this.sql.includes("FROM social_publications publication")) {
+        if (!this.sql.includes("'cancelled'")) {
+          const [id, createdAt, publicationId] = this.values;
+          const publication = this.state.publications.find((row) => row.id === publicationId);
+          if (publication) {
+            this.state.events.push({
+              id,
+              publication_id: publication.id,
+              variant_id: publication.variant_id,
+              event_type: "scheduled",
+              payload_json: JSON.stringify({
+                action: "scheduled",
+                scheduledFor: publication.scheduled_for,
+                timezone: publication.timezone,
+              }),
+              created_at: createdAt,
+            });
+          }
+          return {};
+        }
+        const [payload, createdAt, variantId] = this.values;
+        for (const publication of this.state.publications.filter(
+          (row) => row.variant_id === variantId && row.status === "scheduled",
+        )) {
+          this.state.events.push({
+            id: `social-event-set-${publication.id}`,
+            publication_id: publication.id,
+            variant_id: publication.variant_id,
+            event_type: "cancelled",
+            payload_json: payload,
+            created_at: createdAt,
+          });
+        }
+        return {};
+      }
       const usesBoundEventType = this.sql.includes(
         "VALUES (?, ?, ?, ?, ?, datetime('now'))",
       );
@@ -1004,9 +1236,26 @@ class Statement {
         created_at: createdAt,
       });
     } else if (this.sql.includes("UPDATE social_publications")) {
-      const publicationId = this.values.at(-1);
+      if (this.sql.includes("WHERE variant_id = ?")) {
+        const [errorCode, errorMessage, updatedAt, variantId] = this.values;
+        for (const publication of this.state.publications.filter(
+          (row) => row.variant_id === variantId && row.status === "scheduled",
+        )) {
+          Object.assign(publication, {
+            status: "cancelled",
+            error_code: errorCode,
+            error_message: errorMessage,
+            updated_at: updatedAt,
+          });
+        }
+        return {};
+      }
+      const usesStatusCas = this.sql.includes("AND status = ?");
+      const publicationId = this.values.at(usesStatusCas ? -2 : -1);
+      const expectedStatus = usesStatusCas ? this.values.at(-1) : null;
       const publication = this.state.publications.find((row) => row.id === publicationId);
       if (!publication) return {};
+      if (expectedStatus && publication.status !== expectedStatus) return {};
       if (this.sql.includes("SET queued_at = NULL")) {
         publication.queued_at = null;
         publication.updated_at = new Date().toISOString();
@@ -1075,6 +1324,7 @@ class Statement {
         format,
         bodyText,
         assets,
+        carouselRenderSetId,
         approvalStatus,
         approvedAt,
         approvedByUserId,
@@ -1090,6 +1340,7 @@ class Statement {
           format,
           body_text: bodyText,
           asset_manifest_json: assets,
+          carousel_render_set_id: carouselRenderSetId,
           approval_status: approvalStatus,
           approved_at: approvedAt,
           approved_by_user_id: approvedByUserId,

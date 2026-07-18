@@ -1,4 +1,10 @@
 import { normalizeTimeZone } from "@me3-core/plugin-calendar";
+import {
+  confirmPostingPlan,
+  createPostingPlan,
+  searchPostLibrary,
+  type PostingPlan,
+} from "@me3-core/plugin-social-publishing";
 import type {
   AgentChatActionCard,
   AgentChatModelAttemptTrace,
@@ -199,6 +205,8 @@ export async function runCoreAgentToolTurn(input: {
                 executeCoreToolCall({
                   db: input.db,
                   userId: input.userId,
+                  requestId: input.requestId,
+                  messages: input.messages,
                   ownerTimezone: input.ownerTimezone,
                   idempotencyKey,
                   call,
@@ -313,6 +321,8 @@ function throwIfStreamAborted(signal?: AbortSignal): void {
 function executeCoreToolCall(input: {
   db: CoreAgentDb;
   userId: string;
+  requestId: string;
+  messages: readonly AgentToolMessage[];
   ownerTimezone: string | null | undefined;
   idempotencyKey: string;
   call: AgentToolCall;
@@ -628,6 +638,8 @@ export function buildMissionTaskActionCard(
 async function executeSocialToolCall(input: {
   db: CoreAgentDb;
   userId: string;
+  requestId: string;
+  messages: readonly AgentToolMessage[];
   ownerTimezone: string | null | undefined;
   call: AgentToolCall;
   tool: CoreChatToolDefinition;
@@ -636,6 +648,108 @@ async function executeSocialToolCall(input: {
   enforceSocialToolPolicy(input.tool);
   assertOnlyDeclaredArguments(input.call.arguments, input.tool);
   const args = input.call.arguments;
+
+  if (input.tool.capabilityId === "core.social.library.search") {
+    const items = await searchPostLibrary(
+      { DB: input.db } as never,
+      input.userId,
+      {
+        siteId: args.siteId,
+        query: args.query,
+        source: args.source,
+        platform: args.platform,
+        accountId: args.accountId,
+        approvalStatus: args.approvalStatus,
+        deliveryState: args.deliveryState,
+        tag: args.tag,
+        publishedFrom: args.publishedFrom,
+        publishedTo: args.publishedTo,
+        limit: args.limit,
+      },
+    );
+    return {
+      capabilityId: "core.social.library.search",
+      result: { ok: true, items, total: items.length },
+      fallbackReply: items.length
+        ? `Found ${items.length} matching Social Post Version${items.length === 1 ? "" : "s"}.`
+        : "No Social Post Versions matched that search.",
+      reminderAction: null,
+      actionCards: [],
+    };
+  }
+
+  if (input.tool.capabilityId === "core.social.posting_plan.create") {
+    const plan = await createPostingPlan(
+      { DB: input.db } as never,
+      input.userId,
+      {
+        accountId: args.accountId,
+        versionIds: optionalToolString(args.versionIds)
+          ?.split(",")
+          .map((versionId) => versionId.trim())
+          .filter(Boolean),
+        windowStart: args.windowStart,
+        windowEnd: args.windowEnd,
+        count: args.count,
+      },
+    );
+    return {
+      capabilityId: "core.social.posting_plan.create",
+      result: {
+        ok: true,
+        scheduled: false,
+        plan,
+        ownerConfirmation: {
+          status: "pending_owner_confirmation",
+          planId: plan.id,
+          expectedUpdatedAt: plan.updatedAt,
+        },
+      },
+      fallbackReply: `Proposed ${plan.items.length} posting time${plan.items.length === 1 ? "" : "s"} for review. Nothing was scheduled.`,
+      reminderAction: null,
+      actionCards: [buildSocialPostingPlanActionCard(plan, "proposal")],
+    };
+  }
+
+  if (input.tool.capabilityId === "core.social.posting_plan.confirm") {
+    const planId = requiredToolString(args.planId, "Posting plan ID");
+    const expectedUpdatedAt = requiredToolString(
+      args.expectedUpdatedAt,
+      "Posting plan expectedUpdatedAt",
+    );
+    if (args.confirmed !== true) {
+      throw new Error("Posting plan confirmation must be explicitly confirmed by the owner.");
+    }
+    await requirePostingPlanOwnerConfirmation({
+      db: input.db,
+      userId: input.userId,
+      requestId: input.requestId,
+      messages: input.messages,
+      planId,
+      expectedUpdatedAt,
+    });
+    const plan = await confirmPostingPlan(
+      { DB: input.db } as never,
+      input.userId,
+      planId,
+      {
+        expectedUpdatedAt,
+        confirmed: true,
+      },
+      { requestedByType: "agent" },
+    );
+    if (!plan) throw new Error("Posting plan not found. Propose a new plan before confirming.");
+    return {
+      capabilityId: "core.social.posting_plan.confirm",
+      result: { ok: plan.status === "confirmed", plan },
+      fallbackReply: plan.status === "confirmed"
+        ? `Scheduled all ${plan.items.length} Posts in the confirmed Posting plan.`
+        : "The Posting plan needs attention. No unconfirmed times were filled automatically.",
+      reminderAction: null,
+      actionCards: [buildSocialPostingPlanActionCard(plan, "confirmation")],
+    };
+  }
+
   const sourceType = socialSourceType(args.sourceType);
   const sourceId = requiredToolString(args.sourceId, "Social sourceId");
 
@@ -776,13 +890,7 @@ function buildSocialDraftActionCard(
   detail: Awaited<ReturnType<typeof createAgentSocialPost>>,
   source: AgentSocialSource,
 ): AgentChatActionCard {
-  const platformLabels = detail.versions.map((version) =>
-    version.platform === "x"
-      ? "X"
-      : version.platform === "linkedin"
-        ? "LinkedIn"
-        : "Instagram"
-  );
+  const platformLabels = detail.versions.map((version) => socialPlatformLabel(version.platform));
   return {
     id: `social-post:${detail.post.id}`,
     kind: "social.draft_saved",
@@ -801,6 +909,172 @@ function buildSocialDraftActionCard(
     primaryAction: { label: "Review post", href: "/social" },
     secondaryActions: [],
   };
+}
+
+function buildSocialPostingPlanActionCard(
+  plan: PostingPlan,
+  phase: "proposal" | "confirmation",
+): AgentChatActionCard {
+  const confirmationResult = phase === "confirmation";
+  const confirmed = plan.status === "confirmed";
+  const scheduledCount = plan.items.filter((item) => item.status === "scheduled").length;
+  const blockedCount = plan.items.filter((item) => item.status === "blocked").length;
+  const planTimezone = plan.timezone;
+  const socialHref = `/social?siteId=${encodeURIComponent(plan.siteId)}&postingPlan=${encodeURIComponent(plan.id)}`;
+  const calendarHref = `/calendar?siteId=${encodeURIComponent(plan.siteId)}`;
+  return {
+    id: `social-posting-plan:${plan.id}:${confirmationResult ? "confirmation" : "proposal"}`,
+    kind: confirmationResult
+      ? "social.posting_plan_confirmed"
+      : "social.posting_plan_proposed",
+    capabilityId: confirmationResult
+      ? "core.social.posting_plan.confirm"
+      : "core.social.posting_plan.create",
+    title: confirmed
+      ? "Posting plan scheduled"
+      : confirmationResult
+        ? "Posting plan needs attention"
+        : "Posting plan ready to review",
+    summary: `${plan.accountLabel} · ${socialPlatformLabel(plan.platform)}`,
+    status: confirmed ? "complete" : confirmationResult ? "failed" : "pending_approval",
+    statusLabel: confirmed
+      ? "Scheduled"
+      : confirmationResult
+        ? "Needs attention"
+        : "Needs confirmation",
+    changed: [
+      ...(confirmationResult
+        ? [
+            { label: "Scheduled", value: String(scheduledCount) },
+            { label: "Blocked", value: String(blockedCount) },
+          ]
+        : [{ label: "Posts", value: String(plan.items.length) }]),
+      ...plan.items.slice(0, 3).map((item, index) => ({
+        label: item.sourceTitle || `Post ${index + 1}`,
+        value: formatAgentDateTime(item.scheduledFor, item.timezone),
+      })),
+      ...(plan.items.length > 3
+        ? [{ label: "More Posts", value: String(plan.items.length - 3) }]
+        : []),
+      { label: "Window starts", value: formatAgentDateTime(plan.windowStart, planTimezone) },
+      { label: "Window ends", value: formatAgentDateTime(plan.windowEnd, planTimezone) },
+      ...plan.warnings.slice(0, 3).map((warning, index) => ({
+        label: plan.warnings.length === 1 ? "Warning" : `Warning ${index + 1}`,
+        value: warning.message,
+      })),
+      ...(plan.warnings.length > 3
+        ? [{ label: "More warnings", value: String(plan.warnings.length - 3) }]
+        : []),
+    ],
+    records: [{ kind: "social_posting_plan", id: plan.id }],
+    primaryAction: confirmed
+      ? { label: "Open Calendar", href: calendarHref }
+      : { label: "Review Posting plan", href: socialHref },
+    secondaryActions: confirmed
+      ? [{ label: "Open Social", href: socialHref }]
+      : [{ label: "Open Calendar", href: calendarHref }],
+  };
+}
+
+async function requirePostingPlanOwnerConfirmation(input: {
+  db: CoreAgentDb;
+  userId: string;
+  requestId: string;
+  messages: readonly AgentToolMessage[];
+  planId: string;
+  expectedUpdatedAt: string;
+}): Promise<void> {
+  const ownerMessage = [...input.messages]
+    .reverse()
+    .find((message) => message.role === "user")?.content;
+  if (!ownerMessage || !isExplicitPostingPlanConfirmation(ownerMessage)) {
+    throw new Error(
+      "Ask the owner to explicitly confirm the exact reviewed Posting plan in a later message before scheduling it.",
+    );
+  }
+
+  const stored = await input.db
+    .prepare(
+      `SELECT request_id, result_json
+       FROM agent_tool_executions
+       WHERE user_id = ?
+         AND tool_name = ?
+         AND status = 'succeeded'
+         AND request_id <> ?
+         AND result_json IS NOT NULL
+       ORDER BY created_at DESC
+       LIMIT 50`,
+    )
+    .bind(
+      input.userId,
+      "core_social_posting_plan_create",
+      input.requestId,
+    )
+    .all<{ request_id: string; result_json: string | null }>();
+
+  const reviewed = (stored.results || []).some((row) =>
+    storedPostingPlanConfirmationMatches(
+      row.result_json,
+      input.planId,
+      input.expectedUpdatedAt,
+    )
+  );
+  if (!reviewed) {
+    throw new Error(
+      "That exact Posting plan revision is not waiting for owner confirmation. Make and review a fresh plan first.",
+    );
+  }
+}
+
+function isExplicitPostingPlanConfirmation(message: string): boolean {
+  const normalized = message
+    .toLowerCase()
+    .replaceAll("’", "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || /\b(?:do not|don't|dont|not|cancel|hold|wait|stop)\b/.test(normalized)) {
+    return false;
+  }
+  if (!/\b(?:posting )?plan\b/.test(normalized)) return false;
+
+  const command = normalized
+    .replace(/^(?:(?:yes|yep|yeah|ok|okay|please)\b[\s,.!:-]*)+/, "")
+    .replace(/^go ahead(?: and)?\s+/, "")
+    .replace(/^please\s+/, "");
+  if (/^(?:confirm|approve)\b/.test(command)) return true;
+  if (/^i (?:do )?(?:confirm|approve)\b/.test(command)) return true;
+  return /^schedule\b/.test(command) && /\b(?:this|that|the exact|the reviewed) (?:posting )?plan\b/.test(command);
+}
+
+function storedPostingPlanConfirmationMatches(
+  value: string | null,
+  planId: string,
+  expectedUpdatedAt: string,
+): boolean {
+  if (!value) return false;
+  try {
+    const stored = JSON.parse(value) as Record<string, unknown>;
+    const result = recordValue(stored.result);
+    const ownerConfirmation = recordValue(result?.ownerConfirmation);
+    return ownerConfirmation?.status === "pending_owner_confirmation" &&
+      ownerConfirmation.planId === planId &&
+      ownerConfirmation.expectedUpdatedAt === expectedUpdatedAt;
+  } catch {
+    return false;
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function socialPlatformLabel(platform: string): string {
+  if (platform === "x") return "X";
+  if (platform === "linkedin") return "LinkedIn";
+  if (platform === "instagram_business") return "Instagram Business";
+  return "Instagram";
 }
 
 async function executeMailboxToolCall(input: {
@@ -1020,6 +1294,10 @@ function withCoreToolInstructions(
     "- When the owner asks for ideas, options, repurposing, a Quote, Short Post, Thread, or carousel outline, call core_social_suggestions_create. Provide exact Source text for each Suggestion. Quotes must stay verbatim; set quoteTrimmed only when words were removed without adding or reordering words.",
     "- Suggestions remain owner-controlled review material. Never claim that a Suggestion became a Post until the owner chooses and saves it.",
     "- Create only the platforms the owner requested. Draft creation saves reviewable internal drafts only; it never approves, schedules, or publishes them.",
+    "- Use core_social_library_search to find existing Social Post Versions by Source, topic text, platform, account, approval, delivery state, tag, or published date. Never invent a Post, Version, account, or Posting plan ID.",
+    "- Use core_social_posting_plan_create to propose times only after the target account and time window are clear. A proposal creates no Publications and schedules nothing; show its warnings and review action to the owner.",
+    "- Never fill or confirm a Posting plan autonomously. Call core_social_posting_plan_confirm only when the owner explicitly confirms the exact reviewed plan in the conversation, and pass its exact planId, expectedUpdatedAt, and confirmed=true.",
+    "- Describe owner-facing timing rules as Preferred posting times, minimum gap, and minimum time before reposting. Do not use internal implementation terminology.",
     "- Never mention internal Social Suggestion, Post, or Version IDs in the user-facing reply. Confirm the review action in ordinary language instead.",
     "- Never mention internal Mission task or Journal source IDs in the user-facing reply. Disambiguate with human titles, projects, dates, and snippets.",
     "- A tool result is the source of truth. Do not claim an action succeeded unless its result says ok=true.",
@@ -1078,10 +1356,13 @@ function enforceMailboxToolPolicy(tool: CoreChatToolDefinition): void {
 }
 
 function enforceSocialToolPolicy(tool: CoreChatToolDefinition): void {
+  const expectedApprovalMode = tool.capabilityId === "core.social.posting_plan.confirm"
+    ? "approval_required"
+    : "none";
   if (
     !tool.capabilityId.startsWith("core.social.") ||
     tool.handlerRoute !== tool.capabilityId ||
-    tool.approvalMode !== "none" ||
+    tool.approvalMode !== expectedApprovalMode ||
     tool.requiredSetupChecks.some((check) => check !== "social-publishing")
   ) {
     throw new Error(`Tool "${tool.name}" is not allowed by the social draft runtime policy.`);

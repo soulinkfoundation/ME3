@@ -44,6 +44,8 @@ export const RUNTIME_MIGRATIONS = [
   ["0022_social_posts_canonical", "2026-07-18-social-posts-canonical-v1"],
   ["0023_social_publications_reusable", "2026-07-18-social-publications-reusable-v1"],
   ["0024_social_suggestions", "2026-07-18-social-suggestions-v2"],
+  ["0025_social_posting_plans", "2026-07-18-social-posting-plans-v1"],
+  ["0026_social_carousels", "2026-07-18-social-carousels-v1"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];
@@ -78,7 +80,6 @@ const EXCLUDED_TABLES = [
   "mission_daemon_pairings",
   "mobile_pairings",
   "mobile_refresh_tokens",
-  "social_accounts",
   "social_oauth_states",
   "telegram_settings",
 ];
@@ -86,6 +87,10 @@ const TRANSFORMED_TABLES = [
   "email_provider_settings",
   "mailbox_aliases",
   "sites",
+  "social_accounts",
+  "social_posting_plan_items",
+  "social_posting_plans",
+  "social_posting_reservations",
   "social_provider_settings",
   "social_suggestions",
 ];
@@ -142,7 +147,12 @@ const COPIED_TABLES = [
   "site_files",
   "site_page_revisions",
   "site_pages",
+  "social_carousel_media",
+  "social_carousel_render_assets",
+  "social_carousel_render_set_media",
+  "social_carousel_render_sets",
   "social_packages",
+  "social_posting_preferences",
   "social_publication_events",
   "social_publications",
   "social_variants",
@@ -182,6 +192,34 @@ const TRANSFORMS = {
       custom_domain_status:
         "CASE WHEN custom_domain IS NULL OR trim(custom_domain) = '' THEN NULL ELSE 'pending' END",
       custom_domain_cf_id: "NULL",
+    },
+  },
+  social_accounts: {
+    columns: {
+      access_token_ciphertext: "'portable-reconnect-required'",
+      refresh_token_ciphertext: "NULL",
+      token_expires_at: "NULL",
+      scopes_json: "'[]'",
+      status: "'revoked'",
+      metadata_json: "'{\"portableReconnectRequired\":true}'",
+      last_verified_at: "NULL",
+    },
+  },
+  social_posting_plan_items: {
+    columns: {
+      status: "CASE WHEN status = 'reserved' THEN 'suggested' ELSE status END",
+    },
+  },
+  social_posting_plans: {
+    columns: {
+      status: "CASE WHEN status = 'confirming' THEN 'needs_attention' ELSE status END",
+      confirmation_token: "NULL",
+      confirmation_started_at: "NULL",
+    },
+  },
+  social_posting_reservations: {
+    columns: {
+      status: "CASE WHEN status = 'reserved' THEN 'released' ELSE status END",
     },
   },
   social_provider_settings: {
@@ -230,9 +268,10 @@ const SENSITIVE_FIELD_POLICIES = new Map([
   ["mobile_refresh_tokens.token_hash", "exclude and re-pair"],
   ["owner_profile.password_hash", "preserve local owner login"],
   ["sites.custom_domain_cf_id", "reset host-bound platform configuration"],
-  ["social_accounts.access_token_ciphertext", "exclude and reconnect"],
-  ["social_accounts.refresh_token_ciphertext", "exclude and reconnect"],
-  ["social_accounts.token_expires_at", "exclude and reconnect"],
+  ["social_accounts.access_token_ciphertext", "replace with noncredential reconnect marker"],
+  ["social_accounts.refresh_token_ciphertext", "clear and reconnect"],
+  ["social_accounts.token_expires_at", "clear and reconnect"],
+  ["social_posting_plans.confirmation_token", "reset ephemeral confirmation claim"],
   ["social_suggestions.choose_token", "reset ephemeral choose claim"],
   ["social_oauth_states.state", "exclude one-time state"],
   ["social_provider_settings.encrypted_client_secret", "exclude and reconnect"],

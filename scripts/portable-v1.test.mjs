@@ -96,7 +96,21 @@ test("exports sanitized owner data and restores the exact identity, D1 rows, and
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM auth_rate_limits;"), "0");
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM me3_install_claim_states;"), "0");
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM agent_turn_results;"), "0");
-  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM social_accounts;"), "0");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM social_accounts;"), "1");
+  assert.equal(
+    queryScalar(
+      target,
+      `SELECT access_token_ciphertext = 'portable-reconnect-required'
+          AND refresh_token_ciphertext IS NULL
+          AND token_expires_at IS NULL
+          AND scopes_json = '[]'
+          AND status = 'revoked'
+          AND metadata_json = '{"portableReconnectRequired":true}'
+          AND last_verified_at IS NULL
+       FROM social_accounts WHERE id = 'social-1';`,
+    ),
+    "1",
+  );
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM ai_gateway_settings;"), "0");
   assert.equal(
     queryScalar(target, "SELECT COUNT(*) FROM email_provider_settings WHERE provider_id = 'cloudflare-email';"),
@@ -244,6 +258,288 @@ test("portable restore resets an interrupted suggestion claim without deleting i
   );
 });
 
+test("portable restore releases an interrupted Posting plan claim and preserves its deterministic Publication", async () => {
+  const interruptedSource = cloneSource("interrupted-social-posting-plan");
+  const interruptedArchive = join(root, "interrupted-social-posting-plan.me3-portable");
+  const target = freshTarget("interrupted-social-posting-plan-target");
+
+  runSqlite(
+    interruptedSource,
+    `
+      INSERT INTO social_packages (
+        id, site_id, post_slug, post_title_snapshot, source_hash, status, created_by,
+        source_type, source_ref, source_snapshot, source_text, idea_text, tags_json,
+        created_at, updated_at
+      ) VALUES (
+        'social-post-plan-reset', 'site-1', 'plan-reset', 'Portable Posting plan',
+        'portable-plan-source-hash', 'ready', 'agent', 'journal', 'journal:journal-1',
+        '{}', 'Portable source', 'Portable plan body', '["portable"]',
+        '2026-07-18T10:00:00.000Z', '2026-07-18T10:00:00.000Z'
+      );
+      INSERT INTO social_variants (
+        id, package_id, platform, target_account_id, format, body_text,
+        asset_manifest_json, approval_status, approved_at, approved_by_user_id,
+        created_at, updated_at
+      ) VALUES (
+        'social-version-plan-reset', 'social-post-plan-reset', 'linkedin', 'social-1',
+        'post', 'Portable plan body', '[]', 'approved',
+        '2026-07-18T10:00:00.000Z', 'owner',
+        '2026-07-18T10:00:00.000Z', '2026-07-18T10:00:00.000Z'
+      );
+      INSERT INTO social_posting_preferences (
+        account_id, timezone, preferred_times_json, minimum_gap_minutes,
+        minimum_repost_days, created_at, updated_at
+      ) VALUES (
+        'social-1', 'Europe/Dublin', '[{"day":"monday","localTime":"09:00"}]',
+        120, 30, '2026-07-18T10:00:00.000Z', '2026-07-18T10:00:00.000Z'
+      );
+      INSERT INTO social_posting_plans (
+        id, user_id, site_id, account_id, status, request_json, warnings_json,
+        confirmation_token, confirmation_started_at, expires_at, created_at, updated_at
+      ) VALUES (
+        'social-plan-portable-reset', 'owner', 'site-1', 'social-1', 'confirming',
+        '{"windowStart":"2026-07-20T00:00:00.000Z","windowEnd":"2026-07-27T00:00:00.000Z","requestedCount":1,"minimumGapMinutes":120,"minimumRepostDays":30,"timezone":"Europe/Dublin","versionIds":["social-version-plan-reset"]}',
+        '[]', 'ephemeral-confirmation-token', '2026-07-18T10:01:00.000Z',
+        '2026-07-19T10:00:00.000Z', '2026-07-18T10:00:00.000Z',
+        '2026-07-18T10:01:00.000Z'
+      );
+      INSERT INTO social_posting_plan_items (
+        id, plan_id, position, variant_id, version_updated_at_snapshot,
+        approval_status_snapshot, version_fingerprint, scheduled_for, timezone,
+        is_repost, status, created_at, updated_at
+      ) VALUES (
+        'social-plan-item-portable-reset', 'social-plan-portable-reset', 0,
+        'social-version-plan-reset', '2026-07-18T10:00:00.000Z', 'approved',
+        'portable-version-fingerprint', '2026-07-20T08:00:00.000Z', 'Europe/Dublin',
+        0, 'reserved', '2026-07-18T10:00:00.000Z', '2026-07-18T10:01:00.000Z'
+      );
+      INSERT INTO social_posting_reservations (
+        id, plan_item_id, account_id, scheduled_for, range_start, range_end,
+        status, created_at, updated_at
+      ) VALUES (
+        'social-reservation-portable-reset', 'social-plan-item-portable-reset', 'social-1',
+        '2026-07-20T08:00:00.000Z', '2026-07-20T06:00:00.000Z',
+        '2026-07-20T10:00:00.000Z', 'reserved',
+        '2026-07-18T10:01:00.000Z', '2026-07-18T10:01:00.000Z'
+      );
+      INSERT INTO social_publications (
+        id, variant_id, site_id, platform, status, scheduled_for, timezone,
+        target_account_id_snapshot, format_snapshot, body_text_snapshot,
+        asset_manifest_json_snapshot, approval_status_snapshot, approved_at_snapshot,
+        approved_by_user_id_snapshot, requested_by_type, requested_by_user_id,
+        request_context_json, created_at, updated_at
+      ) VALUES (
+        'social-publication-social-plan-item-portable-reset',
+        'social-version-plan-reset', 'site-1', 'linkedin', 'scheduled',
+        '2026-07-20T08:00:00.000Z', 'Europe/Dublin', 'social-1', 'post',
+        'Portable plan body', '[]', 'approved', '2026-07-18T10:00:00.000Z',
+        'owner', 'agent', 'owner',
+        '{"surface":"posting_plan","postingPlanId":"social-plan-portable-reset"}',
+        '2026-07-18T10:01:00.000Z', '2026-07-18T10:01:00.000Z'
+      );
+    `,
+  );
+
+  await exportPortableV1({
+    database: interruptedSource,
+    r2Directory: sourceR2,
+    output: interruptedArchive,
+    passphrase: PROOF_PASSPHRASE,
+    createdAt: "2026-07-18T10:05:00.000Z",
+  });
+  restorePortableV1({
+    archive: interruptedArchive,
+    targetDatabase: target,
+    targetR2Directory: join(root, "interrupted-social-posting-plan-r2"),
+    passphrase: PROOF_PASSPHRASE,
+  });
+
+  assert.equal(
+    queryScalar(
+      target,
+      `SELECT status = 'needs_attention'
+          AND confirmation_token IS NULL
+          AND confirmation_started_at IS NULL
+       FROM social_posting_plans WHERE id = 'social-plan-portable-reset';`,
+    ),
+    "1",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      "SELECT status FROM social_posting_plan_items WHERE id = 'social-plan-item-portable-reset';",
+    ),
+    "suggested",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      "SELECT status FROM social_posting_reservations WHERE id = 'social-reservation-portable-reset';",
+    ),
+    "released",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      "SELECT COUNT(*) FROM social_publications WHERE id = 'social-publication-social-plan-item-portable-reset';",
+    ),
+    "1",
+  );
+  assert.equal(
+    queryScalar(target, "SELECT COUNT(*) FROM social_posting_preferences WHERE account_id = 'social-1';"),
+    "1",
+  );
+
+  runSqlite(
+    target,
+    `INSERT INTO social_accounts (
+       id, user_id, site_id, platform, platform_account_id, platform_handle,
+       access_token_ciphertext, status
+     ) VALUES (
+       'replacement-id', 'owner', 'site-1', 'linkedin', 'linkedin-owner',
+       'portable-owner', 'new-encrypted-access', 'active'
+     )
+     ON CONFLICT(site_id, platform, platform_account_id) DO UPDATE SET
+       access_token_ciphertext = excluded.access_token_ciphertext,
+       status = 'active';`,
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      `SELECT id = 'social-1' AND status = 'active'
+          AND access_token_ciphertext = 'new-encrypted-access'
+       FROM social_accounts WHERE platform_account_id = 'linkedin-owner';`,
+    ),
+    "1",
+  );
+});
+
+test("portable restore preserves immutable Carousel media, render inputs, SVG assets, and Version attachment", async () => {
+  const carouselSource = cloneSource("social-carousel");
+  const carouselArchive = join(root, "social-carousel.me3-portable");
+  const target = freshTarget("social-carousel-target");
+  const mediaHash = `sha256:${"1".repeat(64)}`;
+  const fingerprint = `sha256:${"2".repeat(64)}`;
+  const svgHash = `sha256:${"3".repeat(64)}`;
+
+  runSqlite(
+    carouselSource,
+    `
+      INSERT INTO social_packages (
+        id, site_id, post_slug, post_title_snapshot, source_hash, status, created_by,
+        source_type, source_ref, source_snapshot, source_text, idea_text,
+        created_at, updated_at
+      ) VALUES (
+        'social-post-carousel-portable', 'site-1', 'carousel-portable',
+        'Portable Carousel Source', '${"4".repeat(64)}', 'ready', 'user',
+        'journal', 'journal:journal-1', 'Portable source', 'Portable source',
+        'Portable Carousel', '2026-07-18T10:00:00.000Z', '2026-07-18T10:00:00.000Z'
+      );
+      INSERT INTO social_variants (
+        id, package_id, platform, format, body_text, asset_manifest_json,
+        approval_status, created_at, updated_at
+      ) VALUES (
+        'social-version-carousel-portable', 'social-post-carousel-portable', 'x',
+        'carousel', 'Portable Carousel', '[]', 'draft',
+        '2026-07-18T10:00:00.000Z', '2026-07-18T10:00:00.000Z'
+      );
+      INSERT INTO social_carousel_media (
+        id, user_id, site_id, content_hash, storage_key, immutable_url, mime_type,
+        pixel_width, pixel_height, byte_length, bytes, created_at
+      ) VALUES (
+        'social-carousel-media-portable', 'owner', 'site-1', '${mediaHash}',
+        'social-media/sha256/${"1".repeat(64)}.png',
+        '/api/social/media/sha256/${"1".repeat(64)}.png', 'image/png',
+        1, 1, 8, X'89504E470D0A1A0A', '2026-07-18T10:00:00.000Z'
+      );
+      INSERT INTO social_carousel_render_sets (
+        id, user_id, site_id, post_id, created_from_version_id, input_fingerprint,
+        model_version, renderer_version, template_id, template_version,
+        canvas_width, canvas_height, model_json, canonical_input,
+        asset_manifest_json, created_at
+      ) VALUES (
+        'social-carousel-render-portable', 'owner', 'site-1',
+        'social-post-carousel-portable', 'social-version-carousel-portable',
+        '${fingerprint}', 'me3.carousel-model.v1', 'me3.carousel-svg.v1',
+        'owner-editorial', 1, 1080, 1350,
+        '{"modelVersion":"me3.carousel-model.v1","source":{"sourceRef":"journal:journal-1"}}',
+        '{"modelVersion":"me3.carousel-model.v1","rendererVersion":"me3.carousel-svg.v1"}',
+        '[{"url":"/api/social/carousels/assets/social-carousel-asset-portable","path":"social-carousels/sha256/${"3".repeat(64)}.svg","filename":"01-cover.svg","mimeType":"image/svg+xml","kind":"image","assetIndex":0}]',
+        '2026-07-18T10:00:00.000Z'
+      );
+      INSERT INTO social_carousel_render_assets (
+        id, render_set_id, slide_id, position, content_hash, storage_key,
+        immutable_url, file_name, mime_type, pixel_width, pixel_height,
+        byte_length, alt_text, source_evidence_json, media_ref_ids_json,
+        svg_text, created_at
+      ) VALUES (
+        'social-carousel-asset-portable', 'social-carousel-render-portable',
+        'cover', 0, '${svgHash}', 'social-carousels/sha256/${"3".repeat(64)}.svg',
+        '/api/social/carousels/assets/social-carousel-asset-portable', '01-cover.svg',
+        'image/svg+xml', 1080, 1350, 46, 'Portable Carousel cover slide.',
+        '[{"id":"evidence-cover","start":0,"end":8,"excerpt":"Portable"}]',
+        '["social-carousel-media-portable"]',
+        '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+        '2026-07-18T10:00:00.000Z'
+      );
+      INSERT INTO social_carousel_render_set_media (render_set_id, media_id, content_hash)
+      VALUES ('social-carousel-render-portable', 'social-carousel-media-portable', '${mediaHash}');
+      UPDATE social_variants
+      SET carousel_render_set_id = 'social-carousel-render-portable',
+          asset_manifest_json = '[{"url":"/api/social/carousels/assets/social-carousel-asset-portable"}]'
+      WHERE id = 'social-version-carousel-portable';
+    `,
+  );
+
+  await exportPortableV1({
+    database: carouselSource,
+    r2Directory: sourceR2,
+    output: carouselArchive,
+    passphrase: PROOF_PASSPHRASE,
+    createdAt: "2026-07-18T10:05:00.000Z",
+  });
+  restorePortableV1({
+    archive: carouselArchive,
+    targetDatabase: target,
+    targetR2Directory: join(root, "social-carousel-r2"),
+    passphrase: PROOF_PASSPHRASE,
+  });
+
+  assert.equal(
+    queryScalar(
+      target,
+      "SELECT hex(bytes) FROM social_carousel_media WHERE id = 'social-carousel-media-portable';",
+    ),
+    "89504E470D0A1A0A",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      "SELECT svg_text FROM social_carousel_render_assets WHERE id = 'social-carousel-asset-portable';",
+    ),
+    '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      `SELECT carousel_render_set_id
+       FROM social_variants WHERE id = 'social-version-carousel-portable';`,
+    ),
+    "social-carousel-render-portable",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      `SELECT created_from_version_id = 'social-version-carousel-portable'
+          AND model_json LIKE '%me3.carousel-model.v1%'
+          AND canonical_input LIKE '%me3.carousel-svg.v1%'
+       FROM social_carousel_render_sets WHERE id = 'social-carousel-render-portable';`,
+    ),
+    "1",
+  );
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM pragma_foreign_key_check;"), "0");
+});
+
 test("archive omits platform, session, device, and managed-only credentials", () => {
   const textFiles = listFiles(archive)
     .filter((path) => !path.includes(`${join("objects", "blobs")}`))
@@ -262,6 +558,10 @@ test("archive omits platform, session, device, and managed-only credentials", ()
   assert.equal(textFiles.includes("cloudflare-domain-id-must-reset"), false);
   assert.equal(textFiles.includes("cf-destination-must-reset"), false);
   assert.equal(textFiles.includes("cf-rule-must-reset"), false);
+  assert.equal(textFiles.includes("v1.fixture.social-access"), false);
+  assert.equal(textFiles.includes("v1.fixture.social-refresh"), false);
+  assert.equal(textFiles.includes("v1.fixture.social-secret"), false);
+  assert.equal(textFiles.includes("ephemeral-confirmation-token"), false);
 });
 
 test("export requires verified local password login before creating output", async () => {

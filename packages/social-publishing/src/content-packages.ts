@@ -30,12 +30,14 @@ export type SocialPostApprovalStatus = "draft" | "approved" | "rejected";
 export type SocialPost = {
   id: string;
   siteId: string;
+  sourceTitle: string;
   sourceType: SocialPostSourceType | "legacy_content_bank_read_only";
   sourceRef: string | null;
   sourceSnapshot: string;
   sourceText: string;
   ideaText: string;
   goal: string | null;
+  tags: string[];
   status: "draft" | "ready" | "partially_published" | "published" | "failed" | "archived";
   createdBy: "user" | "agent";
   createdAt: string;
@@ -50,6 +52,7 @@ export type PostVersion = {
   format: SocialPostFormat;
   bodyText: string;
   assetManifest: SocialMediaAsset[];
+  carouselRenderSetId: string | null;
   sourceExcerpt: string | null;
   approvalStatus: SocialPostApprovalStatus;
   approvedAt: string | null;
@@ -79,12 +82,14 @@ export type SocialPostDetail = {
 
 export type CreateSocialPostInput = {
   siteId: string;
+  sourceTitle?: string;
   sourceType: SocialPostSourceType;
   sourceRef?: string | null;
   sourceSnapshot?: string;
   sourceText?: string;
   ideaText: string;
   goal?: string | null;
+  tags?: string[];
   createdBy?: "user" | "agent";
   versions: Array<{
     platform: SocialPlatform;
@@ -101,6 +106,11 @@ export type UpdatePostVersionInput = {
   bodyText?: string;
   assetManifest?: SocialMediaAsset[];
   approvalStatus?: SocialPostApprovalStatus;
+};
+
+export type UpdateSocialPostInput = {
+  tags: unknown;
+  expectedUpdatedAt: unknown;
 };
 
 /* Legacy storage vocabulary stays private while the D1 schema is migrated in place. */
@@ -124,12 +134,14 @@ type UpdateSocialAccountVariantInput = UpdatePostVersionInput;
 type PackageRow = {
   id: string;
   site_id: string;
+  post_title_snapshot: string;
   source_type: SocialContentSourceType | LegacySocialPostSourceType;
   source_ref: string | null;
   source_snapshot: string;
   source_text: string;
   idea_text: string;
   goal: string | null;
+  tags_json: string;
   status: SocialContentPackage["status"];
   created_by: SocialContentPackage["createdBy"];
   created_at: string;
@@ -146,6 +158,7 @@ type VariantRow = {
   format: SocialContentVariantFormat;
   body_text: string;
   asset_manifest_json: string;
+  carousel_render_set_id: string | null;
   source_excerpt: string | null;
   approval_status: SocialContentApprovalStatus;
   approved_at: string | null;
@@ -221,18 +234,20 @@ async function createSocialContentPackage(
   }
   const now = new Date().toISOString();
   const sourceSnapshot = suppliedSnapshot;
+  const sourceTitle = optionalText(input.sourceTitle) || ideaText.slice(0, 120);
+  const tags = normalizeTags(input.tags || []);
   const statements: Statement[] = [
     env.DB.prepare(
       `INSERT INTO social_packages (
          id, site_id, post_slug, post_title_snapshot, source_hash, goal, status,
          created_by, source_type, source_ref, source_snapshot, source_text, idea_text,
-         created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?)`,
+         tags_json, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       id,
       siteId,
       `_social-${id}`,
-      ideaText.slice(0, 120),
+      sourceTitle,
       await sha256(sourceSnapshot),
       optionalText(input.goal),
       input.createdBy === "agent" ? "agent" : "user",
@@ -241,6 +256,7 @@ async function createSocialContentPackage(
       sourceSnapshot,
       sourceText,
       ideaText,
+      JSON.stringify(tags),
       now,
       now,
     ),
@@ -298,8 +314,9 @@ async function getSocialContentPackage(
 ): Promise<SocialContentPackageDetail | null> {
   const packageId = requiredText(packageIdInput, "packageId is required");
   const row = await env.DB.prepare(
-    `SELECT p.id, p.site_id, p.source_type, p.source_ref, p.source_snapshot, p.source_text,
-            p.idea_text, p.goal, p.status, p.created_by, p.created_at, p.updated_at
+    `SELECT p.id, p.site_id, p.post_title_snapshot, p.source_type, p.source_ref,
+            p.source_snapshot, p.source_text, p.idea_text, p.goal, p.tags_json,
+            p.status, p.created_by, p.created_at, p.updated_at
      FROM social_packages p
      JOIN sites s ON s.id = p.site_id
      WHERE p.id = ? AND s.user_id = ?`,
@@ -323,8 +340,9 @@ async function listSocialContentPackages(
 ): Promise<SocialContentPackageDetail[]> {
   const siteId = optionalText(siteIdInput);
   const rows = await env.DB.prepare(
-    `SELECT p.id, p.site_id, p.source_type, p.source_ref, p.source_snapshot, p.source_text,
-            p.idea_text, p.goal, p.status, p.created_by, p.created_at, p.updated_at
+    `SELECT p.id, p.site_id, p.post_title_snapshot, p.source_type, p.source_ref,
+            p.source_snapshot, p.source_text, p.idea_text, p.goal, p.tags_json,
+            p.status, p.created_by, p.created_at, p.updated_at
      FROM social_packages p
      JOIN sites s ON s.id = p.site_id
      WHERE s.user_id = ? AND (? IS NULL OR p.site_id = ?)
@@ -347,7 +365,8 @@ async function listPackageVariants(
 ): Promise<SocialAccountVariant[]> {
   const variants = await env.DB.prepare(
     `SELECT v.id, v.package_id, v.platform, v.target_account_id, v.format, v.body_text,
-            v.asset_manifest_json, v.source_excerpt, v.approval_status, v.approved_at,
+            v.asset_manifest_json, v.carousel_render_set_id, v.source_excerpt,
+            v.approval_status, v.approved_at,
             v.approved_by_user_id,
             (SELECT pub.scheduled_for FROM social_publications pub
              WHERE pub.variant_id = v.id AND pub.status = 'scheduled'
@@ -408,7 +427,8 @@ async function updateSocialAccountVariant(
   const existing = await env.DB.prepare(
     `SELECT v.id, v.package_id, p.site_id, p.source_type AS post_source_type,
             v.platform, v.target_account_id,
-            v.format, v.body_text, v.asset_manifest_json, v.source_excerpt,
+            v.format, v.body_text, v.asset_manifest_json, v.carousel_render_set_id,
+            v.source_excerpt,
             v.approval_status, v.approved_at, v.approved_by_user_id,
             v.scheduled_for, v.timezone, v.created_at, v.updated_at
      FROM social_variants v
@@ -459,7 +479,7 @@ async function updateSocialAccountVariant(
     );
   }
 
-  const now = new Date().toISOString();
+  const now = monotonicUpdatedAt(existing.updated_at);
   const newlyApproved = approvalStatus === "approved" &&
     (existing.approval_status !== "approved" || contentChanged);
   const approvedAt = approvalStatus === "approved"
@@ -472,7 +492,8 @@ async function updateSocialAccountVariant(
     env.DB.prepare(
       `UPDATE social_variants
        SET target_account_id = ?, format = ?, body_text = ?, asset_manifest_json = ?,
-           approval_status = ?, approved_at = ?, approved_by_user_id = ?,
+           carousel_render_set_id = ?, approval_status = ?, approved_at = ?,
+           approved_by_user_id = ?,
            scheduled_for = ?, timezone = ?, updated_at = ?
        WHERE id = ?`,
     ).bind(
@@ -480,6 +501,7 @@ async function updateSocialAccountVariant(
       format,
       bodyText,
       assetManifestJson,
+      contentChanged ? null : existing.carousel_render_set_id,
       approvalStatus,
       approvedAt,
       approvedByUserId,
@@ -490,44 +512,37 @@ async function updateSocialAccountVariant(
     ),
   ];
   if (contentChanged || approvalStatus !== "approved") {
-    const scheduled = await env.DB.prepare(
-      `SELECT id FROM social_publications
-       WHERE variant_id = ? AND status = 'scheduled'`,
-    )
-      .bind(variantId)
-      .all<{ id: string }>();
     const reason = contentChanged ? "version_changed" : "approval_revoked";
-    for (const publication of scheduled.results || []) {
-      // Keep this UPDATE and audit INSERT adjacent in the D1 batch. changes()
-      // records cancellation only when this edit wins the scheduled-state CAS.
-      statements.push(
-        env.DB.prepare(
-          `UPDATE social_publications
-           SET status = 'cancelled', error_code = ?, error_message = ?, updated_at = ?
-           WHERE id = ? AND status = 'scheduled'`,
-        ).bind(
-          `cancelled:${reason}`,
-          contentChanged
-            ? "Cancelled because the approved Version changed."
-            : "Cancelled because Version approval was removed.",
-          now,
-          publication.id,
-        ),
-        env.DB.prepare(
-          `INSERT INTO social_publication_events (
-             id, publication_id, variant_id, event_type, payload_json, created_at
-           )
-           SELECT ?, ?, ?, 'cancelled', ?, ?
-           WHERE changes() > 0`,
-        ).bind(
-          `social-event-${crypto.randomUUID()}`,
-          publication.id,
-          variantId,
-          JSON.stringify({ reason }),
-          now,
-        ),
-      );
-    }
+    // Audit every scheduled row first, then cancel that exact set in the same
+    // serialized D1 batch. A schedule committed before this batch is included;
+    // one attempted after the Version update observes draft approval and fails.
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO social_publication_events (
+           id, publication_id, variant_id, event_type, payload_json, created_at
+         )
+         SELECT 'social-event-' || lower(hex(randomblob(16))), publication.id,
+                publication.variant_id, 'cancelled', ?, ?
+         FROM social_publications publication
+         WHERE publication.variant_id = ? AND publication.status = 'scheduled'`,
+      ).bind(
+        JSON.stringify({ reason }),
+        now,
+        variantId,
+      ),
+      env.DB.prepare(
+        `UPDATE social_publications
+         SET status = 'cancelled', error_code = ?, error_message = ?, updated_at = ?
+         WHERE variant_id = ? AND status = 'scheduled'`,
+      ).bind(
+        `cancelled:${reason}`,
+        contentChanged
+          ? "Cancelled because the approved Version changed."
+          : "Cancelled because Version approval was removed.",
+        now,
+        variantId,
+      ),
+    );
   }
   if (
     approvalStatus === "approved" &&
@@ -550,7 +565,8 @@ async function updateSocialAccountVariant(
 
   const updated = await env.DB.prepare(
     `SELECT id, package_id, platform, target_account_id, format, body_text,
-            asset_manifest_json, source_excerpt, approval_status, approved_at,
+            asset_manifest_json, carousel_render_set_id, source_excerpt,
+            approval_status, approved_at,
             approved_by_user_id,
             (SELECT scheduled_for FROM social_publications
              WHERE variant_id = ? AND status = 'scheduled'
@@ -593,6 +609,51 @@ export async function listSocialPosts(
   siteId?: string | null,
 ): Promise<SocialPostDetail[]> {
   return (await listSocialContentPackages(env, ownerId, siteId)).map(canonicalDetail);
+}
+
+export async function updateSocialPost(
+  env: SocialPostEnv,
+  ownerId: string,
+  postIdInput: string,
+  input: UpdateSocialPostInput,
+): Promise<SocialPostDetail | null> {
+  const postId = requiredText(postIdInput, "Post id is required");
+  const existing = await getSocialContentPackage(env, ownerId, postId);
+  if (!existing) return null;
+  if (existing.package.sourceType === "legacy_content_bank_read_only") {
+    throw new SocialPostInputError(
+      "This imported Post is read-only. Create a source-backed Post to make changes.",
+      403,
+    );
+  }
+  const expectedUpdatedAt = requiredText(
+    input.expectedUpdatedAt,
+    "Refresh this Post before changing its tags",
+  );
+  if (existing.package.updatedAt !== expectedUpdatedAt) {
+    throw new SocialPostInputError(
+      "This Post changed after it was loaded. Refresh and try again.",
+      409,
+    );
+  }
+  const tags = normalizeTags(input.tags);
+  const now = monotonicUpdatedAt(existing.package.updatedAt);
+  const updated = await env.DB.prepare(
+    `UPDATE social_packages
+     SET tags_json = ?, updated_at = ?
+     WHERE id = ? AND updated_at = ?
+       AND EXISTS (SELECT 1 FROM sites WHERE sites.id = social_packages.site_id AND sites.user_id = ?)
+     RETURNING id`,
+  )
+    .bind(JSON.stringify(tags), now, postId, expectedUpdatedAt, ownerId)
+    .first<{ id: string }>();
+  if (!updated) {
+    throw new SocialPostInputError(
+      "This Post changed while its tags were being saved. Refresh and try again.",
+      409,
+    );
+  }
+  return getSocialPost(env, ownerId, postId);
 }
 
 export async function updatePostVersion(
@@ -639,12 +700,14 @@ function serializePackage(row: PackageRow): SocialContentPackage {
   return {
     id: row.id,
     siteId: row.site_id,
+    sourceTitle: row.post_title_snapshot,
     sourceType: row.source_type,
     sourceRef: row.source_ref,
     sourceSnapshot: row.source_snapshot,
     sourceText: row.source_text,
     ideaText: row.idea_text,
     goal: row.goal,
+    tags: normalizeStoredTags(row.tags_json),
     status: row.status,
     createdBy: row.created_by,
     createdAt: row.created_at,
@@ -661,6 +724,7 @@ function serializeVariant(row: VariantRow): SocialAccountVariant {
     format: row.format,
     bodyText: row.body_text,
     assetManifest: parseAssets(row.asset_manifest_json),
+    carouselRenderSetId: row.carousel_render_set_id || null,
     sourceExcerpt: row.source_excerpt,
     approvalStatus: row.approval_status,
     approvedAt: row.approved_at,
@@ -697,6 +761,29 @@ function parseAssets(value: string): SocialMediaAsset[] {
   } catch {
     return [];
   }
+}
+
+function normalizeTags(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new SocialPostInputError("Post tags must be a list");
+  if (value.length > 20) throw new SocialPostInputError("No more than 20 Post tags are supported");
+  const tags = value.map((tag) => requiredText(tag, "Post tags cannot be blank").toLowerCase());
+  if (tags.some((tag) => tag.length > 40)) {
+    throw new SocialPostInputError("Post tags must be 40 characters or fewer");
+  }
+  return [...new Set(tags)];
+}
+
+function normalizeStoredTags(value: string): string[] {
+  try {
+    return normalizeTags(JSON.parse(value));
+  } catch {
+    return [];
+  }
+}
+
+function monotonicUpdatedAt(previous: string): string {
+  const previousMs = Date.parse(previous);
+  return new Date(Math.max(Date.now(), Number.isFinite(previousMs) ? previousMs + 1 : 0)).toISOString();
 }
 
 function requiredText(value: unknown, message: string): string {

@@ -96,6 +96,16 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-07-18-social-suggestions-v2",
     apply: applySocialSuggestionsMigration,
   },
+  {
+    id: "0025_social_posting_plans",
+    checksum: "2026-07-18-social-posting-plans-v1",
+    apply: applySocialPostingPlansMigration,
+  },
+  {
+    id: "0026_social_carousels",
+    checksum: "2026-07-18-social-carousels-v1",
+    apply: applySocialCarouselsMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -990,6 +1000,186 @@ async function applySocialSuggestionsMigration(db: D1Database): Promise<void> {
      ON social_suggestions(site_id, source_type, source_ref, created_at ASC)`,
   ];
   for (const sql of statements) await db.prepare(sql).run();
+}
+
+async function applySocialPostingPlansMigration(db: D1Database): Promise<void> {
+  await addColumnIfMissing(db, "social_packages", "tags_json", "TEXT NOT NULL DEFAULT '[]'");
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS social_posting_preferences (
+      account_id TEXT PRIMARY KEY,
+      timezone TEXT NOT NULL,
+      preferred_times_json TEXT NOT NULL DEFAULT '[]',
+      minimum_gap_minutes INTEGER NOT NULL DEFAULT 120
+        CHECK (minimum_gap_minutes BETWEEN 0 AND 10080),
+      minimum_repost_days INTEGER
+        CHECK (minimum_repost_days IS NULL OR minimum_repost_days BETWEEN 0 AND 3650),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (account_id) REFERENCES social_accounts(id) ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS social_posting_plans (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      site_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'suggested'
+        CHECK (status IN ('suggested', 'confirming', 'needs_attention', 'confirmed', 'expired')),
+      request_json TEXT NOT NULL DEFAULT '{}',
+      warnings_json TEXT NOT NULL DEFAULT '[]',
+      confirmation_token TEXT,
+      confirmation_started_at TEXT,
+      expires_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK (
+        (status = 'confirming' AND confirmation_token IS NOT NULL AND confirmation_started_at IS NOT NULL)
+        OR (status <> 'confirming' AND confirmation_token IS NULL AND confirmation_started_at IS NULL)
+      ),
+      FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE,
+      FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE,
+      FOREIGN KEY (account_id) REFERENCES social_accounts(id) ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS social_posting_plan_items (
+      id TEXT PRIMARY KEY,
+      plan_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      variant_id TEXT NOT NULL,
+      version_updated_at_snapshot TEXT NOT NULL,
+      approval_status_snapshot TEXT NOT NULL CHECK (approval_status_snapshot = 'approved'),
+      version_fingerprint TEXT NOT NULL,
+      scheduled_for TEXT NOT NULL,
+      timezone TEXT NOT NULL,
+      is_repost INTEGER NOT NULL DEFAULT 0 CHECK (is_repost IN (0, 1)),
+      status TEXT NOT NULL DEFAULT 'suggested'
+        CHECK (status IN ('suggested', 'reserved', 'scheduled', 'blocked')),
+      publication_id TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (plan_id, position),
+      UNIQUE (plan_id, variant_id),
+      FOREIGN KEY (plan_id) REFERENCES social_posting_plans(id) ON DELETE CASCADE,
+      FOREIGN KEY (variant_id) REFERENCES social_variants(id) ON DELETE CASCADE,
+      FOREIGN KEY (publication_id) REFERENCES social_publications(id) ON DELETE SET NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS social_posting_reservations (
+      id TEXT PRIMARY KEY,
+      plan_item_id TEXT NOT NULL UNIQUE,
+      account_id TEXT NOT NULL,
+      scheduled_for TEXT NOT NULL,
+      range_start TEXT NOT NULL,
+      range_end TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'reserved'
+        CHECK (status IN ('reserved', 'fulfilled', 'released')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (plan_item_id) REFERENCES social_posting_plan_items(id) ON DELETE CASCADE,
+      FOREIGN KEY (account_id) REFERENCES social_accounts(id) ON DELETE CASCADE
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_social_posting_plans_owner_status
+     ON social_posting_plans(user_id, status, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_social_posting_plan_items_plan
+     ON social_posting_plan_items(plan_id, position ASC)`,
+    `CREATE INDEX IF NOT EXISTS idx_social_posting_reservations_account_time
+     ON social_posting_reservations(account_id, status, range_start, range_end)`,
+  ];
+  for (const sql of statements) await db.prepare(sql).run();
+}
+
+async function applySocialCarouselsMigration(db: D1Database): Promise<void> {
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS social_carousel_media (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      site_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      storage_key TEXT NOT NULL,
+      immutable_url TEXT NOT NULL,
+      mime_type TEXT NOT NULL CHECK (mime_type IN ('image/png', 'image/jpeg', 'image/webp')),
+      pixel_width INTEGER NOT NULL CHECK (pixel_width > 0),
+      pixel_height INTEGER NOT NULL CHECK (pixel_height > 0),
+      byte_length INTEGER NOT NULL CHECK (byte_length > 0),
+      bytes BLOB NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK (length(content_hash) = 71 AND substr(content_hash, 1, 7) = 'sha256:'),
+      UNIQUE(user_id, site_id, content_hash),
+      FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE,
+      FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_social_carousel_media_owner_site
+     ON social_carousel_media(user_id, site_id, created_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS social_carousel_render_sets (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      site_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      created_from_version_id TEXT,
+      input_fingerprint TEXT NOT NULL,
+      model_version TEXT NOT NULL,
+      renderer_version TEXT NOT NULL,
+      template_id TEXT NOT NULL,
+      template_version INTEGER NOT NULL,
+      canvas_width INTEGER NOT NULL,
+      canvas_height INTEGER NOT NULL,
+      model_json TEXT NOT NULL CHECK (json_valid(model_json)),
+      canonical_input TEXT NOT NULL CHECK (json_valid(canonical_input)),
+      asset_manifest_json TEXT NOT NULL CHECK (json_valid(asset_manifest_json)),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK (length(input_fingerprint) = 71 AND substr(input_fingerprint, 1, 7) = 'sha256:'),
+      UNIQUE(user_id, site_id, post_id, input_fingerprint),
+      FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE,
+      FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE,
+      FOREIGN KEY (post_id) REFERENCES social_packages(id) ON DELETE CASCADE
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_social_carousel_render_sets_post
+     ON social_carousel_render_sets(post_id, created_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS social_carousel_render_assets (
+      id TEXT PRIMARY KEY,
+      render_set_id TEXT NOT NULL,
+      slide_id TEXT NOT NULL,
+      position INTEGER NOT NULL CHECK (position >= 0),
+      content_hash TEXT NOT NULL,
+      storage_key TEXT NOT NULL,
+      immutable_url TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL CHECK (mime_type = 'image/svg+xml'),
+      pixel_width INTEGER NOT NULL CHECK (pixel_width > 0),
+      pixel_height INTEGER NOT NULL CHECK (pixel_height > 0),
+      byte_length INTEGER NOT NULL CHECK (byte_length > 0),
+      alt_text TEXT NOT NULL,
+      source_evidence_json TEXT NOT NULL CHECK (json_valid(source_evidence_json)),
+      media_ref_ids_json TEXT NOT NULL CHECK (json_valid(media_ref_ids_json)),
+      svg_text TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK (length(content_hash) = 71 AND substr(content_hash, 1, 7) = 'sha256:'),
+      UNIQUE(render_set_id, position),
+      UNIQUE(render_set_id, slide_id),
+      FOREIGN KEY (render_set_id) REFERENCES social_carousel_render_sets(id) ON DELETE CASCADE
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_social_carousel_render_assets_set
+     ON social_carousel_render_assets(render_set_id, position ASC)`,
+    `CREATE TABLE IF NOT EXISTS social_carousel_render_set_media (
+      render_set_id TEXT NOT NULL,
+      media_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      PRIMARY KEY (render_set_id, media_id),
+      FOREIGN KEY (render_set_id) REFERENCES social_carousel_render_sets(id) ON DELETE CASCADE,
+      FOREIGN KEY (media_id) REFERENCES social_carousel_media(id) ON DELETE RESTRICT
+    )`,
+  ];
+  for (const sql of statements) await db.prepare(sql).run();
+  await addColumnIfMissing(
+    db,
+    "social_variants",
+    "carousel_render_set_id",
+    "TEXT REFERENCES social_carousel_render_sets(id) ON DELETE SET NULL",
+  );
+  await db.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_social_variants_carousel_render_set
+     ON social_variants(carousel_render_set_id)
+     WHERE carousel_render_set_id IS NOT NULL`,
+  ).run();
 }
 
 async function rebuildSocialPublicationsForReusableMigration(

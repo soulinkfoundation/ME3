@@ -268,7 +268,13 @@ export type AgentChatActionCardLink = {
 };
 
 export type AgentChatActionCardRecord = {
-  kind: "mailbox_draft" | "reminder" | "mission_task" | "social_post" | "social_suggestion";
+  kind:
+    | "mailbox_draft"
+    | "reminder"
+    | "mission_task"
+    | "social_post"
+    | "social_suggestion"
+    | "social_posting_plan";
   id: string;
 };
 
@@ -283,7 +289,9 @@ export type AgentChatActionCard = {
     | "mission.task_updated"
     | "mission.task_archived"
     | "social.draft_saved"
-    | "social.suggestions_created";
+    | "social.suggestions_created"
+    | "social.posting_plan_proposed"
+    | "social.posting_plan_confirmed";
   capabilityId: string;
   title: string;
   summary: string | null;

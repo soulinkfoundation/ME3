@@ -53,6 +53,7 @@ function createRecoveryEnv(
   publication: Record<string, unknown>,
   events: Array<Record<string, unknown>>,
 ) {
+  let lastChanges = 0;
   return {
     DB: {
       prepare(sql: string) {
@@ -66,23 +67,10 @@ function createRecoveryEnv(
             if (sql.includes("FROM plugin_installations")) {
               return { enabled: 1, status: "installed" };
             }
-            if (
-              sql.includes("UPDATE social_publications") &&
-              sql.includes("platform_post_url") &&
-              sql.includes("RETURNING id")
-            ) {
-              if (
-                publication.status !== "publishing" ||
-                !String(publication.error_code || "").startsWith("outcome_unknown")
-              ) {
-                return null;
-              }
-              publication.status = "published";
-              publication.platform_post_url = values[0];
-              publication.published_at = new Date().toISOString();
-              publication.error_code = null;
-              publication.error_message = null;
-              return { id: publication.id };
+            if (sql.includes("FROM social_publication_events")) {
+              return events.some((event) => event.id === values[0])
+                ? { id: values[0] }
+                : null;
             }
             if (sql.includes("FROM social_variants v") && sql.includes("JOIN sites")) {
               return values[0] === "social-version-1" && values[1] === "owner"
@@ -106,18 +94,42 @@ function createRecoveryEnv(
             return { results: [] };
           },
           async run() {
-            if (sql.includes("INSERT INTO social_publication_events")) {
+            if (sql.includes("UPDATE social_publications") && sql.includes("platform_post_url")) {
+              if (
+                publication.status !== "publishing" ||
+                !String(publication.error_code || "").startsWith("outcome_unknown")
+              ) {
+                lastChanges = 0;
+                return { meta: { changes: 0 } };
+              }
+              publication.status = "published";
+              publication.platform_post_url = values[0];
+              publication.published_at = values[1];
+              publication.error_code = null;
+              publication.error_message = null;
+              lastChanges = 1;
+              return { meta: { changes: 1 } };
+            }
+            if (sql.includes("INSERT INTO social_publication_events") && lastChanges > 0) {
               events.push({
                 id: values[0],
                 publication_id: values[1],
                 variant_id: values[2],
-                event_type: values[3],
-                payload_json: values[4],
+                event_type: sql.includes("'published'") ? "published" : "failed",
+                payload_json: values[3],
               });
+              lastChanges = 1;
+              return { meta: { changes: 1 } };
             }
-            return {};
+            lastChanges = 0;
+            return { meta: { changes: 0 } };
           },
         };
+      },
+      async batch(statements: Array<{ run(): Promise<unknown> }>) {
+        const results = [];
+        for (const statement of statements) results.push(await statement.run());
+        return results;
       },
     },
   };

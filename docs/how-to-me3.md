@@ -234,6 +234,18 @@ pairings, and host-bound Cloudflare IDs. The local password hash and approved ow
 provider credentials remain portable. Restore creates a fresh JWT secret, leaves device credentials
 empty, and requires clients to pair again.
 
+Social account identity rows are retained so owner Posting plans, Preferred posting times, and
+Publication history keep stable references. Their access and refresh credentials, expiry, scopes,
+provider metadata, and verification state are irreversibly sanitized; every restored account is
+marked revoked until OAuth reconnects it. An interrupted Posting plan confirmation is restored as
+needs attention with no confirmation token, suggested rather than reserved items, and released
+reservations. Any Publication already created before the interruption remains owner data.
+
+Source-backed Carousel models, exact Source evidence, uploaded raster media, deterministic SVG
+assets, content hashes, and Version attachments are portable owner data. Restores keep these
+immutable render sets intact; they do not require an image-generation provider or hosted object
+storage to reproduce and preview the saved output.
+
 Installation-owned bookings, commerce orders, and Accounts ledger entries remain owner data and
 are portable. ME3 Managed subscription entitlements and control-plane billing records are
 hosted-only, do not belong in Core D1, and are never included.
@@ -374,6 +386,18 @@ when an active account and the Social Publishing queue are ready. X, Instagram, 
 Business currently support drafting and review only; ME3 rejects attempts to schedule or publish
 those Versions until their provider workflows work end to end.
 
+The X adapter can prepare text and up to four validated PNG, JPEG, or WebP images, including
+optional alt text, through the current X v2 media and Post APIs. Owners must provide their own X
+developer app, fund its pay-per-use API access, and acknowledge that cost before connecting. This
+local adapter support does not change X's draft-only capability until live OAuth, delivery,
+scheduling, token refresh, and unknown-outcome recovery are proven.
+
+`SOCIAL_PUBLISH_QUEUE` targets `me3-social-publish`. Its Worker consumer uses batch size 10, a
+five-second batch timeout, two retries after the initial delivery, and
+`me3-social-publish-dlq`. The zero-retry dead-letter consumer records a guarded terminal failure
+without calling a provider again or overwriting completed or owner-recovered state. Keep the
+producer and both consumers aligned in root and install-local Wrangler configuration.
+
 The canonical owner API includes `GET|POST /api/social/suggestions`,
 `PATCH|DELETE /api/social/suggestions/:id`, and
 `POST /api/social/suggestions/:id/post` for grounded review and choosing. Posts use
@@ -385,6 +409,13 @@ publish convenience route `POST /api/social/versions/:id/publish`. Cancel a futu
 with `POST /api/social/publications/:id/resolve`. Calendar's approved-Version chooser reads
 `GET /api/social/scheduling/approved-versions`. Account connection and runtime readiness remain
 under `/api/social/accounts` and `/api/social/status`.
+
+Post library and Posting plan APIs use `GET /api/social/library`,
+`GET|PUT /api/social/accounts/:id/preferred-posting-times`,
+`POST /api/social/posting-plans`, `GET /api/social/posting-plans/:id`, and
+`POST /api/social/posting-plans/:id/confirm`. Confirmation requires the exact reviewed plan
+revision and an explicit owner action. Carousel media, deterministic rendering, immutable render
+sets, and assets live under `/api/social/carousels/*` and remain owner-authenticated.
 
 When Social Publishing is ready, `/api/calendar/feed` includes a bounded, read-only projection of
 planned, publishing, published, failed, and attention-required Publications. Calendar presents a

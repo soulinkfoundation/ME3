@@ -110,6 +110,7 @@ import { registerMissionControlRoutes } from "./routes/mission-control";
 import { registerSchedulingRoutes } from "./routes/scheduling";
 import { registerSocialContentRoutes } from "./routes/social-content";
 import { registerSocialAccountRoutes } from "./routes/social-accounts";
+import { registerSocialCarouselRoutes } from "./routes/social-carousels";
 import { registerPublicSiteRoutes, registerSiteRoutes } from "./routes/sites";
 import { registerUsernameRoutes } from "./routes/usernames";
 import {
@@ -919,6 +920,7 @@ registerMobileRoutes(app, { requireOwner, unauthorized, getCoreApiOrigin, getCor
 registerPushNotificationRoutes(app, { requireOwner, unauthorized });
 registerSocialContentRoutes(app, { requireOwner, unauthorized });
 registerSocialAccountRoutes(app, { requireOwner, unauthorized });
+registerSocialCarouselRoutes(app, { requireOwner, unauthorized });
 app.get("/api/social/status", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);

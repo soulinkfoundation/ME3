@@ -4,12 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  SOCIAL_PUBLISH_DLQ_NAME,
+  SOCIAL_PUBLISH_QUEUE_NAME,
   SocialPublishingInputError,
   cancelPublication,
   createPostVersionPublication,
+  disconnectSocialPublishingAccount,
   dispatchDueSocialPublications,
   listApprovedPostVersionsForScheduling,
   listPostVersionPublications,
+  processSocialPublishBatch,
+  publishQueuedPublication,
   reschedulePublication,
   resolvePublicationOutcome,
   updatePostVersion,
@@ -25,6 +30,7 @@ describe("reusable social Publications", () => {
 
   afterEach(() => {
     fixture.close();
+    vi.unstubAllGlobals();
   });
 
   it("creates multiple schedules for one approved Version and rejects an exact duplicate", async () => {
@@ -93,16 +99,13 @@ describe("reusable social Publications", () => {
   });
 
   it("lets an interleaved Version edit win before guarded schedule creation", async () => {
-    fixture.db.beforeNextFirstMatching = {
-      pattern: /INSERT INTO social_publications/,
-      run: async () => {
-        await updatePostVersion(
-          fixture.env as never,
-          "owner",
-          "version-1",
-          { bodyText: "Edited while Calendar was scheduling" },
-        );
-      },
+    fixture.db.beforeNextBatch = async () => {
+      await updatePostVersion(
+        fixture.env as never,
+        "owner",
+        "version-1",
+        { bodyText: "Edited while Calendar was scheduling" },
+      );
     };
 
     await expect(
@@ -139,6 +142,52 @@ describe("reusable social Publications", () => {
         "SELECT COUNT(*) AS count FROM social_publication_events",
       ),
     ).toEqual({ count: 0 });
+  });
+
+  it("rolls back and safely retries scheduled Publication creation with its audit", async () => {
+    const scheduledFor = "2099-08-01T09:00:00.000Z";
+    fixture.db.failNextBatchAfterFirst = true;
+
+    await expect(
+      createPostVersionPublication(
+        fixture.env as never,
+        "owner",
+        "version-1",
+        { scheduledFor, timezone: "Europe/Dublin" },
+      ),
+    ).rejects.toThrow();
+
+    expect(
+      fixture.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM social_publications",
+      ),
+    ).toEqual({ count: 0 });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE event_type = 'scheduled'`,
+      ),
+    ).toEqual({ count: 0 });
+
+    await expect(
+      createPostVersionPublication(
+        fixture.env as never,
+        "owner",
+        "version-1",
+        { scheduledFor, timezone: "Europe/Dublin" },
+      ),
+    ).resolves.toMatchObject({ status: "scheduled", scheduledFor });
+    expect(
+      fixture.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM social_publications",
+      ),
+    ).toEqual({ count: 1 });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE event_type = 'scheduled'`,
+      ),
+    ).toEqual({ count: 1 });
   });
 
   it("describes the blocked action as scheduling for imported read-only Posts", async () => {
@@ -467,6 +516,278 @@ describe("reusable social Publications", () => {
     expect(fixture.queueMessages).toEqual([{ publicationId: stranded?.id }]);
   });
 
+  it("delays two retryable provider attempts before terminal exhaustion", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    const fetcher = linkedInFetcher(503);
+    vi.stubGlobal("fetch", fetcher);
+
+    const firstAttempt = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [firstAttempt] },
+      fixture.env as never,
+    );
+    expect(firstAttempt.ack).not.toHaveBeenCalled();
+    expect(firstAttempt.retry).toHaveBeenCalledOnce();
+    expect(firstAttempt.retry).toHaveBeenCalledWith({ delaySeconds: 60 });
+
+    const secondAttempt = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [secondAttempt] },
+      fixture.env as never,
+    );
+    expect(secondAttempt.ack).not.toHaveBeenCalled();
+    expect(secondAttempt.retry).toHaveBeenCalledOnce();
+    expect(secondAttempt.retry).toHaveBeenCalledWith({ delaySeconds: 300 });
+
+    const finalAttempt = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [finalAttempt] },
+      fixture.env as never,
+    );
+    expect(finalAttempt.ack).toHaveBeenCalledOnce();
+    expect(finalAttempt.retry).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(6);
+
+    expect(fixture.db.first<{ status: string; error_code: string; error_message: string }>(
+      `SELECT status, error_code, error_message
+       FROM social_publications WHERE id = ?`,
+      publication.id,
+    )).toEqual({
+      status: "failed",
+      error_code: "retryable:linkedin_post_error",
+      error_message: "Provider temporarily unavailable",
+    });
+    const retriedEvents = await fixture.db.prepare(
+      `SELECT payload_json FROM social_publication_events
+       WHERE publication_id = ? AND event_type = 'retried'
+       ORDER BY rowid ASC`,
+    ).bind(publication.id).all<{ payload_json: string }>();
+    expect(retriedEvents.results.map((event) => JSON.parse(event.payload_json))).toEqual([
+      { attempt: 1, nextAttempt: 2, delaySeconds: 60 },
+      { attempt: 2, nextAttempt: 3, delaySeconds: 300 },
+    ]);
+    expect(fixture.db.first<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM social_publication_events
+       WHERE publication_id = ? AND event_type = 'publishing'`,
+      publication.id,
+    )).toEqual({ count: 3 });
+  });
+
+  it("requeues a post-claim exception before the provider write and publishes once on redelivery", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    const fetcher = linkedInFetcher(201);
+    vi.stubGlobal("fetch", fetcher);
+    fixture.db.beforeNextFirstMatching = {
+      pattern: /INSERT INTO social_publication_events[\s\S]*'publishing'/,
+      run: async () => {
+        throw new Error("unexpected post-claim preflight failure");
+      },
+    };
+
+    const interrupted = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [interrupted] },
+      fixture.env as never,
+    );
+
+    expect(interrupted.ack).not.toHaveBeenCalled();
+    expect(interrupted.retry).toHaveBeenCalledWith({ delaySeconds: 60 });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(fixture.db.first<{ status: string; error_code: string }>(
+      "SELECT status, error_code FROM social_publications WHERE id = ?",
+      publication.id,
+    )).toEqual({
+      status: "queued",
+      error_code: "retryable:unexpected_pre_provider_failure",
+    });
+    expect(JSON.parse(fixture.db.first<{ payload_json: string }>(
+      `SELECT payload_json FROM social_publication_events
+       WHERE publication_id = ? AND event_type = 'retried'
+       ORDER BY rowid DESC LIMIT 1`,
+      publication.id,
+    )?.payload_json || "{}")).toMatchObject({
+      attempt: 1,
+      nextAttempt: 2,
+      delaySeconds: 60,
+      phase: "before_provider_write",
+    });
+
+    const redelivery = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [redelivery] },
+      fixture.env as never,
+    );
+
+    expect(redelivery.ack).toHaveBeenCalledOnce();
+    expect(redelivery.retry).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fixture.db.first<{ status: string; platform_post_id: string }>(
+      "SELECT status, platform_post_id FROM social_publications WHERE id = ?",
+      publication.id,
+    )).toEqual({
+      status: "published",
+      platform_post_id: "urn:li:share:stale-provider-result",
+    });
+  });
+
+  it("keeps an unmarked publishing claim leased when exception recovery fails, then safely reclaims it", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    const fetcher = linkedInFetcher(201);
+    vi.stubGlobal("fetch", fetcher);
+    fixture.db.beforeNextFirstMatching = {
+      pattern: /INSERT INTO social_publication_events[\s\S]*'publishing'/,
+      run: async () => {
+        throw new Error("unexpected post-claim preflight failure");
+      },
+    };
+    fixture.db.failNextBatchAfterFirst = true;
+
+    const interrupted = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [interrupted] },
+      fixture.env as never,
+    );
+
+    expect(interrupted.ack).not.toHaveBeenCalled();
+    expect(interrupted.retry).toHaveBeenCalledWith({ delaySeconds: 660 });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(fixture.db.first<{ status: string; error_code: string | null }>(
+      "SELECT status, error_code FROM social_publications WHERE id = ?",
+      publication.id,
+    )).toEqual({ status: "publishing", error_code: null });
+
+    const concurrentRedelivery = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [concurrentRedelivery] },
+      fixture.env as never,
+    );
+    expect(concurrentRedelivery.ack).not.toHaveBeenCalled();
+    expect(concurrentRedelivery.retry).toHaveBeenCalledWith({ delaySeconds: 660 });
+    expect(fetcher).not.toHaveBeenCalled();
+
+    fixture.db.run(
+      "UPDATE social_publications SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?",
+      publication.id,
+    );
+    const leaseExpired = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [leaseExpired] },
+      fixture.env as never,
+    );
+    expect(leaseExpired.ack).not.toHaveBeenCalled();
+    expect(leaseExpired.retry).toHaveBeenCalledWith({ delaySeconds: 60 });
+    expect(fixture.db.first<{ status: string; error_code: string }>(
+      "SELECT status, error_code FROM social_publications WHERE id = ?",
+      publication.id,
+    )).toEqual({
+      status: "queued",
+      error_code: "retryable:unexpected_pre_provider_failure",
+    });
+
+    const finalDelivery = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [finalDelivery] },
+      fixture.env as never,
+    );
+    expect(finalDelivery.ack).toHaveBeenCalledOnce();
+    expect(finalDelivery.retry).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fixture.db.first<{ status: string }>(
+      "SELECT status FROM social_publications WHERE id = ?",
+      publication.id,
+    )).toEqual({ status: "published" });
+  });
+
+  it("freezes an exception after the provider write and never blind-retries on redelivery", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    const fetcher = linkedInFetcher(201);
+    vi.stubGlobal("fetch", fetcher);
+    fixture.db.failNextBatchAfterFirst = true;
+
+    const interrupted = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [interrupted] },
+      fixture.env as never,
+    );
+
+    expect(interrupted.ack).toHaveBeenCalledOnce();
+    expect(interrupted.retry).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fixture.db.first<{
+      status: string;
+      error_code: string;
+      platform_post_id: string | null;
+    }>(
+      "SELECT status, error_code, platform_post_id FROM social_publications WHERE id = ?",
+      publication.id,
+    )).toEqual({
+      status: "publishing",
+      error_code: "outcome_unknown:provider_write_started",
+      platform_post_id: null,
+    });
+    expect(fixture.db.first<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM social_publication_events
+       WHERE publication_id = ? AND event_type = 'published'`,
+      publication.id,
+    )).toEqual({ count: 0 });
+
+    const redelivery = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [redelivery] },
+      fixture.env as never,
+    );
+
+    expect(redelivery.ack).toHaveBeenCalledOnce();
+    expect(redelivery.retry).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fixture.db.first<{ status: string; error_code: string }>(
+      "SELECT status, error_code FROM social_publications WHERE id = ?",
+      publication.id,
+    )).toEqual({
+      status: "publishing",
+      error_code: "outcome_unknown:provider_write_started",
+    });
+  });
+
+  it("terminally records a queued Publication delivered through the social DLQ", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const message = socialQueueMessage(publication.id);
+
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_DLQ_NAME, messages: [message] },
+      fixture.env as never,
+    );
+
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(fixture.db.first<{ status: string; error_code: string; error_message: string }>(
+      `SELECT status, error_code, error_message
+       FROM social_publications WHERE id = ?`,
+      publication.id,
+    )).toEqual({
+      status: "failed",
+      error_code: "retryable:queue_dead_lettered",
+      error_message: "Social publishing stopped after the queue exhausted its delivery attempts.",
+    });
+    const event = fixture.db.first<{ payload_json: string }>(
+      `SELECT payload_json FROM social_publication_events
+       WHERE publication_id = ? AND event_type = 'failed'
+       ORDER BY rowid DESC LIMIT 1`,
+      publication.id,
+    );
+    expect(JSON.parse(event?.payload_json || "{}")).toEqual({
+      code: "retryable:queue_dead_lettered",
+      message: "Social publishing stopped after the queue exhausted its delivery attempts.",
+    });
+  });
+
   it.each(["queued", "publishing"] as const)(
     "cancels scheduled work after a Version edit without mutating a %s snapshot",
     async (inFlightStatus) => {
@@ -645,6 +966,441 @@ describe("reusable social Publications", () => {
         publication.id,
       ),
     ).toEqual({ count: 1 });
+  });
+
+  it.each([
+    {
+      outcome: "published" as const,
+      input: {
+        outcome: "published" as const,
+        platformPostUrl: "https://linkedin.example/posts/atomic-recovery",
+      },
+      expectedStatus: "published",
+      expectedErrorCode: null,
+      eventType: "published",
+    },
+    {
+      outcome: "not_published" as const,
+      input: { outcome: "not_published" as const },
+      expectedStatus: "failed",
+      expectedErrorCode: "retryable:owner_confirmed_not_published",
+      eventType: "failed",
+    },
+  ])("rolls back and safely retries an atomic owner $outcome recovery", async ({
+    input,
+    expectedStatus,
+    expectedErrorCode,
+    eventType,
+  }) => {
+    const publication = await createPublication(fixture, "version-1");
+    fixture.db.run(
+      `UPDATE social_publications
+       SET status = 'publishing', error_code = 'outcome_unknown:delivery_interrupted',
+           error_message = 'Provider outcome is unknown.', updated_at = datetime('now')
+       WHERE id = ?`,
+      publication.id,
+    );
+    fixture.db.failNextBatchAfterFirst = true;
+
+    await expect(
+      resolvePublicationOutcome(
+        fixture.env as never,
+        "owner",
+        publication.id,
+        input,
+      ),
+    ).rejects.toThrow();
+
+    expect(
+      fixture.db.first<{
+        status: string;
+        error_code: string | null;
+        platform_post_url: string | null;
+      }>(
+        `SELECT status, error_code, platform_post_url
+         FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({
+      status: "publishing",
+      error_code: "outcome_unknown:delivery_interrupted",
+      platform_post_url: null,
+    });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = ?`,
+        publication.id,
+        eventType,
+      ),
+    ).toEqual({ count: 0 });
+
+    await expect(
+      resolvePublicationOutcome(
+        fixture.env as never,
+        "owner",
+        publication.id,
+        input,
+      ),
+    ).resolves.toMatchObject({
+      status: expectedStatus,
+      errorCode: expectedErrorCode,
+    });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = ?`,
+        publication.id,
+        eventType,
+      ),
+    ).toEqual({ count: 1 });
+  });
+
+  it("rolls back and safely retries an atomic worker failure", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    fixture.db.failNextBatchAfterFirst = true;
+
+    await expect(
+      publishQueuedPublication(fixture.env as never, publication.id),
+    ).rejects.toThrow();
+
+    expect(
+      fixture.db.first<{ status: string; error_code: string | null }>(
+        `SELECT status, error_code FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({ status: "queued", error_code: null });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'failed'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 0 });
+
+    await expect(
+      publishQueuedPublication(fixture.env as never, publication.id),
+    ).resolves.toBeUndefined();
+    expect(
+      fixture.db.first<{ status: string; error_code: string | null }>(
+        `SELECT status, error_code FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({
+      status: "failed",
+      error_code: "reconnect_required:no_account",
+    });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'failed'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 1 });
+  });
+
+  it("does not let a stale publishing watchdog overwrite owner recovery", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    fixture.db.run(
+      `UPDATE social_publications
+       SET status = 'publishing', error_code = 'outcome_unknown:delivery_interrupted',
+           error_message = 'Provider outcome is unknown.', updated_at = '2000-01-01T00:00:00.000Z'
+       WHERE id = ?`,
+      publication.id,
+    );
+    fixture.db.beforeNextBatch = async () => {
+      await resolvePublicationOutcome(
+        fixture.env as never,
+        "owner",
+        publication.id,
+        {
+          outcome: "published",
+          platformPostUrl: "https://linkedin.example/posts/watchdog-recovery",
+        },
+      );
+    };
+
+    await expect(
+      publishQueuedPublication(fixture.env as never, publication.id),
+    ).resolves.toBeUndefined();
+
+    expect(
+      fixture.db.first<{
+        status: string;
+        error_code: string | null;
+        platform_post_url: string | null;
+      }>(
+        `SELECT status, error_code, platform_post_url
+         FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({
+      status: "published",
+      error_code: null,
+      platform_post_url: "https://linkedin.example/posts/watchdog-recovery",
+    });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'failed'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 0 });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'published'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 1 });
+  });
+
+  it("does not let a stale disconnect overwrite owner recovery", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    fixture.db.run(
+      `UPDATE social_publications
+       SET status = 'publishing', error_code = 'outcome_unknown:delivery_interrupted',
+           error_message = 'Provider outcome is unknown.', updated_at = datetime('now')
+       WHERE id = ?`,
+      publication.id,
+    );
+    fixture.db.beforeNextBatch = async () => {
+      await resolvePublicationOutcome(
+        fixture.env as never,
+        "owner",
+        publication.id,
+        { outcome: "not_published" },
+      );
+    };
+
+    await expect(
+      disconnectSocialPublishingAccount(fixture.env as never, "owner", "account-1"),
+    ).resolves.toBe(true);
+
+    expect(
+      fixture.db.first<{ status: string; error_code: string | null }>(
+        `SELECT status, error_code FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({
+      status: "failed",
+      error_code: "retryable:owner_confirmed_not_published",
+    });
+    const failedEvents = fixture.db.first<{ count: number; owner_resolutions: number }>(
+      `SELECT COUNT(*) AS count,
+              SUM(CASE WHEN payload_json LIKE '%owner_confirmed%' THEN 1 ELSE 0 END)
+                AS owner_resolutions
+       FROM social_publication_events
+       WHERE publication_id = ? AND event_type = 'failed'`,
+      publication.id,
+    );
+    expect(failedEvents).toEqual({ count: 1, owner_resolutions: 1 });
+  });
+
+  it("aborts before the provider when disconnect and owner recovery win the publishing preflight", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    const fetcher = linkedInFetcher(201);
+    fixture.db.beforeNextFirstMatching = {
+      pattern: /INSERT INTO social_publication_events[\s\S]*'publishing'/,
+      run: async () => {
+        await disconnectSocialPublishingAccount(
+          fixture.env as never,
+          "owner",
+          "account-1",
+        );
+        await resolvePublicationOutcome(
+          fixture.env as never,
+          "owner",
+          publication.id,
+          { outcome: "not_published" },
+        );
+      },
+    };
+
+    await expect(
+      publishQueuedPublication(
+        fixture.env as never,
+        publication.id,
+        fetcher as unknown as typeof fetch,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(
+      fixture.db.first<{ status: string; error_code: string | null }>(
+        `SELECT status, error_code FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({
+      status: "failed",
+      error_code: "retryable:owner_confirmed_not_published",
+    });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'publishing'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 0 });
+  });
+
+  it("does not let stale provider success overwrite disconnect and owner recovery", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    const fetcher = linkedInFetcher(201);
+    fixture.db.beforeNextBatch = async () => {
+      await disconnectSocialPublishingAccount(
+        fixture.env as never,
+        "owner",
+        "account-1",
+      );
+      await resolvePublicationOutcome(
+        fixture.env as never,
+        "owner",
+        publication.id,
+        { outcome: "not_published" },
+      );
+    };
+
+    await expect(
+      publishQueuedPublication(
+        fixture.env as never,
+        publication.id,
+        fetcher as unknown as typeof fetch,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetcher).toHaveBeenCalled();
+    expect(
+      fixture.db.first<{
+        status: string;
+        error_code: string | null;
+        platform_post_id: string | null;
+        platform_post_url: string | null;
+      }>(
+        `SELECT status, error_code, platform_post_id, platform_post_url
+         FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({
+      status: "failed",
+      error_code: "retryable:owner_confirmed_not_published",
+      platform_post_id: null,
+      platform_post_url: null,
+    });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'published'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 0 });
+  });
+
+  it("does not let a stale provider retry overwrite disconnect and owner recovery", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    const fetcher = linkedInFetcher(503);
+    fixture.db.beforeNextBatch = async () => {
+      await disconnectSocialPublishingAccount(
+        fixture.env as never,
+        "owner",
+        "account-1",
+      );
+      await resolvePublicationOutcome(
+        fixture.env as never,
+        "owner",
+        publication.id,
+        {
+          outcome: "published",
+          platformPostUrl: "https://linkedin.example/posts/retry-recovery",
+        },
+      );
+    };
+
+    await expect(
+      publishQueuedPublication(
+        fixture.env as never,
+        publication.id,
+        fetcher as unknown as typeof fetch,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetcher).toHaveBeenCalled();
+    expect(
+      fixture.db.first<{
+        status: string;
+        error_code: string | null;
+        platform_post_url: string | null;
+      }>(
+        `SELECT status, error_code, platform_post_url
+         FROM social_publications WHERE id = ?`,
+        publication.id,
+      ),
+    ).toEqual({
+      status: "published",
+      error_code: null,
+      platform_post_url: "https://linkedin.example/posts/retry-recovery",
+    });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'retried'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 0 });
+  });
+
+  it("does not let a stale rejected provider result revoke the recovered Version", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    const fetcher = linkedInFetcher(400);
+    fixture.db.beforeNextBatch = async () => {
+      await disconnectSocialPublishingAccount(
+        fixture.env as never,
+        "owner",
+        "account-1",
+      );
+      await resolvePublicationOutcome(
+        fixture.env as never,
+        "owner",
+        publication.id,
+        { outcome: "not_published" },
+      );
+    };
+
+    await expect(
+      publishQueuedPublication(
+        fixture.env as never,
+        publication.id,
+        fetcher as unknown as typeof fetch,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetcher).toHaveBeenCalled();
+    expect(
+      fixture.db.first<{ status: string; error_code: string | null }>(
+        "SELECT status, error_code FROM social_publications WHERE id = ?",
+        publication.id,
+      ),
+    ).toEqual({
+      status: "failed",
+      error_code: "retryable:owner_confirmed_not_published",
+    });
+    expect(
+      fixture.db.first<{ approval_status: string }>(
+        "SELECT approval_status FROM social_variants WHERE id = 'version-1'",
+      ),
+    ).toEqual({ approval_status: "approved" });
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'failed'
+           AND payload_json LIKE '%linkedin_post_error%'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 0 });
   });
 
   it("does not record owner cancellation when due dispatch wins the state race", async () => {
@@ -856,6 +1612,83 @@ async function createPublication(
   return publication;
 }
 
+const TEST_TOKEN_ENCRYPTION_KEY = "social-publications-test-token-key";
+
+async function enableProviderDelivery(
+  fixture: ReturnType<typeof createFixture>,
+  publicationId: string,
+): Promise<void> {
+  fixture.db.run(
+    `UPDATE social_accounts
+     SET status = 'active', access_token_ciphertext = ?
+     WHERE id = 'account-1'`,
+    await encryptTestSecret("linkedin-access-token", TEST_TOKEN_ENCRYPTION_KEY),
+  );
+  fixture.db.run(
+    `UPDATE social_publications
+     SET asset_manifest_json_snapshot = '[]'
+     WHERE id = ?`,
+    publicationId,
+  );
+}
+
+function linkedInFetcher(postStatus: 201 | 400 | 503) {
+  return vi.fn(async (input: unknown) => {
+    const url = String(input);
+    if (url.endsWith("/userinfo")) {
+      return new Response(JSON.stringify({ sub: "urn:li:person:owner" }), { status: 200 });
+    }
+    if (url.endsWith("/rest/posts")) {
+      return new Response(
+        JSON.stringify(
+          postStatus === 201
+            ? { id: "urn:li:share:stale-provider-result" }
+            : { message: "Provider temporarily unavailable" },
+        ),
+        { status: postStatus },
+      );
+    }
+    throw new Error(`Unexpected LinkedIn request: ${url}`);
+  });
+}
+
+function socialQueueMessage(publicationId: string) {
+  return {
+    body: { publicationId },
+    ack: vi.fn(),
+    retry: vi.fn(),
+  };
+}
+
+async function encryptTestSecret(secret: string, installKey: string): Promise<string> {
+  const iv = new Uint8Array(12);
+  crypto.getRandomValues(iv);
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(installKey),
+  );
+  const key = await crypto.subtle.importKey(
+    "raw",
+    digest,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt"],
+  );
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(secret),
+  );
+  return `v1.${encodeBase64Url(iv)}.${encodeBase64Url(ciphertext)}`;
+}
+
+function encodeBase64Url(value: ArrayBuffer | Uint8Array): string {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 function createFixture() {
   const db = new TestD1Database();
   db.exec(schemaSql);
@@ -888,7 +1721,11 @@ function createFixture() {
   });
   return {
     db,
-    env: { DB: db, SOCIAL_PUBLISH_QUEUE: { send } },
+    env: {
+      DB: db,
+      SOCIAL_PUBLISH_QUEUE: { send },
+      TOKEN_ENCRYPTION_KEY: TEST_TOKEN_ENCRYPTION_KEY,
+    },
     send,
     queueMessages,
     close: () => db.close(),
@@ -1158,6 +1995,7 @@ const schemaSql = `
     title TEXT,
     body_text TEXT NOT NULL,
     asset_manifest_json TEXT NOT NULL DEFAULT '[]',
+    carousel_render_set_id TEXT,
     source_excerpt TEXT,
     approval_status TEXT NOT NULL,
     approved_at TEXT,
@@ -1209,6 +2047,27 @@ const schemaSql = `
     event_type TEXT NOT NULL,
     payload_json TEXT,
     created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE social_posting_plans (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL
+  );
+
+  CREATE TABLE social_posting_plan_items (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL,
+    variant_id TEXT NOT NULL
+  );
+
+  CREATE TABLE social_posting_reservations (
+    id TEXT PRIMARY KEY,
+    plan_item_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    scheduled_for TEXT NOT NULL,
+    range_start TEXT NOT NULL,
+    range_end TEXT NOT NULL,
+    status TEXT NOT NULL
   );
 
   CREATE UNIQUE INDEX idx_social_publications_same_time_scheduled

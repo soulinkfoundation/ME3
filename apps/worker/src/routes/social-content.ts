@@ -1,14 +1,19 @@
 import {
   SocialPostInputError,
+  SocialPostingPlanInputError,
   SocialPublishingGateError,
   SocialPublishingInputError,
   cancelPublication,
   chooseSocialSuggestion,
+  confirmPostingPlan,
   createPostVersionPublication,
   createSocialPost,
   createSocialSuggestions,
+  createPostingPlan,
   discardSocialSuggestion,
   getSocialPost,
+  getPostingPlan,
+  getPreferredPostingTimes,
   getSocialPublishingRuntimeStatus,
   listApprovedPostVersionsForScheduling,
   listPostVersionPublications,
@@ -16,17 +21,25 @@ import {
   listSocialSuggestions,
   resolvePublicationOutcome,
   reschedulePublication,
+  searchPostLibrary,
   updatePostVersion,
+  updateSocialPost,
   updateSocialSuggestion,
+  updatePreferredPostingTimes,
   type ChooseSocialSuggestionInput,
   type CreatePublicationInput,
   type CreateSocialPostInput,
+  type CreatePostingPlanInput,
   type CreateSocialSuggestionsInput,
   type DiscardSocialSuggestionInput,
   type ReschedulePublicationInput,
+  type ConfirmPostingPlanInput,
+  type PostLibrarySearchInput,
   type SocialSuggestionStatus,
   type UpdatePostVersionInput,
+  type UpdateSocialPostInput,
   type UpdateSocialSuggestionInput,
+  type UpdatePreferredPostingTimesInput,
 } from "../social-publishing";
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
 
@@ -40,6 +53,31 @@ export function registerSocialContentRoutes(app: AppHono, deps: OwnerRouteDeps) 
       return c.json({
         posts: await listSocialPosts(c.env, ownerId, c.req.query("siteId")),
       });
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
+  app.get("/api/social/library", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      await requireSocialPublishing(c);
+      const input: PostLibrarySearchInput = {
+        siteId: c.req.query("siteId"),
+        query: c.req.query("query"),
+        source: c.req.query("source"),
+        platform: c.req.query("platform"),
+        accountId: c.req.query("accountId"),
+        approvalStatus: c.req.query("approvalStatus"),
+        deliveryState: c.req.query("deliveryState"),
+        tag: c.req.query("tag"),
+        publishedFrom: c.req.query("publishedFrom"),
+        publishedTo: c.req.query("publishedTo"),
+        limit: c.req.query("limit"),
+      };
+      return c.json({ items: await searchPostLibrary(c.env, ownerId, input) });
     } catch (error) {
       return socialContentErrorResponse(c, error);
     }
@@ -169,6 +207,112 @@ export function registerSocialContentRoutes(app: AppHono, deps: OwnerRouteDeps) 
       const post = await getSocialPost(c.env, ownerId, c.req.param("id"));
       if (!post) return c.json({ ok: false, error: "Social Post not found" }, 404);
       return c.json({ post });
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
+  app.patch("/api/social/posts/:id", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
+
+    try {
+      await requireSocialPublishing(c);
+      const post = await updateSocialPost(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        (body && typeof body === "object" ? body : {}) as UpdateSocialPostInput,
+      );
+      if (!post) return c.json({ ok: false, error: "Social Post not found" }, 404);
+      return c.json({ ok: true, post });
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
+  app.get("/api/social/accounts/:id/preferred-posting-times", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      await requireSocialPublishing(c);
+      return c.json({
+        preference: await getPreferredPostingTimes(c.env, ownerId, c.req.param("id")),
+      });
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
+  app.put("/api/social/accounts/:id/preferred-posting-times", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
+
+    try {
+      await requireSocialPublishing(c);
+      const preference = await updatePreferredPostingTimes(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        (body && typeof body === "object" ? body : {}) as UpdatePreferredPostingTimesInput,
+      );
+      return c.json({ ok: true, preference });
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/social/posting-plans", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
+
+    try {
+      await requireSocialPublishing(c);
+      const plan = await createPostingPlan(
+        c.env,
+        ownerId,
+        (body && typeof body === "object" ? body : {}) as CreatePostingPlanInput,
+      );
+      return c.json({ ok: true, plan }, 201);
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
+  app.get("/api/social/posting-plans/:id", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      await requireSocialPublishing(c);
+      const plan = await getPostingPlan(c.env, ownerId, c.req.param("id"));
+      if (!plan) return c.json({ ok: false, error: "Posting plan not found" }, 404);
+      return c.json({ plan });
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/social/posting-plans/:id/confirm", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
+
+    try {
+      await requireSocialPublishing(c);
+      const plan = await confirmPostingPlan(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        (body && typeof body === "object" ? body : {}) as ConfirmPostingPlanInput,
+        { requestedByType: "owner" },
+      );
+      if (!plan) return c.json({ ok: false, error: "Posting plan not found" }, 404);
+      return c.json({ ok: true, plan });
     } catch (error) {
       return socialContentErrorResponse(c, error);
     }
@@ -353,7 +497,11 @@ function socialContentErrorResponse(c: AppContext, error: unknown) {
   if (error instanceof SocialPublishingGateError) {
     return c.json({ ok: false, error: error.message, plugin: error.gate }, error.status as any);
   }
-  if (error instanceof SocialPostInputError || error instanceof SocialPublishingInputError) {
+  if (
+    error instanceof SocialPostInputError ||
+    error instanceof SocialPublishingInputError ||
+    error instanceof SocialPostingPlanInputError
+  ) {
     return c.json({ ok: false, error: error.message }, error.status as any);
   }
   throw error;

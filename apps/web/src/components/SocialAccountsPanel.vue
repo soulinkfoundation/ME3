@@ -31,6 +31,7 @@ const busyPlatform = ref<SupportedPlatform | null>(null);
 const savingProvider = ref(false);
 const connectModalPlatform = ref<SupportedPlatform | null>(null);
 const localError = ref<string | null>(null);
+const xFundingAcknowledged = ref(false);
 const providerDraft = ref({
   clientId: "",
   clientSecret: "",
@@ -80,19 +81,19 @@ const oauthError = computed(() => {
 
 const oauthMessage = computed(() => {
   if (oauthConnected.value === "x") {
-    return "X connected. It will now appear as a publish target.";
+    return "X connected. It will now appear as a draft target.";
   }
   if (oauthConnected.value === "linkedin") {
     return "LinkedIn connected. It will now appear as a publish target.";
   }
   if (oauthConnected.value === "instagram") {
-    return "Instagram connected. It will now appear as a publish target.";
+    return "Instagram connected. It will now appear as a draft target.";
   }
   if (oauthConnected.value === "instagram_business") {
-    return "Instagram (Business) connected. It will now appear as a publish target.";
+    return "Instagram (Business) connected. It will now appear as a draft target.";
   }
   if (oauthConnected.value === "youtube") {
-    return "YouTube connected. It will now appear as a publish target.";
+    return "YouTube connected. It will now appear as a draft target.";
   }
   return null;
 });
@@ -226,12 +227,14 @@ function openConnectModal(platform: SupportedPlatform) {
     clientId: setting?.clientId || "",
     clientSecret: "",
   };
+  xFundingAcknowledged.value = false;
 }
 
 function closeConnectModal() {
   if (busyPlatform.value || savingProvider.value) return;
   connectModalPlatform.value = null;
   providerDraft.value = { clientId: "", clientSecret: "" };
+  xFundingAcknowledged.value = false;
 }
 
 async function continueWithManagedApp() {
@@ -246,6 +249,11 @@ async function continueWithOwnApp() {
   const current = modalProviderSetting.value;
   const clientId = providerDraft.value.clientId.trim();
   const clientSecret = providerDraft.value.clientSecret.trim();
+
+  if (platform === "x" && !xFundingAcknowledged.value) {
+    localError.value = "Acknowledge that X API usage is funded through your developer account.";
+    return;
+  }
 
   if (!clientId) {
     localError.value = "Client ID is required.";
@@ -344,7 +352,7 @@ watch(
         <UiIcon name="X" :size="18" aria-hidden="true" />
       </button>
     </div>
-    <p v-if="localError" class="banner banner-error">{{ localError }}</p>
+    <p v-if="localError" class="banner banner-error" role="alert">{{ localError }}</p>
 
     <div class="social-connect-row" role="group" aria-label="Social accounts">
       <div v-for="item in platforms" :key="item.id" class="social-connect-card">
@@ -469,6 +477,37 @@ watch(
         </div>
 
         <p class="social-connect-modal__summary">{{ modalSummary }}</p>
+        <aside
+          v-if="connectModalPlatform === 'x'"
+          class="x-funding-notice"
+          aria-labelledby="x-funding-title"
+        >
+          <strong id="x-funding-title">Your X developer account pays for API usage</strong>
+          <p>
+            X API access is pay-per-use. You fund and manage the credits used by
+            ME3 through your own X developer account.
+          </p>
+          <div class="x-funding-notice__links">
+            <a
+              href="https://docs.x.com/x-api/getting-started/pricing"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Review X API pricing
+            </a>
+            <a
+              href="https://console.x.com"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open X Developer Console
+            </a>
+          </div>
+          <label class="x-funding-notice__acknowledgement">
+            <input v-model="xFundingAcknowledged" type="checkbox" />
+            <span>I understand that X API usage is charged to my X developer account.</span>
+          </label>
+        </aside>
         <p v-if="modalAccount && modalAccount.status !== 'active'" class="social-connect-modal__status" role="status">
           This account needs to be reconnected before publishing.
         </p>
@@ -524,7 +563,11 @@ watch(
           <button
             type="button"
             class="social-own-app__button"
-            :disabled="busyPlatform !== null || savingProvider"
+            :disabled="
+              busyPlatform !== null ||
+              savingProvider ||
+              (connectModalPlatform === 'x' && !xFundingAcknowledged)
+            "
             @click="continueWithOwnApp"
           >
             {{
@@ -843,6 +886,65 @@ watch(
   margin: 12px 20px 18px;
   color: var(--color-text-muted);
   line-height: 1.45;
+}
+
+.x-funding-notice {
+  margin: 0 20px 18px;
+  padding: 14px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 8px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text, var(--color-text));
+}
+
+.x-funding-notice p {
+  margin: 6px 0 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.x-funding-notice__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 18px;
+  margin-top: 8px;
+}
+
+.x-funding-notice__links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--ui-accent-strong, var(--color-accent));
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.x-funding-notice__links a:focus-visible,
+.x-funding-notice__acknowledgement input:focus-visible {
+  outline: 2px solid var(--ui-accent, var(--color-accent));
+  outline-offset: 2px;
+}
+
+.x-funding-notice__acknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 10px 0 0;
+  color: var(--ui-text, var(--color-text));
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.x-funding-notice__acknowledgement input {
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  flex: 0 0 auto;
+  accent-color: var(--ui-accent, var(--color-accent));
 }
 
 .social-connect-option,

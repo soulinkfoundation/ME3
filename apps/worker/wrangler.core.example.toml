@@ -34,6 +34,10 @@ queue = "me3-assistant-job-events"
 binding = "BOOKING_REMINDER_QUEUE"
 queue = "me3-booking-reminders"
 
+[[queues.producers]]
+binding = "SOCIAL_PUBLISH_QUEUE"
+queue = "me3-social-publish"
+
 [[queues.consumers]]
 queue = "me3-assistant-job-events"
 max_batch_size = 10
@@ -49,6 +53,13 @@ max_retries = 3
 dead_letter_queue = "me3-booking-reminders-dlq"
 
 [[queues.consumers]]
+queue = "me3-social-publish"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 2
+dead_letter_queue = "me3-social-publish-dlq"
+
+[[queues.consumers]]
 queue = "me3-assistant-job-events-dlq"
 max_batch_size = 10
 max_batch_timeout = 5
@@ -56,6 +67,12 @@ max_retries = 0
 
 [[queues.consumers]]
 queue = "me3-booking-reminders-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 0
+
+[[queues.consumers]]
+queue = "me3-social-publish-dlq"
 max_batch_size = 10
 max_batch_timeout = 5
 max_retries = 0

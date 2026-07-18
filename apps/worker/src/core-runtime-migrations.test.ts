@@ -24,6 +24,14 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("owner_content_search")).toBe(true);
     expect(db.tables.has("managed_email_inbound_deliveries")).toBe(true);
     expect(db.tables.has("social_suggestions")).toBe(true);
+    expect(db.tables.has("social_posting_preferences")).toBe(true);
+    expect(db.tables.has("social_posting_plans")).toBe(true);
+    expect(db.tables.has("social_posting_plan_items")).toBe(true);
+    expect(db.tables.has("social_posting_reservations")).toBe(true);
+    expect(db.tables.has("social_carousel_media")).toBe(true);
+    expect(db.tables.has("social_carousel_render_sets")).toBe(true);
+    expect(db.tables.has("social_carousel_render_assets")).toBe(true);
+    expect(db.tables.has("social_carousel_render_set_media")).toBe(true);
     expect(
       db.statements.some(
         (sql) =>
@@ -37,9 +45,11 @@ describe("Core runtime migrations", () => {
     expect(db.columns.get("social_packages")?.has("source_snapshot")).toBe(true);
     expect(db.columns.get("social_packages")?.has("source_text")).toBe(true);
     expect(db.columns.get("social_packages")?.has("idea_text")).toBe(true);
+    expect(db.columns.get("social_packages")?.has("tags_json")).toBe(true);
     expect(db.columns.get("social_variants")?.has("target_account_id")).toBe(true);
     expect(db.columns.get("social_variants")?.has("approved_at")).toBe(true);
     expect(db.columns.get("social_variants")?.has("approved_by_user_id")).toBe(true);
+    expect(db.columns.get("social_variants")?.has("carousel_render_set_id")).toBe(true);
     expect(db.migrations.get("0002_mission_task_pins")).toBe(
       "2026-06-24-mission-task-pins-v1",
     );
@@ -78,6 +88,12 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0024_social_suggestions")).toBe(
       "2026-07-18-social-suggestions-v2",
+    );
+    expect(db.migrations.get("0025_social_posting_plans")).toBe(
+      "2026-07-18-social-posting-plans-v1",
+    );
+    expect(db.migrations.get("0026_social_carousels")).toBe(
+      "2026-07-18-social-carousels-v1",
     );
     expect(
       db.statements.some(
@@ -314,6 +330,8 @@ class RuntimeMigrationStatement {
 
   async run() {
     this.db.statements.push(this.sql);
+    const createdTable = this.sql.match(/CREATE TABLE IF NOT EXISTS (\w+)/)?.[1];
+    if (createdTable) this.db.tables.add(createdTable);
     if (this.sql.includes("CREATE TABLE IF NOT EXISTS core_runtime_migrations")) {
       this.db.tables.add("core_runtime_migrations");
       return { success: true };

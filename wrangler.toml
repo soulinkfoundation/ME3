@@ -30,6 +30,23 @@ database_name = "me3-core-db"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "apps/worker/migrations"
 
+[[queues.producers]]
+binding = "SOCIAL_PUBLISH_QUEUE"
+queue = "me3-social-publish"
+
+[[queues.consumers]]
+queue = "me3-social-publish"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 2
+dead_letter_queue = "me3-social-publish-dlq"
+
+[[queues.consumers]]
+queue = "me3-social-publish-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 0
+
 [triggers]
 crons = ["*/15 * * * *"]
 

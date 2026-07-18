@@ -28,6 +28,9 @@ vi.mock("./social-publishing", () => ({
       this.status = status;
     }
   },
+  SocialPostingPlanInputError: class SocialPostingPlanInputError extends Error {
+    readonly status = 400;
+  },
   SocialPublishingGateError: class SocialPublishingGateError extends Error {
     readonly gate = { ready: false };
     readonly status = 403;

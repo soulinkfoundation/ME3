@@ -626,6 +626,161 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.social.library.search",
+    owner: "plugin",
+    pluginId: "me3.social-publishing",
+    ownerFacingLabel: "Search social Post library",
+    summary: "Search the owner's Social Post library and return reviewable Versions with stable IDs.",
+    category: "content",
+    handler: {
+      surface: "chat",
+      route: "core.social.library.search",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["social-publishing"],
+    inputSchema: {
+      type: "object",
+      properties: {
+        siteId: { type: "string", description: "Optional owner site ID." },
+        query: {
+          type: "string",
+          description: "Optional Source title or reference, topic text, Post text, or tag search.",
+        },
+        source: { type: "string", description: "Optional Source title or reference search." },
+        platform: {
+          type: "string",
+          description: "Optional social platform.",
+          enum: ["linkedin", "x", "instagram", "instagram_business"],
+        },
+        accountId: { type: "string", description: "Optional stable social account ID." },
+        approvalStatus: {
+          type: "string",
+          description: "Optional Version approval state.",
+          enum: ["draft", "approved", "rejected"],
+        },
+        deliveryState: {
+          type: "string",
+          description: "Optional latest Publication state.",
+          enum: ["scheduled", "queued", "publishing", "published", "failed", "cancelled"],
+        },
+        tag: { type: "string", description: "Optional exact owner tag." },
+        publishedFrom: {
+          type: "string",
+          description: "Optional inclusive earliest Publication timestamp.",
+          format: "date-time",
+        },
+        publishedTo: {
+          type: "string",
+          description: "Optional exclusive latest Publication timestamp.",
+          format: "date-time",
+        },
+        limit: { type: "integer", description: "Maximum results, from 1 to 100." },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "social_post_library_searched",
+    examples: {
+      positive: [
+        "Find my approved LinkedIn Posts about launch planning.",
+        "Show Posts tagged founder that I published last month.",
+      ],
+      negative: ["Write a new social Post from today's Journal."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.social.posting_plan.create",
+    owner: "plugin",
+    pluginId: "me3.social-publishing",
+    ownerFacingLabel: "Propose social Posting plan",
+    summary: "Propose reviewable posting times for approved Versions without creating Publications.",
+    category: "content",
+    handler: {
+      surface: "chat",
+      route: "core.social.posting_plan.create",
+    },
+    sideEffect: "write_internal_draft",
+    approvalMode: "none",
+    requiresSetup: ["social-publishing"],
+    inputSchema: {
+      type: "object",
+      required: ["accountId", "windowStart", "windowEnd", "count"],
+      properties: {
+        accountId: { type: "string", description: "Stable connected social account ID." },
+        versionIds: {
+          type: "string",
+          description: "Optional comma-separated exact approved Version IDs selected from library search.",
+        },
+        windowStart: {
+          type: "string",
+          description: "Inclusive start of the requested planning window.",
+          format: "date-time",
+        },
+        windowEnd: {
+          type: "string",
+          description: "Exclusive end of the requested planning window.",
+          format: "date-time",
+        },
+        count: { type: "integer", description: "Number of Posts to propose, from 1 to 20." },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "social_posting_plan_proposed",
+    examples: {
+      positive: ["Propose times for three approved LinkedIn Posts next week."],
+      negative: ["Schedule those Posts now."],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.social.posting_plan.confirm",
+    owner: "plugin",
+    pluginId: "me3.social-publishing",
+    ownerFacingLabel: "Confirm social Posting plan",
+    summary: "Create the reviewed Publications in one Posting plan after explicit owner confirmation.",
+    category: "content",
+    handler: {
+      surface: "chat",
+      route: "core.social.posting_plan.confirm",
+    },
+    sideEffect: "write_internal_active",
+    approvalMode: "approval_required",
+    requiresSetup: ["social-publishing"],
+    inputSchema: {
+      type: "object",
+      required: ["planId", "expectedUpdatedAt", "confirmed"],
+      properties: {
+        planId: { type: "string", description: "Stable Posting plan ID from the proposal." },
+        expectedUpdatedAt: {
+          type: "string",
+          description: "Exact last-reviewed Posting plan update timestamp.",
+          format: "date-time",
+        },
+        confirmed: {
+          type: "boolean",
+          description: "True only after the owner explicitly confirms the reviewed Posting plan.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "social_posting_plan_confirmed",
+    examples: {
+      positive: ["Yes, confirm that Posting plan exactly as shown."],
+      negative: ["Show me what you would schedule next week."],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.social.draft.create",
     owner: "plugin",
     pluginId: "me3.social-publishing",

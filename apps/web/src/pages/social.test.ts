@@ -5,7 +5,30 @@ import { api, ApiError } from "../api";
 import { useSitesStore } from "../stores/sites";
 import SocialPage from "./social.vue";
 
+const routerHarness = vi.hoisted(() => ({
+  setQuery: (_query: Record<string, string>) => {},
+  replace: vi.fn(),
+}));
+
+vi.mock("vue-router", async () => {
+  const { reactive } = await vi.importActual<typeof import("vue")>("vue");
+  const route = reactive({ path: "/social", query: {} as Record<string, string> });
+  const replace = vi.fn(async (location: { path?: string; query?: Record<string, string> }) => {
+    if (location.path) route.path = location.path;
+    route.query = { ...(location.query || {}) };
+  });
+  routerHarness.setQuery = (query) => {
+    route.query = { ...query };
+  };
+  routerHarness.replace = replace;
+  return {
+    useRoute: () => route,
+    useRouter: () => ({ replace }),
+  };
+});
+
 vi.mock("../api", () => ({
+  API_BASE: "/api",
   api: {
     get: vi.fn(),
     post: vi.fn(),
@@ -32,9 +55,11 @@ const sourcePost = {
     siteId: "site-1",
     sourceType: "mission_task",
     sourceRef: "mission_task:task-1",
+    sourceTitle: "A source-backed task",
     sourceSnapshot: "{\"id\":\"task-1\"}",
     sourceText: "A source-backed idea worth sharing.",
     ideaText: "An agent-prepared social Post",
+    tags: ["launch"],
     goal: null,
     status: "ready",
     createdBy: "agent",
@@ -124,6 +149,42 @@ const publication = {
   requestContext: { surface: "social_workspace" },
   createdAt: "2026-07-18T08:00:00.000Z",
   updatedAt: "2026-07-18T08:00:00.000Z",
+};
+
+const postingPlan = {
+  id: "plan-1",
+  siteId: "site-1",
+  accountId: "account-linkedin",
+  accountLabel: "Kieran",
+  platform: "linkedin",
+  status: "suggested",
+  timezone: "Europe/Dublin",
+  windowStart: "2026-07-20T00:00:00.000Z",
+  windowEnd: "2026-07-27T00:00:00.000Z",
+  requestedCount: 1,
+  minimumGapMinutes: 120,
+  minimumRepostDays: 30,
+  warnings: [{ code: "stale_post", message: "Review this older Post." }],
+  items: [{
+    id: "plan-item-1",
+    position: 0,
+    versionId: "version-1",
+    postId: "post-1",
+    sourceTitle: "A source-backed task",
+    postText: "Agent copy",
+    platform: "linkedin",
+    accountId: "account-linkedin",
+    scheduledFor: "2026-07-20T08:00:00.000Z",
+    timezone: "Europe/Dublin",
+    isRepost: false,
+    status: "suggested",
+    publicationId: null,
+    errorMessage: null,
+  }],
+  expiresAt: "2026-07-19T09:00:00.000Z",
+  confirmedAt: null,
+  createdAt: "2026-07-18T09:00:00.000Z",
+  updatedAt: "2026-07-18T09:00:00.000Z",
 };
 
 const suggestions = [
@@ -228,6 +289,7 @@ function mockGet(endpoint: string) {
 }
 
 function mountPage() {
+  routerHarness.setQuery(Object.fromEntries(new URLSearchParams(window.location.search)));
   return mount(SocialPage, {
     attachTo: document.body,
     global: {
@@ -275,6 +337,39 @@ describe("SocialPage", () => {
     expect(api.get).not.toHaveBeenCalledWith(expect.stringContaining("/content/"));
   });
 
+  it("opens the deterministic Carousel editor for a source-backed Carousel Version", async () => {
+    const carouselPost = {
+      ...sourcePost,
+      versions: [{
+        ...sourcePost.versions[0],
+        format: "carousel",
+        carouselRenderSetId: null,
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [carouselPost] });
+      }
+      if (endpoint === "/social/carousels/media?siteId=site-1&limit=100") {
+        return Promise.resolve({ media: [] });
+      }
+      return mockGet(endpoint);
+    });
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Build Carousel");
+    await wrapper.findAll("button").find((button) => button.text() === "Build Carousel")!
+      .trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Carousel editor");
+    expect(wrapper.findAll(".slide-editor")).toHaveLength(5);
+    expect(api.get).toHaveBeenCalledWith(
+      "/social/carousels/media?siteId=site-1&limit=100",
+    );
+  });
+
   it("groups separate Posts that share one Source", async () => {
     const secondPost = {
       ...sourcePost,
@@ -301,6 +396,410 @@ describe("SocialPage", () => {
     expect(wrapper.findAll(".post-source-group")).toHaveLength(1);
     expect(wrapper.findAll(".post-source-group .post-row")).toHaveLength(2);
     expect(wrapper.get(".post-source-group h2").text()).toContain("Mission Control");
+  });
+
+  it("searches and exposes only exact matching Versions within a multi-Version Post", async () => {
+    const multiVersionPost = {
+      ...sourcePost,
+      versions: [
+        sourcePost.versions[0],
+        {
+          ...sourcePost.versions[0],
+          id: "version-x",
+          platform: "x",
+          targetAccountId: null,
+          bodyText: "Exact X match",
+        },
+      ],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [multiVersionPost] });
+      }
+      if (endpoint.startsWith("/social/library?")) {
+        return Promise.resolve({ items: [{ postId: "post-1", versionId: "version-x" }] });
+      }
+      if (endpoint === "/social/versions/version-x/publications") {
+        return Promise.resolve({ publications: [] });
+      }
+      return mockGet(endpoint);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    await wrapper.get(".library-search input[type='search']").setValue("exact match");
+    await wrapper.get("form.library-search").trigger("submit");
+    await flushPromises();
+
+    expect(api.get).toHaveBeenCalledWith(expect.stringContaining("/social/library?"));
+    expect(wrapper.findAll(".post-row .platform-chip").map((chip) => chip.text())).toEqual(["X"]);
+    expect(wrapper.findAll(".version-tab").map((tab) => tab.text())).toEqual([
+      expect.stringContaining("X"),
+    ]);
+    expect((wrapper.get(".version-editor textarea").element as HTMLTextAreaElement).value)
+      .toBe("Exact X match");
+  });
+
+  it("shows all exact library matches across Draft, Scheduled, and Published states", async () => {
+    const scheduledPost = {
+      ...sourcePost,
+      post: {
+        ...sourcePost.post,
+        id: "post-scheduled",
+        ideaText: "Scheduled library match",
+        updatedAt: "2026-07-18T08:00:00Z",
+      },
+      versions: [{
+        ...sourcePost.versions[0],
+        id: "version-scheduled",
+        postId: "post-scheduled",
+        scheduledFor: "2026-07-22T09:00:00.000Z",
+        timezone: "Europe/Dublin",
+        publicationStatus: "scheduled",
+      }],
+    };
+    const publishedPost = {
+      ...sourcePost,
+      post: {
+        ...sourcePost.post,
+        id: "post-published",
+        ideaText: "Published library match",
+        updatedAt: "2026-07-18T09:00:00Z",
+      },
+      versions: [{
+        ...sourcePost.versions[0],
+        id: "version-published",
+        postId: "post-published",
+        publicationStatus: "published",
+        publishedAt: "2026-07-17T09:00:00.000Z",
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [sourcePost, scheduledPost, publishedPost] });
+      }
+      if (endpoint.startsWith("/social/library?")) {
+        return Promise.resolve({
+          items: [
+            { postId: "post-1", versionId: "version-1" },
+            { postId: "post-scheduled", versionId: "version-scheduled" },
+            { postId: "post-published", versionId: "version-published" },
+          ],
+        });
+      }
+      if (/^\/social\/versions\/[^/]+\/publications$/.test(endpoint)) {
+        return Promise.resolve({ publications: [] });
+      }
+      return mockGet(endpoint);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    await wrapper.get("form.library-search").trigger("submit");
+    await flushPromises();
+
+    expect(wrapper.findAll(".post-row")).toHaveLength(3);
+    expect(wrapper.get(".library-result-count").text()).toContain(
+      "3 matching Versions · 1 Draft · 1 Scheduled · 1 Published",
+    );
+    expect(wrapper.findAll(".post-row .row-status").map((status) => status.text()).sort())
+      .toEqual(["Draft", "Published", "Scheduled"]);
+  });
+
+  it("writes comma-separated tags through the canonical Post API", async () => {
+    const updated = {
+      ...sourcePost,
+      post: {
+        ...sourcePost.post,
+        tags: ["launch", "founder"],
+        updatedAt: "2026-07-18T08:00:00.000Z",
+      },
+    };
+    vi.mocked(api.patch).mockResolvedValue({ post: updated });
+    const wrapper = mountPage();
+    await flushPromises();
+
+    await wrapper.get(".post-tags input").setValue("Launch, Founder, launch");
+    const save = wrapper.findAll(".post-tags button").find((button) => button.text() === "Save tags");
+    await save!.trigger("click");
+    await flushPromises();
+
+    expect(api.patch).toHaveBeenCalledWith("/social/posts/post-1", {
+      tags: ["launch", "founder"],
+      expectedUpdatedAt: sourcePost.post.updatedAt,
+    });
+    expect((wrapper.get(".post-tags input").element as HTMLInputElement).value)
+      .toBe("launch, founder");
+  });
+
+  it("keeps an agent-linked Posting plan visible while its account preference loads", async () => {
+    window.history.replaceState({}, "", "/social?postingPlan=plan-1");
+    vi.mocked(api.get).mockImplementation((endpoint) => {
+      if (endpoint === "/social/posting-plans/plan-1") return Promise.resolve({ plan: postingPlan });
+      if (endpoint === "/social/accounts/account-linkedin/preferred-posting-times") {
+        return Promise.resolve({
+          preference: {
+            accountId: "account-linkedin",
+            timezone: "Europe/Dublin",
+            times: [{ day: "monday", localTime: "09:00" }],
+            minimumGapMinutes: 120,
+            minimumRepostDays: 30,
+          },
+        });
+      }
+      return mockGet(endpoint);
+    });
+    vi.mocked(api.post).mockResolvedValue({
+      plan: {
+        ...postingPlan,
+        status: "confirmed",
+        confirmedAt: "2026-07-18T09:05:00.000Z",
+        updatedAt: "2026-07-18T09:05:00.000Z",
+        items: [{
+          ...postingPlan.items[0],
+          status: "scheduled",
+          publicationId: "publication-plan-1",
+        }],
+      },
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.get(".plan-review").text()).toContain("A source-backed task");
+    expect(wrapper.get(".plan-review").text()).toContain("Review this older Post.");
+    expect(wrapper.get(".plan-review").attributes("aria-live")).toBe("polite");
+    expect(wrapper.text()).toContain("Confirm and schedule this exact plan");
+    expect(api.post).not.toHaveBeenCalledWith(
+      "/social/posting-plans/plan-1/confirm",
+      expect.anything(),
+    );
+
+    const confirm = wrapper.findAll("button").find((button) =>
+      button.text().includes("Confirm and schedule this exact plan")
+    );
+    await confirm!.trigger("click");
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith("/social/posting-plans/plan-1/confirm", {
+      confirmed: true,
+      expectedUpdatedAt: postingPlan.updatedAt,
+    });
+    expect(wrapper.get(".plan-review").text()).toContain(
+      "All plan items are linked to scheduled Publications.",
+    );
+  });
+
+  it("converts the planning window in the configured account timezone", async () => {
+    vi.mocked(api.get).mockImplementation((endpoint) => {
+      if (endpoint === "/social/accounts/account-linkedin/preferred-posting-times") {
+        return Promise.resolve({
+          preference: {
+            accountId: "account-linkedin",
+            siteId: "site-1",
+            platform: "linkedin",
+            accountLabel: "Kieran",
+            timezone: "America/New_York",
+            times: [{ day: "tuesday", localTime: "09:00" }],
+            minimumGapMinutes: 120,
+            minimumRepostDays: null,
+            createdAt: "2026-07-18T08:00:00.000Z",
+            updatedAt: "2026-07-18T08:00:00.000Z",
+          },
+        });
+      }
+      return mockGet(endpoint);
+    });
+    vi.mocked(api.post).mockImplementation((endpoint) =>
+      endpoint === "/social/posting-plans"
+        ? Promise.resolve({ plan: postingPlan })
+        : Promise.reject(new Error(`Unexpected POST ${endpoint}`))
+    );
+
+    const wrapper = mountPage();
+    await flushPromises();
+    await wrapper.findAll("button").find((button) => button.text().trim() === "Posting plan")!.trigger("click");
+    await flushPromises();
+
+    const planningInputs = wrapper.findAll(".posting-plan-card input[type='datetime-local']");
+    await planningInputs[0]!.setValue("2026-07-21T09:00");
+    await planningInputs[1]!.setValue("2026-07-22T09:00");
+    await wrapper.findAll(".posting-plan-card button").find((button) =>
+      button.text() === "Propose times"
+    )!.trigger("click");
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith("/social/posting-plans", {
+      accountId: "account-linkedin",
+      windowStart: "2026-07-21T13:00:00.000Z",
+      windowEnd: "2026-07-22T13:00:00.000Z",
+      count: 3,
+    });
+  });
+
+  it("does not guess which instant an ambiguous planning-window time means", async () => {
+    vi.mocked(api.get).mockImplementation((endpoint) => {
+      if (endpoint === "/social/accounts/account-linkedin/preferred-posting-times") {
+        return Promise.resolve({
+          preference: {
+            accountId: "account-linkedin",
+            siteId: "site-1",
+            platform: "linkedin",
+            accountLabel: "Kieran",
+            timezone: "America/New_York",
+            times: [{ day: "sunday", localTime: "09:00" }],
+            minimumGapMinutes: 120,
+            minimumRepostDays: null,
+            createdAt: "2026-07-18T08:00:00.000Z",
+            updatedAt: "2026-07-18T08:00:00.000Z",
+          },
+        });
+      }
+      return mockGet(endpoint);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    await wrapper.findAll("button").find((button) =>
+      button.text().trim() === "Posting plan"
+    )!.trigger("click");
+    await flushPromises();
+
+    const planningInputs = wrapper.findAll(".posting-plan-card input[type='datetime-local']");
+    await planningInputs[0]!.setValue("2026-11-01T01:30");
+    await planningInputs[1]!.setValue("2026-11-01T03:00");
+    await wrapper.findAll(".posting-plan-card button").find((button) =>
+      button.text() === "Propose times"
+    )!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get(".posting-plan-card [role='alert']").text()).toContain(
+      "Choose unambiguous planning-window times",
+    );
+    expect(api.post).not.toHaveBeenCalledWith("/social/posting-plans", expect.anything());
+  });
+
+  it("closes a deep-linked plan into a fresh-plan lifecycle", async () => {
+    window.history.replaceState({}, "", "/social?postingPlan=plan-1");
+    vi.mocked(api.get).mockImplementation((endpoint) => {
+      if (endpoint === "/social/posting-plans/plan-1") return Promise.resolve({ plan: postingPlan });
+      if (endpoint === "/social/accounts/account-linkedin/preferred-posting-times") {
+        return Promise.resolve({
+          preference: {
+            accountId: "account-linkedin",
+            timezone: "Europe/Dublin",
+            times: [{ day: "monday", localTime: "09:00" }],
+            minimumGapMinutes: 120,
+            minimumRepostDays: 30,
+          },
+        });
+      }
+      return mockGet(endpoint);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.find(".plan-review").exists()).toBe(true);
+
+    await wrapper.get("button[aria-label='Close Posting plan']").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".posting-plan-card").exists()).toBe(false);
+    expect(routerHarness.replace).toHaveBeenCalledWith({ path: "/social", query: {} });
+
+    await wrapper.findAll("button").find((button) => button.text().trim() === "Posting plan")!.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".posting-plan-card").exists()).toBe(true);
+    expect(wrapper.find(".plan-review").exists()).toBe(false);
+    expect(vi.mocked(api.get).mock.calls.filter(([endpoint]) =>
+      endpoint === "/social/posting-plans/plan-1"
+    )).toHaveLength(1);
+  });
+
+  it("reacts when the Posting plan query changes while the page remains mounted", async () => {
+    vi.mocked(api.get).mockImplementation((endpoint) => {
+      if (endpoint === "/social/posting-plans/plan-1") return Promise.resolve({ plan: postingPlan });
+      if (endpoint === "/social/accounts/account-linkedin/preferred-posting-times") {
+        return Promise.resolve({ preference: null });
+      }
+      return mockGet(endpoint);
+    });
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.find(".posting-plan-card").exists()).toBe(false);
+
+    routerHarness.setQuery({ postingPlan: "plan-1" });
+    await flushPromises();
+
+    expect(api.get).toHaveBeenCalledWith("/social/posting-plans/plan-1");
+    expect(wrapper.get(".plan-review").text()).toContain("A source-backed task");
+  });
+
+  it("switches the Social workspace to the site owned by a loaded Posting plan", async () => {
+    const sites = useSitesStore();
+    sites.sites.push({
+      ...sites.sites[0]!,
+      id: "site-2",
+      username: "second-site",
+    });
+    const secondAccount = {
+      ...account,
+      id: "account-second",
+      siteId: "site-2",
+      displayName: "Second account",
+    };
+    const secondPlan = {
+      ...postingPlan,
+      id: "plan-site-2",
+      siteId: "site-2",
+      accountId: "account-second",
+      accountLabel: "Second account",
+      items: postingPlan.items.map((item) => ({ ...item, accountId: "account-second" })),
+    };
+    window.history.replaceState({}, "", "/social?postingPlan=plan-site-2");
+    vi.mocked(api.get).mockImplementation((endpoint) => {
+      if (endpoint === "/social/posting-plans/plan-site-2") {
+        return Promise.resolve({ plan: secondPlan });
+      }
+      if (endpoint === "/social/accounts/account-second/preferred-posting-times") {
+        return Promise.resolve({
+          preference: {
+            accountId: "account-second",
+            timezone: "Europe/Dublin",
+            times: [{ day: "monday", localTime: "09:00" }],
+            minimumGapMinutes: 120,
+            minimumRepostDays: 30,
+          },
+        });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account, secondAccount] });
+      if (endpoint === "/social/posts?siteId=site-2") return Promise.resolve({ posts: [] });
+      if (endpoint === "/social/suggestions?siteId=site-2") return Promise.resolve({ suggestions: [] });
+      return mockGet(endpoint);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(api.get).toHaveBeenCalledWith("/social/posts?siteId=site-2");
+    expect((wrapper.get(".posting-plan-card > .plan-field select").element as HTMLSelectElement).value)
+      .toBe("account-second");
+    expect(wrapper.get(".plan-review").text()).toContain("Second account");
+  });
+
+  it("keeps Posting plan load errors inside the focused dialog surface", async () => {
+    window.history.replaceState({}, "", "/social?postingPlan=missing-plan");
+    vi.mocked(api.get).mockImplementation((endpoint) => {
+      if (endpoint === "/social/posting-plans/missing-plan") {
+        return Promise.reject(new ApiError("Posting plan not found", 404));
+      }
+      return mockGet(endpoint);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.get(".posting-plan-card [role='alert']").text()).toBe(
+      "Posting plan not found",
+    );
   });
 
   it("focuses the exact Publication named by a Calendar deep link", async () => {

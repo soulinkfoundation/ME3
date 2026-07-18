@@ -502,6 +502,7 @@ async function completeChoosingSuggestion(
     try {
       detail = await createSocialPost(env, ownerId, {
         siteId: claim.site_id,
+        sourceTitle: claim.source_title,
         sourceType: claim.source_type,
         sourceRef: claim.source_ref,
         sourceSnapshot: claim.source_snapshot,

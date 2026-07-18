@@ -188,6 +188,7 @@ export async function createAgentSocialPost(
     userId,
     {
       siteId,
+      sourceTitle: source.title,
       sourceType: source.sourceType,
       sourceRef: `${source.sourceType}:${source.id}`,
       sourceSnapshot: source.snapshot,

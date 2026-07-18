@@ -200,6 +200,12 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       auth: "owner",
     },
     {
+      id: "social.library.api",
+      path: "/api/social/library",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
       id: "social.suggestions.api",
       path: "/api/social/suggestions",
       methods: ["GET", "POST"],
@@ -220,7 +226,67 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
     {
       id: "social.post.api",
       path: "/api/social/posts/:id",
+      methods: ["GET", "PATCH"],
+      auth: "owner",
+    },
+    {
+      id: "social.carousel.media.api",
+      path: "/api/social/carousels/media",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "social.carousel.media-item.api",
+      path: "/api/social/carousels/media/:mediaId",
       methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "social.carousel.content-addressed-media.api",
+      path: "/api/social/media/sha256/:fileName",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "social.carousel.render.api",
+      path: "/api/social/carousels/render",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
+      id: "social.carousel.render-set.api",
+      path: "/api/social/carousels/render-sets/:renderSetId",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "social.carousel.asset.api",
+      path: "/api/social/carousels/assets/:assetId",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "social.account.preferred-posting-times.api",
+      path: "/api/social/accounts/:id/preferred-posting-times",
+      methods: ["GET", "PUT"],
+      auth: "owner",
+    },
+    {
+      id: "social.posting-plans.api",
+      path: "/api/social/posting-plans",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
+      id: "social.posting-plan.api",
+      path: "/api/social/posting-plans/:id",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "social.posting-plan.confirm.api",
+      path: "/api/social/posting-plans/:id/confirm",
+      methods: ["POST"],
       auth: "owner",
     },
     {
@@ -317,6 +383,24 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       approvalMode: "none",
     }),
     agentTool({
+      id: "social.library.search",
+      label: "Search the Social Post library",
+      sideEffect: "read_private",
+      approvalMode: "none",
+    }),
+    agentTool({
+      id: "social.posting-plan.create",
+      label: "Propose a reviewable Posting plan",
+      sideEffect: "write_internal_draft",
+      approvalMode: "none",
+    }),
+    agentTool({
+      id: "social.posting-plan.confirm",
+      label: "Confirm a reviewed Posting plan",
+      sideEffect: "write_internal_active",
+      approvalMode: "approval_required",
+    }),
+    agentTool({
       id: "social.version.publish",
       label: "Publish an approved Version",
       sideEffect: "external_write",
@@ -356,6 +440,20 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       destructive: false,
       description:
         "Stores editable, discardable, Source-grounded Suggestions and their chosen Post links.",
+    },
+    {
+      id: "social.posting-plans",
+      path: "./apps/worker/migrations/0025_social_posting_plans.sql",
+      destructive: false,
+      description:
+        "Adds owner tags, Preferred posting times, reviewable Posting plans, confirmation snapshots, and account-time reservations.",
+    },
+    {
+      id: "social.deterministic-carousels",
+      path: "./apps/worker/migrations/0026_social_carousels.sql",
+      destructive: false,
+      description:
+        "Stores owner-scoped raster media, immutable deterministic Carousel render sets, and exact Version attachments.",
     },
   ],
   queuesAndCrons: [...SOCIAL_PUBLISHING_RUNTIME.queuesAndCrons],
