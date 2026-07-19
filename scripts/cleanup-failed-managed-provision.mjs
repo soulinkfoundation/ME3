@@ -83,7 +83,10 @@ export async function cleanupFailedManagedProvision(
   const namespace = namespaces.find(
     (item) => namespaceId(item) === contract.durableObjectNamespaceId,
   );
-  if (before.worker || namespace) {
+  const workerHasResourceBindings = before.worker
+    ? await hasWorkerResourceBindings(api, input.accountId, contract.workerName)
+    : false;
+  if (namespace || workerHasResourceBindings) {
     if (namespace) assertNamespaceIdentity(namespace, contract);
     await deployTombstone({
       workerName: contract.workerName,
@@ -417,6 +420,22 @@ async function deleteIfPresent(api, path) {
 async function assertMissing(api, path, label) {
   const result = await api(path, {}, { missingOk: true });
   if (result !== null) throw new Error(`${label} absence was not verified`);
+}
+
+async function hasWorkerResourceBindings(api, accountId, workerName) {
+  const settings = await api(
+    `/accounts/${accountId}/workers/scripts/${workerName}/settings`,
+    {},
+    { missingOk: true },
+  );
+  if (!settings) return false;
+  if (!Array.isArray(settings.bindings)) {
+    throw new Error("failed provision Worker binding listing is invalid");
+  }
+  return settings.bindings.some(
+    (binding) =>
+      binding?.type !== "secret_text" && binding?.type !== "version_metadata",
+  );
 }
 
 async function assertFailedProvisionProviderResourcesAbsent(api, accountId, contract) {

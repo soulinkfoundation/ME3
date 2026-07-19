@@ -93,7 +93,10 @@ export async function decommissionManagedInstall(
   // externally reported lifecycle stages remain strictly monotonic.
   let namespaces = await listDurableObjectNamespaces(api, input.accountId);
   const namespace = namespaces.find((item) => namespaceId(item) === contract.durableObjectNamespaceId);
-  if (presence.worker || namespace) {
+  const workerHasResourceBindings = presence.worker
+    ? await hasManagedWorkerResourceBindings(api, input.accountId, contract.workerName)
+    : false;
+  if (namespace || workerHasResourceBindings) {
     if (
       namespace &&
       (namespace.script !== contract.workerName || namespace.class !== "Me3UserAgent")
@@ -553,7 +556,7 @@ export async function clearManagedWorkerBindings(api, accountId, workerName) {
   if (!Array.isArray(before.bindings)) {
     throw new Error("Cloudflare managed Worker binding listing is invalid");
   }
-  if (before.bindings.length > 0) {
+  if (before.bindings.some((binding) => !isRetainedTombstoneBinding(binding))) {
     const body = new FormData();
     body.set("settings", JSON.stringify({ bindings: [] }));
     await api(path, { method: "PATCH", body });
@@ -563,13 +566,27 @@ export async function clearManagedWorkerBindings(api, accountId, workerName) {
   if (
     after &&
     (!Array.isArray(retainedBindings) ||
-      retainedBindings.some(
-        (binding) =>
-          binding?.type !== "secret_text" && binding?.type !== "version_metadata",
-      ))
+      retainedBindings.some((binding) => !isRetainedTombstoneBinding(binding)))
   ) {
     throw new Error("managed Worker resource binding removal was not verified");
   }
+}
+
+async function hasManagedWorkerResourceBindings(api, accountId, workerName) {
+  const settings = await api(
+    `/accounts/${accountId}/workers/scripts/${workerName}/settings`,
+    {},
+    { missingOk: true },
+  );
+  if (!settings) return false;
+  if (!Array.isArray(settings.bindings)) {
+    throw new Error("Cloudflare managed Worker binding listing is invalid");
+  }
+  return settings.bindings.some((binding) => !isRetainedTombstoneBinding(binding));
+}
+
+function isRetainedTombstoneBinding(binding) {
+  return binding?.type === "secret_text" || binding?.type === "version_metadata";
 }
 
 export function orderedDedicatedQueueNames(queueNames, workerName) {

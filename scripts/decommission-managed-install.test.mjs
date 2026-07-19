@@ -175,6 +175,27 @@ test("redeploys a binding-free tombstone when the Worker remains after its DO na
   assert.equal(fake.state.queues.has(DEDICATED_QUEUE), false);
 });
 
+test("resumes after a tombstone settings update without redeploying over API edits", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.namespaces = [];
+  fake.state.workerBindings = [{ name: "JWT_SECRET", type: "secret_text" }];
+  fake.state.producerBindings.clear();
+  let tombstones = 0;
+
+  const result = await decommissionManagedInstall(waivedContract(), {
+    request: fake.request,
+    deployTombstone: async () => {
+      tombstones += 1;
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(tombstones, 0);
+  assert.equal(fake.state.queues.has(DEDICATED_QUEUE), false);
+  assert.equal(fake.state.worker, false);
+  assert.equal(fake.state.d1, null);
+});
+
 test("polls complete Queue binding evidence and fails closed when detachment never converges", async () => {
   const delayed = createCloudflareFixture();
   delayed.state.producerDetachPollsRemaining = 2;
