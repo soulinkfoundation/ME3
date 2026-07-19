@@ -18,6 +18,17 @@ const LEGACY_SHARED_QUEUES = new Set([
 ]);
 const QUEUE_DETACH_MAX_ATTEMPTS = 30;
 const QUEUE_DETACH_DELAY_MS = 1_000;
+export const MANAGED_DECOMMISSION_TOMBSTONE_SOURCE = [
+  "export default {",
+  "  fetch() { return new Response('Managed ME3 is decommissioning', { status: 410 }); },",
+  // Cloudflare can validate a replacement upload against the prior Queue
+  // consumer trigger even after the consumer API reports it absent. Keep a
+  // fail-closed handler in the transient tombstone: retryAll explicitly avoids
+  // acknowledging a late delivery while the binding-free deploy settles.
+  "  queue(batch) { batch.retryAll(); },",
+  "};",
+  "",
+].join("\n");
 
 export async function decommissionManagedInstall(
   input,
@@ -590,7 +601,7 @@ export function deployDurableObjectTombstone({
   try {
     writeFileSync(
       join(root, "tombstone.mjs"),
-      "export default { fetch() { return new Response('Managed ME3 is decommissioning', { status: 410 }); } };\n",
+      MANAGED_DECOMMISSION_TOMBSTONE_SOURCE,
       { mode: 0o600 },
     );
     const config = [

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   decommissionManagedInstall,
+  MANAGED_DECOMMISSION_TOMBSTONE_SOURCE,
   orderedDedicatedQueueNames,
 } from "./decommission-managed-install.mjs";
 
@@ -16,6 +17,12 @@ const MD5 = "b".repeat(32);
 const SHA256 = "c".repeat(64);
 const DEDICATED_QUEUE = `${WORKER_NAME}-assistant-job-events`;
 const SHARED_QUEUE = "me3-booking-reminders";
+
+test("the transitional tombstone retries rather than acknowledges late Queue batches", () => {
+  assert.match(MANAGED_DECOMMISSION_TOMBSTONE_SOURCE, /queue\(batch\)/);
+  assert.match(MANAGED_DECOMMISSION_TOMBSTONE_SOURCE, /batch\.retryAll\(\)/);
+  assert.doesNotMatch(MANAGED_DECOMMISSION_TOMBSTONE_SOURCE, /\back(?:All)?\s*\(/);
+});
 
 test("removes Worker producer bindings before queue deletion and retries safely after Cloudflare 400", async () => {
   const fake = createCloudflareFixture();
