@@ -119,6 +119,8 @@ test("re-verifies retained evidence and exact absence before decommission succes
     /ME3_MANAGED_RUNTIME_TERMINATED != 'true'/,
   );
   assert.match(retained, /managed-retained-export\.mjs verify/);
+  assert.match(retained, /inputs\.export_waived == false/);
+  assert.match(retentionAttestation, /inputs\.export_waived == false/);
   assert.match(retentionAttestation, /ME3_MANAGED_STAGE: retention_reverified/);
   assert.match(drain, /managed-runtime-control\.mjs suspend/);
   assert.match(drainAttestation, /ME3_MANAGED_STAGE: runtime_drained/);
@@ -126,6 +128,7 @@ test("re-verifies retained evidence and exact absence before decommission succes
   assert.match(purge, /purge_storage/);
   assert.match(empty, /--allow-missing/);
   assert.match(deletion, /--export-operation-id/);
+  assert.match(deletion, /--export-waived "\$EXPORT_WAIVED"/);
   assert.match(deletion, /--export-md5/);
   assert.match(deletion, /--export-etag/);
   assert.match(success, /ME3_MANAGED_STAGE: verified_absent/);
@@ -141,6 +144,51 @@ test("re-verifies retained evidence and exact absence before decommission succes
     decommissionControl.slice(decommissionControl.indexOf('await reportStage("deleting_r2")')),
     /await deleteIfPresent\(api, `\/accounts\/\$\{input\.accountId\}\/r2\/buckets\//,
   );
+});
+
+test("requires an explicit export waiver and keeps waived decommission fail-closed", () => {
+  const validation = getStep("Validate the complete lifecycle contract");
+  const retainedReport = getStep("Report retained export re-verification");
+  const retainedVerification = getStep(
+    "Re-verify retained evidence before destructive controls",
+  );
+  const retainedAttestation = getStep(
+    "Attest decommission retention re-verification",
+  );
+  const waiverAttestation = getStep("Attest explicit export waiver");
+  const drain = getStep("Suspend and drain the managed runtime before decommission");
+  const purge = getStep("Revoke and purge the drained managed runtime");
+  const empty = getStep("Verify source R2 is empty after runtime purge");
+  const deletion = getStep("Delete only the exact managed resource manifest");
+
+  assert.match(
+    lifecycle,
+    /export_waived:\n\s+description:.*\n\s+required: true\n\s+type: boolean/,
+  );
+  assert.match(lifecycle, /EXPORT_WAIVED: \$\{\{ inputs\.export_waived \}\}/);
+  assert.match(validation, /\[\[ "\$EXPORT_WAIVED" = true \|\| "\$EXPORT_WAIVED" = false \]\]/);
+  assert.match(validation, /if \[\[ "\$EXPORT_WAIVED" = true \]\]; then/);
+  assert.match(
+    validation,
+    /test -z "\$EXPORT_OPERATION_ID\$EXPORT_KEY_VERSION\$EVIDENCE_OBJECT_KEY\$EVIDENCE_SHA256\$EVIDENCE_MD5\$EVIDENCE_ETAG\$EVIDENCE_SIZE_BYTES"/,
+  );
+  for (const retainedStep of [retainedReport, retainedVerification, retainedAttestation]) {
+    assert.match(retainedStep, /inputs\.export_waived == false/);
+  }
+  assert.match(waiverAttestation, /inputs\.export_waived == true/);
+  assert.match(waiverAttestation, /ME3_MANAGED_STATUS: running/);
+  assert.match(waiverAttestation, /ME3_MANAGED_STAGE: export_waiver_verified/);
+  assert.ok(lifecycle.indexOf(waiverAttestation) < lifecycle.indexOf(drain));
+  for (const destructiveStep of [drain, purge, empty, deletion]) {
+    assert.doesNotMatch(destructiveStep, /export_waived == false/);
+  }
+  assert.match(deletion, /--export-waived "\$EXPORT_WAIVED"/);
+  assert.match(deletion, /if \[\[ "\$EXPORT_WAIVED" = false \]\]; then/);
+  assert.match(deletion, /node control\/scripts\/decommission-managed-install\.mjs "\$\{args\[@\]\}"/);
+  assert.match(decommissionControl, /parseExportWaived/);
+  assert.match(decommissionControl, /retained export inputs must be empty when export is waived/);
+  assert.match(decommissionControl, /if \(presence\.d1\)/);
+  assert.match(decommissionControl, /validateEmptyR2Listing/);
 });
 
 test("cleans a never-public failed provision through a distinct authorized operation", () => {
@@ -173,6 +221,7 @@ test("serializes provisioning and lifecycle by the same installation identity", 
   assert.match(lifecycle, /export_md5:/);
   assert.match(lifecycle, /export_etag:/);
   assert.match(lifecycle, /export_key_version:/);
+  assert.match(lifecycle, /export_waived:/);
 });
 
 test("never interpolates untrusted workflow inputs into a run script", () => {

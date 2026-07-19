@@ -157,3 +157,21 @@ test("attests retained bytes before termination without leaking terminal evidenc
   assert.equal(payload.stage, "retention_reverified");
   assert.equal(Object.hasOwn(payload, "export"), false);
 });
+
+test("reports explicit export-waiver verification without inventing export evidence", async () => {
+  let payload;
+  await sendManagedLifecycleWorkflowCallback(
+    {
+      ...base,
+      ME3_MANAGED_OPERATION: "decommission",
+      ME3_MANAGED_STATUS: "running",
+      ME3_MANAGED_STAGE: "export_waiver_verified",
+    },
+    async (_url, init) => {
+      payload = JSON.parse(init.body);
+      return new Response(null, { status: 204 });
+    },
+  );
+  assert.equal(payload.stage, "export_waiver_verified");
+  assert.equal(Object.hasOwn(payload, "export"), false);
+});

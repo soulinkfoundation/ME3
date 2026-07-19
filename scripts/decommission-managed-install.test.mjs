@@ -31,6 +31,7 @@ test("deletes the exact manifest, matches queue script_name, verifies absence, a
 
   const first = await decommissionManagedInstall(contract(), options);
   assert.equal(first.ok, true);
+  assert.equal(first.exportWaived, false);
   assert.deepEqual(stages, [
     "deleting_r2",
     "removing_consumers",
@@ -70,12 +71,133 @@ test("deletes the exact manifest, matches queue script_name, verifies absence, a
   assert.equal(stages.at(-1), "verifying_absence");
 });
 
-test("refuses any destructive API request when source R2 is not proven empty", async () => {
+test("decommissions with an explicit export waiver while preserving every resource proof", async () => {
+  const fake = createCloudflareFixture();
+  const stages = [];
+  const result = await decommissionManagedInstall(waivedContract(), {
+    request: fake.request,
+    reportStage: async (stage) => stages.push(stage),
+    deployTombstone: async ({ workerName, operationId }) => {
+      assert.equal(workerName, WORKER_NAME);
+      assert.equal(operationId, OPERATION_ID);
+      fake.state.namespaces = [];
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.exportWaived, true);
+  assert.deepEqual(stages, [
+    "deleting_r2",
+    "removing_consumers",
+    "deleting_queues",
+    "deleting_worker",
+    "deleting_d1",
+    "verifying_absence",
+  ]);
+  assert.equal(fake.state.worker, false);
+  assert.equal(fake.state.d1, null);
+  assert.equal(fake.state.r2, null);
+  assert.equal(fake.state.queues.has(DEDICATED_QUEUE), false);
+  assert.deepEqual(
+    fake.state.queues.get(SHARED_QUEUE).consumers.map((consumer) => consumer.script_name),
+    ["unrelated-worker"],
+  );
+  const runtimeProofIndex = fake.calls.findIndex(({ path }) =>
+    path.includes(`/d1/database/${D1_ID}/query`),
+  );
+  const firstDeleteIndex = fake.calls.findIndex(({ method }) => method === "DELETE");
+  assert.notEqual(runtimeProofIndex, -1);
+  assert.ok(runtimeProofIndex < firstDeleteIndex);
+});
+
+test("requires an explicit strict export waiver value before any provider request", async (t) => {
+  for (const value of [undefined, null, 0, "TRUE", "yes"]) {
+    await t.test(String(value), async () => {
+      let requests = 0;
+      await assert.rejects(
+        decommissionManagedInstall(
+          { ...contract(), exportWaived: value },
+          {
+            request: async () => {
+              requests += 1;
+              throw new Error("must not request");
+            },
+          },
+        ),
+        /export waiver must be explicitly true or false/,
+      );
+      assert.equal(requests, 0);
+    });
+  }
+});
+
+test("requires every retained-export input to be absent when export is waived", async (t) => {
+  const evidence = contract();
+  for (const field of [
+    "exportOperationId",
+    "exportKeyVersion",
+    "exportObjectKey",
+    "exportSha256",
+    "exportMd5",
+    "exportEtag",
+    "exportSizeBytes",
+    "exportHead",
+  ]) {
+    await t.test(field, async () => {
+      let requests = 0;
+      await assert.rejects(
+        decommissionManagedInstall(
+          { ...waivedContract(), [field]: evidence[field] },
+          {
+            request: async () => {
+              requests += 1;
+              throw new Error("must not request");
+            },
+          },
+        ),
+        /resource contract is invalid|retained export inputs must be empty/,
+      );
+      assert.equal(requests, 0);
+    });
+  }
+});
+
+test("ordinary decommission still requires every retained-export proof", async (t) => {
+  for (const field of [
+    "exportOperationId",
+    "exportKeyVersion",
+    "exportObjectKey",
+    "exportSha256",
+    "exportMd5",
+    "exportEtag",
+    "exportSizeBytes",
+    "exportHead",
+  ]) {
+    await t.test(field, async () => {
+      let requests = 0;
+      await assert.rejects(
+        decommissionManagedInstall(
+          { ...contract(), [field]: undefined },
+          {
+            request: async () => {
+              requests += 1;
+              throw new Error("must not request");
+            },
+          },
+        ),
+        /resource contract is invalid|verified retained export evidence is required/,
+      );
+      assert.equal(requests, 0);
+    });
+  }
+});
+
+test("refuses waived decommission when source R2 is not proven empty", async () => {
   let requests = 0;
   await assert.rejects(
     decommissionManagedInstall(
       {
-        ...contract(),
+        ...waivedContract(),
         r2EmptyListing: {
           IsTruncated: false,
           Contents: [{ Key: "still-present", Size: 1, ETag: '"etag"' }],
@@ -91,6 +213,44 @@ test("refuses any destructive API request when source R2 is not proven empty", a
     /verifiably empty/,
   );
   assert.equal(requests, 0);
+});
+
+test("refuses waived decommission until runtime purge is persisted", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.lifecycle.credentials_revoked_at = null;
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), { request: fake.request }),
+    /persisted runtime termination is required/,
+  );
+  assert.equal(fake.calls.some(({ method }) => method === "DELETE"), false);
+  assert.notEqual(fake.state.worker, false);
+  assert.notEqual(fake.state.d1, null);
+  assert.notEqual(fake.state.r2, null);
+});
+
+test("refuses waived Worker deletion when its runtime proof database is missing", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.d1 = null;
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), { request: fake.request }),
+    /runtime termination proof is unavailable/,
+  );
+  assert.equal(fake.calls.some(({ method }) => method === "DELETE"), false);
+  assert.equal(fake.state.worker, true);
+  assert.notEqual(fake.state.r2, null);
+});
+
+test("refuses a mismatched exact manifest before waived decommission deletes anything", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.namespaces[0].script = "unrelated-worker";
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), { request: fake.request }),
+    /Durable Object namespace identity does not match/,
+  );
+  assert.equal(fake.calls.some(({ method }) => method === "DELETE"), false);
+  assert.equal(fake.state.worker, true);
+  assert.notEqual(fake.state.d1, null);
+  assert.notEqual(fake.state.r2, null);
 });
 
 test("performs no provider deletion when final control-plane authorization is rejected", async () => {
@@ -129,12 +289,8 @@ test("fails closed when a shared queue consumer listing is incomplete", async ()
     decommissionManagedInstall(contract(), { request: incompleteRequest }),
     /shared queue consumer listing is incomplete/,
   );
-  assert.equal(
-    fake.calls.some(
-      ({ method, path }) => method === "DELETE" && path.includes("/consumers/"),
-    ),
-    false,
-  );
+  assert.equal(fake.calls.some(({ method }) => method === "DELETE"), false);
+  assert.notEqual(fake.state.r2, null);
 });
 
 test("retries safely after every destructive stage has already taken effect", async (t) => {
@@ -207,6 +363,7 @@ function contract() {
     apiToken: "cloudflare-api-token",
     installationId: INSTALLATION_ID,
     operationId: OPERATION_ID,
+    exportWaived: false,
     exportOperationId: EXPORT_OPERATION_ID,
     exportKeyVersion: "v1",
     workerName: WORKER_NAME,
@@ -235,6 +392,20 @@ function contract() {
     },
     r2EmptyListing: { IsTruncated: false, Contents: [] },
   };
+}
+
+function waivedContract() {
+  const input = contract();
+  input.exportWaived = true;
+  delete input.exportOperationId;
+  delete input.exportKeyVersion;
+  delete input.exportObjectKey;
+  delete input.exportSha256;
+  delete input.exportMd5;
+  delete input.exportEtag;
+  delete input.exportSizeBytes;
+  delete input.exportHead;
+  return input;
 }
 
 function createCloudflareFixture() {

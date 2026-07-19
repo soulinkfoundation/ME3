@@ -14,6 +14,7 @@ const callbackEnv = {
     "https://api.me3.app/api/managed-install/provisioning/callback",
   ME3_MANAGED_CALLBACK_SECRET: "test-callback-secret",
   ME3_MANAGED_INSTALLATION_ID: "mi-1234567890abcdef",
+  ME3_MANAGED_RELEASE_TAG: "v1.2.3",
   ME3_MANAGED_STATUS: "ready",
   ME3_MANAGED_ORIGIN:
     "https://me3-mi-1234567890abcdef.managed-test.workers.dev",
@@ -44,12 +45,61 @@ test("a rejected activation callback fails without exposing its response or secr
 
   assert.deepEqual(requestBody, {
     installationId: "mi-1234567890abcdef",
+    releaseTag: "v1.2.3",
     status: "ready",
     origin: "https://me3-mi-1234567890abcdef.managed-test.workers.dev",
     d1Id: "11111111-1111-4111-8111-111111111111",
     queueNames: ["me3-mi-1234567890abcdef-assistant-job-events"],
     durableObjectNamespaceId: "a".repeat(32),
   });
+});
+
+test("every callback status reports the exact managed release tag", async () => {
+  for (const status of ["provisioning", "ready", "failed"]) {
+    let requestBody;
+    await sendManagedInstallWorkflowCallback(
+      {
+        ...callbackEnv,
+        ME3_MANAGED_STATUS: status,
+        ...(status === "provisioning"
+          ? { ME3_MANAGED_STAGE: "resources" }
+          : {}),
+      },
+      async (_url, init) => {
+        requestBody = JSON.parse(init.body);
+        return new Response(null, { status: 204 });
+      },
+    );
+
+    assert.equal(requestBody.releaseTag, callbackEnv.ME3_MANAGED_RELEASE_TAG);
+  }
+});
+
+test("the workflow binds callbacks and deployment to the exact dispatch release tag", () => {
+  assert.match(
+    workflow,
+    /ME3_MANAGED_RELEASE_TAG: \$\{\{ inputs\.release_tag \}\}/,
+  );
+  assert.match(
+    getStep("Check out the exact ME3 release"),
+    /ref: \$\{\{ inputs\.release_tag \}\}/,
+  );
+  assert.match(
+    getStep("Publish the managed Worker"),
+    /--tag "\$ME3_MANAGED_RELEASE_TAG"/,
+  );
+});
+
+test("rejects a missing or non-stable callback release tag", async () => {
+  for (const releaseTag of ["", "1.2.3", "v1.2.3-rc.1", "V1.2.3"]) {
+    await assert.rejects(
+      sendManagedInstallWorkflowCallback(
+        { ...callbackEnv, ME3_MANAGED_RELEASE_TAG: releaseTag },
+        async () => new Response(null, { status: 204 }),
+      ),
+      /callback configuration is invalid/,
+    );
+  }
 });
 
 test("ready cannot activate without every immutable resource identifier", async () => {

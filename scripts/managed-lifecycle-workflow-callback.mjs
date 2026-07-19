@@ -21,6 +21,7 @@ const STAGES = new Set([
   "retaining",
   "verifying_retention",
   "retention_reverified",
+  "export_waiver_verified",
   "runtime_drained",
   "deleting_failed_provision",
   "deleting_r2",

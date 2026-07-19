@@ -9,6 +9,7 @@ export async function sendManagedInstallWorkflowCallback(
   const callbackUrl = env.ME3_MANAGED_CALLBACK_URL?.trim();
   const callbackSecret = env.ME3_MANAGED_CALLBACK_SECRET?.trim();
   const installationId = env.ME3_MANAGED_INSTALLATION_ID?.trim();
+  const releaseTag = env.ME3_MANAGED_RELEASE_TAG?.trim();
   const status = env.ME3_MANAGED_STATUS?.trim();
   const stage = env.ME3_MANAGED_STAGE?.trim();
   const origin = env.ME3_MANAGED_ORIGIN?.trim();
@@ -30,6 +31,7 @@ export async function sendManagedInstallWorkflowCallback(
     callbackUrl !== "https://api.me3.app/api/managed-install/provisioning/callback" ||
     !callbackSecret ||
     !/^mi-[0-9a-f]{16}$/.test(installationId || "") ||
+    !/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(releaseTag || "") ||
     !["provisioning", "ready", "failed"].includes(status || "")
   ) {
     throw new Error("managed callback configuration is invalid");
@@ -69,6 +71,7 @@ export async function sendManagedInstallWorkflowCallback(
     },
     body: JSON.stringify({
       installationId,
+      releaseTag,
       status,
       ...(stage ? { stage } : {}),
       ...(origin ? { origin } : {}),

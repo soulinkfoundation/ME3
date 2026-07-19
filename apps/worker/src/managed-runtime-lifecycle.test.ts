@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { ME3_CORE_VERSION } from "./core-version";
 import { shouldBlockManagedRuntimeBackground } from "./index";
 import {
   ManagedRuntimeLifecycleError,
@@ -321,7 +322,7 @@ describe("managed runtime lifecycle", () => {
         state: "suspended",
         lifecycleProtocol: "me3-managed-lifecycle-v2",
         portableExportPolicy: "me3-portable-v1-policy-1",
-        releaseVersion: "0.1.103",
+        releaseVersion: ME3_CORE_VERSION,
       },
     });
 

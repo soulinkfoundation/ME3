@@ -60,6 +60,10 @@ on:
         description: Exact retained managed-export key version
         required: false
         type: string
+      export_waived:
+        description: Explicit authorization to decommission without retaining an export
+        required: true
+        type: boolean
       worker_ever_public:
         description: Monotonic control-plane public-exposure proof
         required: false
@@ -114,6 +118,7 @@ jobs:
       WORKER_EVER_PUBLIC: ${{ inputs.worker_ever_public }}
       EXPORT_OPERATION_ID: ${{ inputs.export_operation_id }}
       EXPORT_KEY_VERSION: ${{ inputs.export_key_version }}
+      EXPORT_WAIVED: ${{ inputs.export_waived }}
       EVIDENCE_OBJECT_KEY: ${{ inputs.export_object_key }}
       EVIDENCE_SHA256: ${{ inputs.export_sha256 }}
       EVIDENCE_MD5: ${{ inputs.export_md5 }}
@@ -138,6 +143,7 @@ jobs:
           test "$R2_NAME" = "${WORKER_NAME}-r2"
           [[ "$ME3_MANAGED_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           test "$ME3_MANAGED_CALLBACK_URL" = "https://api.me3.app/api/managed-install/lifecycle/callback"
+          [[ "$EXPORT_WAIVED" = true || "$EXPORT_WAIVED" = false ]]
           WORKER_NAME="$WORKER_NAME" QUEUE_NAMES="$QUEUE_NAMES" node <<'NODE'
           const names = JSON.parse(process.env.QUEUE_NAMES);
           if (!Array.isArray(names) || names.length === 0 || new Set(names).size !== names.length) process.exit(1);
@@ -145,22 +151,28 @@ jobs:
           NODE
           expected_key="managed-exports/${ME3_MANAGED_INSTALLATION_ID}/${EXPORT_OPERATION_ID}.me3-managed-export-v1.enc"
           if [[ "$ME3_MANAGED_OPERATION" = export ]]; then
+            test "$EXPORT_WAIVED" = false
             [[ "$EXPORT_OPERATION_ID" =~ $uuid ]]
             [[ "$EXPORT_KEY_VERSION" =~ ^v[1-9][0-9]{0,8}$ ]]
             test "$EXPORT_OPERATION_ID" = "$ME3_MANAGED_OPERATION_ID"
             test -z "$EVIDENCE_OBJECT_KEY$EVIDENCE_SHA256$EVIDENCE_MD5$EVIDENCE_ETAG$EVIDENCE_SIZE_BYTES"
           elif [[ "$ME3_MANAGED_OPERATION" = decommission ]]; then
-            [[ "$EXPORT_OPERATION_ID" =~ $uuid ]]
-            [[ "$EXPORT_KEY_VERSION" =~ ^v[1-9][0-9]{0,8}$ ]]
             test "$ME3_MANAGED_OPERATION" = decommission
-            test "$EXPORT_OPERATION_ID" != "$ME3_MANAGED_OPERATION_ID"
-            test "$EVIDENCE_OBJECT_KEY" = "$expected_key"
-            [[ "$EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
-            [[ "$EVIDENCE_MD5" =~ ^[0-9a-f]{32}$ ]]
-            test "$EVIDENCE_ETAG" = "$EVIDENCE_MD5"
-            [[ "$EVIDENCE_SIZE_BYTES" =~ ^[1-9][0-9]*$ ]]
+            if [[ "$EXPORT_WAIVED" = true ]]; then
+              test -z "$EXPORT_OPERATION_ID$EXPORT_KEY_VERSION$EVIDENCE_OBJECT_KEY$EVIDENCE_SHA256$EVIDENCE_MD5$EVIDENCE_ETAG$EVIDENCE_SIZE_BYTES"
+            else
+              [[ "$EXPORT_OPERATION_ID" =~ $uuid ]]
+              [[ "$EXPORT_KEY_VERSION" =~ ^v[1-9][0-9]{0,8}$ ]]
+              test "$EXPORT_OPERATION_ID" != "$ME3_MANAGED_OPERATION_ID"
+              test "$EVIDENCE_OBJECT_KEY" = "$expected_key"
+              [[ "$EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$EVIDENCE_MD5" =~ ^[0-9a-f]{32}$ ]]
+              test "$EVIDENCE_ETAG" = "$EVIDENCE_MD5"
+              [[ "$EVIDENCE_SIZE_BYTES" =~ ^[1-9][0-9]*$ ]]
+            fi
           else
             test "$ME3_MANAGED_OPERATION" = cleanup_failed_provision
+            test "$EXPORT_WAIVED" = false
             test "$WORKER_EVER_PUBLIC" = false
             test -z "$EXPORT_OPERATION_ID$EXPORT_KEY_VERSION$EVIDENCE_OBJECT_KEY$EVIDENCE_SHA256$EVIDENCE_MD5$EVIDENCE_ETAG$EVIDENCE_SIZE_BYTES"
           fi
@@ -571,7 +583,7 @@ jobs:
         run: node control/scripts/managed-lifecycle-workflow-callback.mjs
 
       - name: Report retained export re-verification
-        if: inputs.operation == 'decommission'
+        if: inputs.operation == 'decommission' && inputs.export_waived == false
         env:
           ME3_MANAGED_STATUS: running
           ME3_MANAGED_STAGE: verifying_retention
@@ -581,7 +593,7 @@ jobs:
           node control/scripts/managed-lifecycle-workflow-callback.mjs
 
       - name: Re-verify retained evidence before destructive controls
-        if: inputs.operation == 'decommission'
+        if: inputs.operation == 'decommission' && inputs.export_waived == false
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.ME3_MANAGED_RETENTION_R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ME3_MANAGED_RETENTION_R2_SECRET_ACCESS_KEY }}
@@ -606,13 +618,23 @@ jobs:
             --head-output "$RUNNER_TEMP/export-head.json"
 
       - name: Attest decommission retention re-verification
-        if: inputs.operation == 'decommission'
+        if: inputs.operation == 'decommission' && inputs.export_waived == false
         env:
           ME3_MANAGED_STATUS: running
           ME3_MANAGED_STAGE: retention_reverified
           ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
         run: |
           printf 'ME3_MANAGED_FAILURE_STAGE=retention_reverified\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Attest explicit export waiver
+        if: inputs.operation == 'decommission' && inputs.export_waived == true
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: export_waiver_verified
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=export_waiver_verified\n' >> "$GITHUB_ENV"
           node control/scripts/managed-lifecycle-workflow-callback.mjs
 
       - name: Suspend and drain the managed runtime before decommission
@@ -684,24 +706,31 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
           ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
         run: |
-          node control/scripts/decommission-managed-install.mjs \
-            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
-            --operation-id "$ME3_MANAGED_OPERATION_ID" \
-            --export-operation-id "$EXPORT_OPERATION_ID" \
-            --export-key-version "$EXPORT_KEY_VERSION" \
-            --worker-name "$WORKER_NAME" \
-            --d1-name "$D1_NAME" \
-            --d1-id "$D1_ID" \
-            --r2-name "$R2_NAME" \
-            --queue-names "$QUEUE_NAMES" \
-            --durable-object-namespace-id "$DO_NAMESPACE_ID" \
-            --export-object-key "$EVIDENCE_OBJECT_KEY" \
-            --export-sha256 "$EVIDENCE_SHA256" \
-            --export-md5 "$EVIDENCE_MD5" \
-            --export-etag "$EVIDENCE_ETAG" \
-            --export-size-bytes "$EVIDENCE_SIZE_BYTES" \
-            --export-head "$RUNNER_TEMP/export-head.json" \
+          args=(
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID"
+            --operation-id "$ME3_MANAGED_OPERATION_ID"
+            --export-waived "$EXPORT_WAIVED"
+            --worker-name "$WORKER_NAME"
+            --d1-name "$D1_NAME"
+            --d1-id "$D1_ID"
+            --r2-name "$R2_NAME"
+            --queue-names "$QUEUE_NAMES"
+            --durable-object-namespace-id "$DO_NAMESPACE_ID"
             --r2-empty-listing "$RUNNER_TEMP/r2-empty.json"
+          )
+          if [[ "$EXPORT_WAIVED" = false ]]; then
+            args+=(
+              --export-operation-id "$EXPORT_OPERATION_ID"
+              --export-key-version "$EXPORT_KEY_VERSION"
+              --export-object-key "$EVIDENCE_OBJECT_KEY"
+              --export-sha256 "$EVIDENCE_SHA256"
+              --export-md5 "$EVIDENCE_MD5"
+              --export-etag "$EVIDENCE_ETAG"
+              --export-size-bytes "$EVIDENCE_SIZE_BYTES"
+              --export-head "$RUNNER_TEMP/export-head.json"
+            )
+          fi
+          node control/scripts/decommission-managed-install.mjs "${args[@]}"
 
       - name: Complete verified decommission
         if: inputs.operation == 'decommission'

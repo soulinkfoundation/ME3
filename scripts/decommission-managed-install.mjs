@@ -26,7 +26,7 @@ export async function decommissionManagedInstall(
   } = {},
 ) {
   const contract = validateContract(input);
-  validateRetainedExport(input, contract);
+  validateExportDisposition(input, contract);
   validateEmptyR2Listing(input.r2EmptyListing);
   const api = createCloudflareApi(
     { accountId: input.accountId, apiToken: input.apiToken },
@@ -34,8 +34,10 @@ export async function decommissionManagedInstall(
   );
 
   const presence = await assertExistingResourceIdentities(api, contract);
-  if (!presence.worker && presence.d1) {
+  if (presence.d1) {
     await assertPersistedRuntimeTermination(api, input.accountId, contract.d1Id);
+  } else if (presence.worker) {
+    throw new Error("persisted runtime termination proof is unavailable before Worker deletion");
   }
   // The control-plane callback is the final authorization barrier. A stale or
   // cancelled attempt must be rejected here before the first provider delete.
@@ -124,6 +126,7 @@ export async function decommissionManagedInstall(
     ok: true,
     installationId: contract.installationId,
     operationId: contract.operationId,
+    exportWaived: contract.exportWaived,
     resourcesAbsent: {
       worker: true,
       d1: true,
@@ -144,6 +147,7 @@ function validateContract(input) {
   const operationId = String(input.operationId || "").toLowerCase();
   const exportOperationId = String(input.exportOperationId || "").toLowerCase();
   const exportKeyVersion = String(input.exportKeyVersion || "").toLowerCase();
+  const exportWaived = parseExportWaived(input.exportWaived);
   const workerName = String(input.workerName || "");
   const d1Name = String(input.d1Name || "");
   const d1Id = String(input.d1Id || "").toLowerCase();
@@ -158,9 +162,11 @@ function validateContract(input) {
   if (
     !/^mi-[0-9a-f]{16}$/.test(installationId) ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(operationId) ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(exportOperationId) ||
-    operationId === exportOperationId ||
-    !/^v[1-9][0-9]{0,8}$/.test(exportKeyVersion) ||
+    (exportWaived
+      ? exportOperationId !== "" || exportKeyVersion !== ""
+      : !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(exportOperationId) ||
+        operationId === exportOperationId ||
+        !/^v[1-9][0-9]{0,8}$/.test(exportKeyVersion)) ||
     workerName !== `me3-${installationId}` ||
     d1Name !== `${workerName}-d1` ||
     r2Name !== `${workerName}-r2` ||
@@ -182,6 +188,7 @@ function validateContract(input) {
     operationId,
     exportOperationId,
     exportKeyVersion,
+    exportWaived,
     workerName,
     d1Name,
     d1Id,
@@ -189,6 +196,33 @@ function validateContract(input) {
     durableObjectNamespaceId,
     queueNames: [...queueNames].sort(),
   };
+}
+
+function parseExportWaived(value) {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  throw new Error("managed export waiver must be explicitly true or false");
+}
+
+function validateExportDisposition(input, contract) {
+  if (!contract.exportWaived) {
+    validateRetainedExport(input, contract);
+    return;
+  }
+
+  const exportInputs = [
+    input.exportOperationId,
+    input.exportKeyVersion,
+    input.exportObjectKey,
+    input.exportSha256,
+    input.exportMd5,
+    input.exportEtag,
+    input.exportSizeBytes,
+    input.exportHead,
+  ];
+  if (exportInputs.some((value) => value !== undefined && value !== null && value !== "")) {
+    throw new Error("retained export inputs must be empty when export is waived");
+  }
 }
 
 function validateRetainedExport(input, contract) {
@@ -256,6 +290,20 @@ async function assertExistingResourceIdentities(api, contract) {
   );
   if (r2 && String(r2.name || contract.r2Name) !== contract.r2Name) {
     throw new Error("R2 resource identity does not match the managed install");
+  }
+  for (const queueName of contract.queueNames) {
+    const queue = await findQueue(api, api.accountId, queueName);
+    if (queue) await listQueueConsumers(api, api.accountId, queue);
+  }
+  const namespaces = await listDurableObjectNamespaces(api, api.accountId);
+  const namespace = namespaces.find(
+    (item) => namespaceId(item) === contract.durableObjectNamespaceId,
+  );
+  if (
+    namespace &&
+    (namespace.script !== contract.workerName || namespace.class !== "Me3UserAgent")
+  ) {
+    throw new Error("Durable Object namespace identity does not match the managed install");
   }
   return { worker: Boolean(worker), d1: Boolean(d1), r2: Boolean(r2) };
 }
@@ -419,12 +467,14 @@ function parseArgs(values) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
+  const exportHeadPath = args["export-head"];
   const result = await decommissionManagedInstall(
     {
       accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
       apiToken: process.env.CLOUDFLARE_API_TOKEN,
       installationId: args["installation-id"],
       operationId: args["operation-id"],
+      exportWaived: args["export-waived"],
       exportOperationId: args["export-operation-id"],
       exportKeyVersion: args["export-key-version"],
       workerName: args["worker-name"],
@@ -438,7 +488,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       exportMd5: args["export-md5"],
       exportEtag: args["export-etag"],
       exportSizeBytes: args["export-size-bytes"],
-      exportHead: JSON.parse(readFileSync(args["export-head"], "utf8")),
+      exportHead:
+        exportHeadPath && args["export-waived"] !== "true"
+          ? JSON.parse(readFileSync(exportHeadPath, "utf8"))
+          : exportHeadPath,
       r2EmptyListing: JSON.parse(readFileSync(args["r2-empty-listing"], "utf8")),
     },
     {
