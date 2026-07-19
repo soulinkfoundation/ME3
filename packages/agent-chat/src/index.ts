@@ -585,7 +585,14 @@ export type AgentMailboxMessageListOptions = {
 };
 
 export type AgentMailbox = ReturnType<typeof serializeAgentMailbox>;
-export type AgentMailboxSource = ReturnType<typeof serializeAgentMailboxDefaultSource>;
+export type AgentMailboxSource = {
+  id: string;
+  type: "me3_alias" | "custom_domain" | "external_forward";
+  address: string;
+  status: "pending" | "active" | "paused" | "failed";
+  inboundEnabled: boolean;
+  outboundEnabled: boolean;
+};
 export type AgentMailboxMessage = ReturnType<typeof serializeAgentMailboxMessage>;
 
 export type AgentMailboxOverview = {
@@ -1419,10 +1426,20 @@ export async function getAgentMailboxOverview(
   env: Pick<CoreAgentChatEnv, "DB" | "ME3_DEPLOYMENT_MODE">,
   userId: string,
   ownerHint?: { username?: string | null; email?: string | null },
-  options: { includeRecentActivity?: boolean } = {},
+  options: {
+    includeRecentActivity?: boolean;
+    configuredIdentity?: { id: string; address: string } | null;
+  } = {},
 ): Promise<AgentMailboxOverview> {
   const mailbox = await getAgentMailboxRow(env, userId);
   const cloudflareManaged = normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) === "managed";
+  const managedAddress =
+    mailbox && cloudflareManaged
+      ? getAgentMailboxManagedAddress(mailbox.alias_local_part)
+      : null;
+  const configuredIdentity = normalizeAgentMailboxConfiguredIdentity(
+    options.configuredIdentity,
+  );
   const suggestedAliasLocalPart =
     mailbox?.alias_local_part ||
     suggestAgentMailboxAlias(ownerHint?.username || ownerHint?.email || "owner");
@@ -1433,8 +1450,13 @@ export async function getAgentMailboxOverview(
     approvalRequired: true,
     cloudflareManaged,
     suggestedAliasLocalPart,
-    mailbox: mailbox ? serializeAgentMailbox(mailbox, cloudflareManaged) : null,
-    sources: mailbox ? [serializeAgentMailboxDefaultSource(mailbox, cloudflareManaged)] : [],
+    mailbox: mailbox ? serializeAgentMailbox(mailbox, managedAddress) : null,
+    sources:
+      mailbox && managedAddress
+        ? [serializeAgentMailboxManagedSource(mailbox, managedAddress)]
+        : mailbox && configuredIdentity
+          ? [serializeAgentMailboxConfiguredSource(configuredIdentity)]
+          : [],
     recentActivity:
       mailbox && options.includeRecentActivity !== false
         ? await getAgentMailboxActivity(env, mailbox.id, 25, 0)
@@ -1530,7 +1552,7 @@ export async function upsertAgentMailbox(
   const mailbox = await getAgentMailboxRow(env, userId);
   return {
     mailbox: mailbox ? serializeAgentMailbox(mailbox) : null,
-    sources: mailbox ? [serializeAgentMailboxDefaultSource(mailbox)] : [],
+    sources: [],
   };
 }
 
@@ -3859,15 +3881,19 @@ function normalizeEmailText(value: unknown): string | null {
   return normalizeNullableText(value)?.toLowerCase() || null;
 }
 
-function getAgentMailboxAddress(localPart: string, cloudflareManaged = false): string {
-  return `${localPart}@${cloudflareManaged ? "me3.app" : "me3.local"}`;
+function getAgentMailboxInternalAddress(localPart: string): string {
+  return `${localPart}@me3.local`;
 }
 
-function serializeAgentMailbox(row: DbMailboxAliasRow, cloudflareManaged = false) {
+function getAgentMailboxManagedAddress(localPart: string): string {
+  return `${localPart}@me3.app`;
+}
+
+function serializeAgentMailbox(row: DbMailboxAliasRow, aliasAddress: string | null = null) {
   return {
     id: row.id,
     aliasLocalPart: row.alias_local_part,
-    aliasAddress: getAgentMailboxAddress(row.alias_local_part, cloudflareManaged),
+    aliasAddress,
     forwardingEmail: row.forwarding_email,
     forwardingStatus: row.forwarding_status,
     forwardingEnabled: Boolean(row.forwarding_enabled),
@@ -3887,15 +3913,42 @@ function serializeAgentMailbox(row: DbMailboxAliasRow, cloudflareManaged = false
   };
 }
 
-function serializeAgentMailboxDefaultSource(row: DbMailboxAliasRow, cloudflareManaged = false) {
+function serializeAgentMailboxManagedSource(
+  row: DbMailboxAliasRow,
+  address: string,
+): AgentMailboxSource {
   return {
     id: row.id,
     type: "me3_alias",
-    address: getAgentMailboxAddress(row.alias_local_part, cloudflareManaged),
+    address,
     status: row.status === "active" ? "active" : row.status === "paused" ? "paused" : "pending",
     inboundEnabled: row.status === "active",
     outboundEnabled: true,
   };
+}
+
+function serializeAgentMailboxConfiguredSource(
+  identity: { id: string; address: string },
+): AgentMailboxSource {
+  return {
+    id: identity.id,
+    type: "custom_domain",
+    address: identity.address,
+    status: "active",
+    inboundEnabled: false,
+    outboundEnabled: true,
+  };
+}
+
+function normalizeAgentMailboxConfiguredIdentity(
+  identity: { id: string; address: string } | null | undefined,
+): { id: string; address: string } | null {
+  const id = normalizeNullableText(identity?.id);
+  const address = normalizeEmailText(identity?.address);
+  if (!id || !address || !isValidEmail(address) || address.endsWith("@me3.local")) {
+    return null;
+  }
+  return { id, address };
 }
 
 function agentMailboxMessageSelectSql(): string {
@@ -4092,7 +4145,10 @@ async function normalizeAgentMailboxDraftInput(
   body: AgentMailboxDraftInput,
   existing?: DbMailboxMessageRow,
 ): Promise<NormalizedMailboxDraftInput | { error: string; status: number }> {
-  const fromAddress = normalizeEmailText(body.fromAddress) || existing?.from_address || getAgentMailboxAddress(mailbox.alias_local_part);
+  const fromAddress =
+    normalizeEmailText(body.fromAddress) ||
+    existing?.from_address ||
+    getAgentMailboxInternalAddress(mailbox.alias_local_part);
   const rawToAddress = body.toAddress === undefined ? body.to : body.toAddress;
   const toAddress =
     rawToAddress === undefined

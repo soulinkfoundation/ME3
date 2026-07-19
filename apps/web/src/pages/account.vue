@@ -56,7 +56,7 @@ type AccountResponse = {
 type MailboxRecord = {
   id: string;
   aliasLocalPart: string;
-  aliasAddress: string;
+  aliasAddress: string | null;
   forwardingEmail: string;
   forwardingStatus: "pending" | "verified";
   forwardingEnabled: boolean;

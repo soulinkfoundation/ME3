@@ -758,6 +758,25 @@ export async function getEmailProviderSettings(
   };
 }
 
+export async function getConfiguredEmailIdentity(
+  env: Env,
+  ownerId: string,
+): Promise<{ id: string; address: string } | null> {
+  const settings = await getEmailProviderSettings(env, ownerId);
+  const provider = settings.providers.find(
+    (candidate) => candidate.id === settings.activeProviderId,
+  );
+  const address = provider?.config.fromAddress.trim().toLowerCase() || "";
+  if (
+    !provider?.configured ||
+    !isValidEmail(address) ||
+    address.endsWith("@me3.local")
+  ) {
+    return null;
+  }
+  return { id: `email-provider:${provider.id}`, address };
+}
+
 export async function updateEmailProviderSettings(
   env: Env,
   ownerId: string,

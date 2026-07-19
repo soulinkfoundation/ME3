@@ -168,7 +168,7 @@ type MailboxSource = {
 
 type FullMailboxResponse = {
   mailbox: {
-    aliasAddress: string;
+    aliasAddress: string | null;
     status?: "pending_setup" | "active" | "paused";
     forwardingStatus?: "pending" | "verified";
   } | null;

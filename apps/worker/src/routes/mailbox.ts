@@ -21,6 +21,7 @@ import {
 import {
   EmailProviderDeliveryUnknownError,
   EmailProviderInputError,
+  getConfiguredEmailIdentity,
   sendEmailWithProvider,
   type EmailProviderSendResponse,
 } from "../email-providers";
@@ -189,9 +190,13 @@ export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
     if (!ownerId) return unauthorized(c);
 
     const owner = await getOwnerProfile(c.env, ownerId);
+    const configuredIdentity = isManagedEmailDeployment(c.env)
+      ? null
+      : await getConfiguredEmailIdentity(c.env, ownerId).catch(() => null);
     return c.json(
       await getAgentMailboxOverview(c.env, ownerId, owner || undefined, {
         includeRecentActivity: c.req.query("include_activity") !== "0",
+        configuredIdentity,
       }),
     );
   });

@@ -8,6 +8,7 @@ import {
   markAgentMailboxDraftSent,
   rejectAgentMailboxDraft,
   updateAgentMailboxDraft,
+  upsertAgentMailbox,
 } from "./agent-chat";
 import { registerMailboxRoutes } from "./routes/mailbox";
 
@@ -60,6 +61,63 @@ describe("mailbox correctness", () => {
       cloudflareManaged: true,
       mailbox: { aliasAddress: "owner@me3.app" },
       sources: [{ address: "owner@me3.app" }],
+    });
+  });
+
+  it("does not publish an internal address for an unconfigured self-hosted mailbox", async () => {
+    const state = createMailboxState();
+
+    const overview = await getAgentMailboxOverview(
+      { DB: state.db, ME3_DEPLOYMENT_MODE: "self_hosted" } as never,
+      "owner",
+      undefined,
+      { includeRecentActivity: false },
+    );
+
+    expect(overview).toMatchObject({
+      cloudflareManaged: false,
+      mailbox: { aliasAddress: null },
+      sources: [],
+    });
+
+    const saved = await upsertAgentMailbox(state as never, "owner", {
+      aliasLocalPart: "owner",
+      forwardingEnabled: false,
+    });
+    expect(saved).toMatchObject({
+      mailbox: { aliasAddress: null },
+      sources: [],
+    });
+  });
+
+  it("publishes only a configured self-hosted sender identity", async () => {
+    const state = createMailboxState();
+
+    const overview = await getAgentMailboxOverview(
+      { DB: state.db, ME3_DEPLOYMENT_MODE: "self_hosted" } as never,
+      "owner",
+      undefined,
+      {
+        includeRecentActivity: false,
+        configuredIdentity: {
+          id: "email-provider:smtp",
+          address: "Owner@Example.com",
+        },
+      },
+    );
+
+    expect(overview).toMatchObject({
+      mailbox: { aliasAddress: null },
+      sources: [
+        {
+          id: "email-provider:smtp",
+          type: "custom_domain",
+          address: "owner@example.com",
+          status: "active",
+          inboundEnabled: false,
+          outboundEnabled: true,
+        },
+      ],
     });
   });
 

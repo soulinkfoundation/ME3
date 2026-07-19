@@ -11977,7 +11977,7 @@ describe("ME3 Worker auth", () => {
     );
     const createBody = (await createResponse.json()) as {
       mailbox: {
-        aliasAddress: string;
+        aliasAddress: string | null;
         forwardingEnabled: boolean;
         dailyInboundLimit: number;
         dailyOutboundLimit: number;
@@ -11986,11 +11986,11 @@ describe("ME3 Worker auth", () => {
     };
 
     expect(createResponse.status).toBe(200);
-    expect(createBody.mailbox.aliasAddress).toBe("owner.mail@me3.local");
+    expect(createBody.mailbox.aliasAddress).toBeNull();
     expect(createBody.mailbox.forwardingEnabled).toBe(true);
     expect(createBody.mailbox.dailyInboundLimit).toBe(200);
     expect(createBody.mailbox.dailyOutboundLimit).toBe(200);
-    expect(createBody.sources).toMatchObject([{ address: "owner.mail@me3.local" }]);
+    expect(createBody.sources).toEqual([]);
 
     const activateResponse = await app.fetch(
       new Request("http://localhost/api/mailbox/activate", {
@@ -12001,6 +12001,56 @@ describe("ME3 Worker auth", () => {
     );
     expect(activateResponse.status).toBe(200);
     expect(env.mailbox?.status).toBe("active");
+
+    const providerResponse = await app.fetch(
+      new Request("http://localhost/api/email-provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          activeProviderId: "postmark",
+          providers: [
+            {
+              id: "postmark",
+              fromAddress: "owner@custom.example",
+              fromName: "Owner",
+              messageStream: "outbound",
+              serverToken: "postmark-secret-1234",
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+    expect(providerResponse.status).toBe(200);
+
+    const configuredResponse = await app.fetch(
+      new Request("http://localhost/api/mailbox", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const configuredBody = (await configuredResponse.json()) as {
+      mailbox: { aliasAddress: string | null };
+      sources: Array<{
+        address: string;
+        status: string;
+        inboundEnabled: boolean;
+        outboundEnabled: boolean;
+      }>;
+    };
+    expect(configuredResponse.status).toBe(200);
+    expect(configuredBody.mailbox.aliasAddress).toBeNull();
+    expect(configuredBody.sources).toEqual([
+      expect.objectContaining({
+        address: "owner@custom.example",
+        status: "active",
+        inboundEnabled: false,
+        outboundEnabled: true,
+      }),
+    ]);
   });
 
   it("exposes the public @me3.app address for managed mailboxes", async () => {
