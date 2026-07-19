@@ -1,0 +1,46 @@
+name: Audit managed Cloudflare resources
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_manifests:
+        description: JSON array with installationId, Worker/D1/R2 names, D1/DO IDs, and queueNames
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: managed-cloudflare-resource-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+      ME3_MANAGED_EXPECTED_MANIFESTS: ${{ inputs.expected_manifests }}
+
+    steps:
+      - name: Check out audit controls
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Compare the expected manifest with read-only Cloudflare inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$ME3_MANAGED_EXPECTED_MANIFESTS"
+          node scripts/audit-managed-cloudflare-resources.mjs

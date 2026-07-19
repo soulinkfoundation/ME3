@@ -27,6 +27,8 @@
     "portable:proof": "node scripts/portable.mjs proof",
     "portable:test": "node --test scripts/portable-v1.test.mjs",
     "managed-install:test": "node --test scripts/configure-managed-install.test.mjs scripts/managed-install-workflow-callback.test.mjs",
+    "managed-resource:audit": "node scripts/audit-managed-cloudflare-resources.mjs",
+    "managed-resource-audit:test": "node --test scripts/audit-managed-cloudflare-resources.test.mjs scripts/managed-cloudflare-resource-audit-workflow.test.mjs",
     "verify:local-boot": "node scripts/verify-local-boot.mjs",
     "build": "pnpm generate:llms && pnpm -r build",
     "typecheck": "pnpm -r typecheck",
