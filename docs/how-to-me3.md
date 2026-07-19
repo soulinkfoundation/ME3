@@ -326,9 +326,12 @@ pnpm portable:verify -- --archive owner-portable-v1
 ```
 
 The lifecycle workflow requires separate, narrowly scoped GitHub secrets for the lifecycle callback,
-Cloudflare resource API, source R2 read/delete access, retained-export R2 access, and the versioned
-managed export keyring. Do not reuse the provisioning callback secret as the lifecycle secret, and do
-not expose provider or export-key secrets to code checked out from an older deployed release.
+Cloudflare resource API, retained-export R2 access, and the versioned managed export keyring. It
+derives source R2 S3 credentials inside each runner job from the existing Cloudflare resource API
+token, masks them before writing them to the runner environment, and verifies access to the exact
+managed bucket. No separate source R2 access-key secret is stored. Do not reuse the provisioning
+callback secret as the lifecycle secret, and do not expose provider or export-key secrets to code
+checked out from an older deployed release.
 
 ### Reproducible Local Proof
 

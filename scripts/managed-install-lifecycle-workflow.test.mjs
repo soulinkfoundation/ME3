@@ -58,7 +58,7 @@ test("materializes filtered D1 and independently identical R2 from control code"
   assert.match(d1, /node control\/scripts\/capture-managed-d1\.mjs/);
   assert.doesNotMatch(d1, /source\/scripts\/capture-managed-d1/);
   const r2 = getStep("Materialize a stable R2 snapshot");
-  assert.match(r2, /ME3_MANAGED_R2_ACCESS_KEY_ID/);
+  assert.doesNotMatch(r2, /ME3_MANAGED_R2_ACCESS_KEY_ID/);
   assert.match(r2, /managed-r2-verification/);
   assert.equal((r2.match(/aws s3 sync/g) || []).length, 2);
   assert.ok(r2.indexOf("list-r2-s3.mjs") < r2.indexOf("aws s3 sync"));
@@ -68,6 +68,21 @@ test("materializes filtered D1 and independently identical R2 from control code"
   const portable = getStep("Create a login-capable portable archive from the captured copy");
   assert.match(portable, /node control\/scripts\/portable\.mjs export/);
   assert.doesNotMatch(portable, /node source\/scripts\/portable\.mjs/);
+});
+
+test("derives source R2 credentials from the existing Cloudflare token inside the job", () => {
+  const derive = getStep("Derive job-scoped source R2 S3 credentials");
+  const verify = getStep("Verify job-scoped source R2 S3 access");
+  assert.match(derive, /ME3_MANAGED_CLOUDFLARE_API_TOKEN/);
+  assert.match(derive, /derive-managed-r2-s3-credentials\.mjs/);
+  assert.match(derive, /sha256sum --check/);
+  assert.match(verify, /aws s3api head-bucket/);
+  assert.match(verify, /ME3_MANAGED_SOURCE_R2_PRESENT/);
+  assert.match(verify, /ME3_MANAGED_R2_PRESENT/);
+  assert.doesNotMatch(lifecycle, /secrets\.ME3_MANAGED_R2_ACCESS_KEY_ID/);
+  assert.doesNotMatch(lifecycle, /secrets\.ME3_MANAGED_R2_SECRET_ACCESS_KEY/);
+  assert.ok(lifecycle.indexOf(derive) < lifecycle.indexOf("Materialize a stable R2 snapshot"));
+  assert.ok(lifecycle.indexOf(verify) < lifecycle.indexOf("Materialize a stable R2 snapshot"));
 });
 
 test("requires write-once retention and reversible suspension before export success", () => {
