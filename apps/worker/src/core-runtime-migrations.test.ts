@@ -23,6 +23,15 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("agent_tool_executions")).toBe(true);
     expect(db.tables.has("owner_content_search")).toBe(true);
     expect(db.tables.has("managed_email_inbound_deliveries")).toBe(true);
+    expect(db.tables.has("site_pages")).toBe(true);
+    expect(db.tables.has("site_page_revisions")).toBe(true);
+    expect(db.tables.has("commerce_orders")).toBe(true);
+    expect(db.columns.get("subscribers")?.has("page_id")).toBe(true);
+    expect(db.columns.get("subscribers")?.has("action_id")).toBe(true);
+    expect(db.columns.get("subscribers")?.has("campaign")).toBe(true);
+    expect(db.columns.get("bookings")?.has("page_id")).toBe(true);
+    expect(db.columns.get("bookings")?.has("action_id")).toBe(true);
+    expect(db.columns.get("bookings")?.has("campaign")).toBe(true);
     expect(db.tables.has("social_suggestions")).toBe(true);
     expect(db.tables.has("social_posting_preferences")).toBe(true);
     expect(db.tables.has("social_posting_plans")).toBe(true);
@@ -73,6 +82,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0016_social_content_packages")).toBe(
       "2026-07-10-social-content-packages-v1",
+    );
+    expect(db.migrations.get("0017_site_pages_and_commerce")).toBe(
+      "2026-07-19-site-pages-and-commerce-v1",
     );
     expect(db.migrations.get("0018_social_publication_idempotency")).toBe(
       "2026-07-10-social-publication-idempotency-v1",
@@ -170,6 +182,7 @@ describe("Core runtime migrations", () => {
       hasCommerceDefaultCurrency: true,
       hasAiUsageEvents: true,
       hasFinancialEntryProjectId: true,
+      hasSitePagesAndCommerce: true,
     });
 
     await ensureCoreRuntimeMigrations({ DB: db as unknown as D1Database } as Env);
@@ -179,6 +192,12 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.has("0010_ai_usage_events")).toBe(true);
     expect(db.migrations.has("0011_financial_entry_projects")).toBe(true);
+    expect(
+      db.statements.some(
+        (sql) =>
+          sql.includes("ALTER TABLE subscribers") || sql.includes("ALTER TABLE bookings"),
+      ),
+    ).toBe(false);
   });
 
   it("retries after a failed migration attempt", async () => {
@@ -212,6 +231,7 @@ type RuntimeMigrationDbOptions = {
   hasCommerceDefaultCurrency?: boolean;
   hasAiUsageEvents?: boolean;
   hasFinancialEntryProjectId?: boolean;
+  hasSitePagesAndCommerce?: boolean;
   addFinancialProjectColumnBeforeAlterError?: boolean;
   failFinancialProjectAlterOnce?: boolean;
 };
@@ -230,6 +250,9 @@ class RuntimeMigrationDb {
     "social_publication_events",
     "social_publications",
     "social_variants",
+    "sites",
+    "subscribers",
+    "bookings",
   ]);
   readonly columns = new Map<string, Set<string>>([
     ["commerce_settings", new Set(["user_id", "encrypted_stripe_secret_key"])],
@@ -247,6 +270,8 @@ class RuntimeMigrationDb {
     ],
     ["mission_tasks", new Set(["id", "user_id", "title", "status", "priority"])],
     ["mailbox_messages", new Set(["id", "mailbox_id", "message_kind"])],
+    ["subscribers", new Set(["id", "site_id", "email"])],
+    ["bookings", new Set(["id", "site_id", "guest_email"])],
     [
       "social_packages",
       new Set([
@@ -290,6 +315,16 @@ class RuntimeMigrationDb {
     if (options.hasAiUsageEvents) this.tables.add("ai_usage_events");
     if (options.hasFinancialEntryProjectId) {
       this.columns.get("financial_entries")?.add("project_id");
+    }
+    if (options.hasSitePagesAndCommerce) {
+      this.tables.add("site_pages");
+      this.tables.add("site_page_revisions");
+      this.tables.add("commerce_orders");
+      for (const tableName of ["subscribers", "bookings"]) {
+        this.columns.get(tableName)?.add("page_id");
+        this.columns.get(tableName)?.add("action_id");
+        this.columns.get(tableName)?.add("campaign");
+      }
     }
     this.addFinancialProjectColumnBeforeAlterError = Boolean(
       options.addFinancialProjectColumnBeforeAlterError,
@@ -412,6 +447,20 @@ class RuntimeMigrationStatement {
         throw new Error("duplicate column name: agent_idempotency_key");
       }
       columns?.add("agent_idempotency_key");
+      return { success: true };
+    }
+    if (
+      this.sql.includes("ALTER TABLE subscribers") ||
+      this.sql.includes("ALTER TABLE bookings")
+    ) {
+      const match = this.sql.match(/ALTER TABLE (\w+) ADD COLUMN (\w+)/);
+      if (!match) throw new Error("invalid site commerce alter statement");
+      const [, tableName, columnName] = match;
+      const columns = this.db.columns.get(tableName || "");
+      if (columns?.has(columnName || "")) {
+        throw new Error(`duplicate column name: ${columnName}`);
+      }
+      columns?.add(columnName || "");
       return { success: true };
     }
     if (this.sql.includes("ALTER TABLE managed_runtime_control_requests")) {

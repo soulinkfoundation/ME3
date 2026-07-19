@@ -180,11 +180,13 @@ onBeforeUnmount(() => window.removeEventListener("message", handleMessage));
   <div class="generated-site-preview" :class="{ compact }">
     <span class="sr-only">Preview of {{ wizard.profile.name || "your site" }}</span>
     <iframe
+      v-if="previewHtml"
       ref="frame"
       :srcdoc="previewHtml"
       sandbox="allow-scripts"
       title="Generated site preview"
     />
+    <div v-else class="preview-loading" role="status">Generating preview…</div>
     <button
       v-if="editableFooter"
       type="button"
@@ -219,6 +221,17 @@ iframe {
   height: 100%;
   border: 0;
   background: #fff;
+}
+
+.preview-loading {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  box-sizing: border-box;
+  padding: 20px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  text-align: center;
 }
 
 .edit-footer-button {

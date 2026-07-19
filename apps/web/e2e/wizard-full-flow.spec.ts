@@ -84,8 +84,13 @@ test.describe("Wizard Full Flow", () => {
     const totalSteps = await page.locator(".step-total").textContent();
     expect(currentStep).toBe(totalSteps);
 
-    // Verify preview is visible (use first() to handle multiple matches)
+    // Verify the generated document actually loaded inside the fresh final-step iframe.
     await expect(page.locator(".publish-preview")).toBeVisible();
+    await expect(
+      page
+        .frameLocator(".publish-preview iframe")
+        .getByRole("heading", { name: "John Doe" }),
+    ).toBeVisible();
   });
 
   test("should update preview in real-time", async ({ page }) => {

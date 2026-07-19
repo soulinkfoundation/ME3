@@ -62,6 +62,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     apply: applySocialContentPackagesMigration,
   },
   {
+    id: "0017_site_pages_and_commerce",
+    checksum: "2026-07-19-site-pages-and-commerce-v1",
+    apply: applySitePagesAndCommerceMigration,
+  },
+  {
     id: "0018_social_publication_idempotency",
     checksum: "2026-07-10-social-publication-idempotency-v1",
     apply: applySocialPublicationIdempotencyMigration,
@@ -615,6 +620,98 @@ async function applySocialContentPackagesMigration(db: D1Database): Promise<void
     .prepare(
       `CREATE INDEX IF NOT EXISTS idx_social_variants_target_account
        ON social_variants(target_account_id, approval_status, scheduled_for)`,
+    )
+    .run();
+}
+
+async function applySitePagesAndCommerceMigration(db: D1Database): Promise<void> {
+  if (!(await tableExists(db, "sites"))) {
+    throw new Error("Cannot apply 0017_site_pages_and_commerce: sites is missing");
+  }
+
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS site_pages (
+        id TEXT PRIMARY KEY,
+        site_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'landing_page'
+          CHECK (kind IN ('landing_page', 'standard')),
+        title TEXT NOT NULL,
+        template_id TEXT,
+        draft_json TEXT NOT NULL,
+        published_revision_id TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        published_at TEXT,
+        UNIQUE (site_id, slug),
+        FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS site_page_revisions (
+        id TEXT PRIMARY KEY,
+        page_id TEXT NOT NULL,
+        document_json TEXT NOT NULL,
+        rendered_html TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (page_id) REFERENCES site_pages(id) ON DELETE CASCADE
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_site_pages_site_updated
+       ON site_pages(site_id, updated_at DESC)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_site_page_revisions_page_created
+       ON site_page_revisions(page_id, created_at DESC)`,
+    )
+    .run();
+
+  for (const tableName of ["subscribers", "bookings"]) {
+    await addColumnIfMissing(db, tableName, "page_id", "TEXT");
+    await addColumnIfMissing(db, tableName, "action_id", "TEXT");
+    await addColumnIfMissing(db, tableName, "campaign", "TEXT");
+  }
+
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS commerce_orders (
+        id TEXT PRIMARY KEY,
+        site_id TEXT NOT NULL,
+        page_id TEXT,
+        action_id TEXT,
+        campaign TEXT,
+        product_slug TEXT NOT NULL,
+        product_title TEXT NOT NULL,
+        buyer_name TEXT NOT NULL,
+        buyer_email TEXT NOT NULL,
+        buyer_note TEXT,
+        amount_paid INTEGER,
+        currency TEXT,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK (status IN ('pending', 'paid', 'failed', 'refunded')),
+        provider TEXT NOT NULL DEFAULT 'stripe_direct'
+          CHECK (provider IN ('stripe_direct', 'me3_cloud')),
+        checkout_session_id TEXT UNIQUE,
+        payment_intent_id TEXT UNIQUE,
+        paid_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_commerce_orders_site_created
+       ON commerce_orders(site_id, created_at DESC)`,
     )
     .run();
 }

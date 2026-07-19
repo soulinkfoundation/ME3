@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   generateUnsubscribeToken,
   hashSubscriberIdentifier,
+  isMissingSitePagesTableError,
   listBookingEnabledSiteIds,
   verifyUnsubscribeToken,
 } from "./sites";
@@ -43,6 +44,22 @@ describe("site booking capabilities", () => {
 
     await expect(listBookingEnabledSiteIds(env, "owner")).resolves.toEqual(
       new Set(["active-public", "active-source"]),
+    );
+  });
+});
+
+describe("site pages compatibility", () => {
+  it("recognizes Cloudflare D1's missing-table error format", () => {
+    expect(
+      isMissingSitePagesTableError(
+        new Error("D1_ERROR: no such table: site_pages: SQLITE_ERROR"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not hide unrelated database errors", () => {
+    expect(isMissingSitePagesTableError(new Error("D1_ERROR: database is locked"))).toBe(
+      false,
     );
   });
 });

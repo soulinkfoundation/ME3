@@ -17,6 +17,9 @@ describe("GeneratedSitePreview", () => {
     wizard.profile.bio = "An unsaved generated preview.";
 
     const wrapper = mount(GeneratedSitePreview);
+    expect(wrapper.find("iframe").exists()).toBe(false);
+    expect(wrapper.get('[role="status"]').text()).toBe("Generating preview…");
+
     await flushPromises();
 
     const frame = wrapper.get("iframe");

@@ -920,7 +920,7 @@ export async function pruneGeneratedPublicFiles(
       .all<{ slug: string }>();
     for (const page of pages.results || []) keep.add(`${page.slug}/index.html`);
   } catch (error) {
-    if (!/site_pages.*(?:no such table|does not exist)/i.test(String(error))) throw error;
+    if (!isMissingSitePagesTableError(error)) throw error;
   }
   const files = await listSiteFiles(env, siteId, "public/");
   for (const file of files) {
@@ -932,6 +932,11 @@ export async function pruneGeneratedPublicFiles(
     if (!/\.(?:html|json)$/i.test(publicName)) continue;
     await deleteSiteFile(env, siteId, file.path);
   }
+}
+
+export function isMissingSitePagesTableError(error: unknown): boolean {
+  const message = String(error);
+  return /(?:no such table:\s*site_pages\b|site_pages\b.*does not exist)/i.test(message);
 }
 
 export function normalizeProductPriceCents(value: unknown): number {

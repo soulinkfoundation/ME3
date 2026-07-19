@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "0.1.104",
+  "version": "0.1.105",
   "releaseChannel": "stable",
   "updateManifestUrl": "https://raw.githubusercontent.com/soulinkfoundation/ME3/main/updates/stable.json",
-  "releaseNotesUrl": "https://github.com/soulinkfoundation/ME3/releases/tag/v0.1.104"
+  "releaseNotesUrl": "https://github.com/soulinkfoundation/ME3/releases/tag/v0.1.105"
 }
