@@ -292,7 +292,9 @@ export async function sendManagedEmailThroughGateway(
   try {
     response = await fetch(new URL(path, config.origin), {
       method: "POST",
-      redirect: "error",
+      // Cloudflare Workers accepts only "follow" or "manual". Never follow a
+      // redirect with the signed Core token or owner-approved message body.
+      redirect: "manual",
       headers: {
         "Content-Type": "application/json",
         "X-ME3-Core-Install-ID": config.coreInstallId,
@@ -307,6 +309,16 @@ export async function sendManagedEmailThroughGateway(
       502,
       "gateway_unreachable",
       false,
+    );
+  }
+
+  if (response.status >= 300 && response.status < 400) {
+    throw new ManagedEmailGatewayError(
+      "Managed email gateway returned an unexpected redirect",
+      502,
+      "gateway_redirect",
+      true,
+      { status: response.status },
     );
   }
 

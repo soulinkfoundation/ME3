@@ -255,7 +255,7 @@ describe("managed email outbound provider", () => {
       `https://mail.me3.app/v1/installs/${encodeURIComponent(CORE_INSTALL_ID)}/email/send`,
     );
     const headers = new Headers(init.headers);
-    expect(init.redirect).toBe("error");
+    expect(init.redirect).toBe("manual");
     expect(headers.get("X-ME3-Core-Install-ID")).toBe(CORE_INSTALL_ID);
     expect(headers.get("X-ME3-Core-Update-Token")).toBe("core-update-token");
     expect(headers.get("Idempotency-Key")).toBe(result.auditId);
@@ -307,6 +307,38 @@ describe("managed email outbound provider", () => {
       }),
     ).rejects.toMatchObject({ status: 503 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects gateway redirects without following signed message content", async () => {
+    const db = new ManagedEmailTestDb();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 302,
+          headers: { Location: "https://redirect.example/send" },
+        }),
+      ),
+    );
+
+    await expect(
+      sendEmailWithProvider(managedEnv(db), "owner", {
+        purpose: "reply",
+        mailboxId: "mailbox-1",
+        mailboxMessageId: "draft-redirect",
+        toAddress: "client@example.com",
+        subject: "Do not redirect",
+        textBody: "Keep this message on the configured origin.",
+        approvedByUserId: "owner",
+      }),
+    ).rejects.toMatchObject({ status: 502 });
+
+    expect(db.sendAudits).toHaveLength(1);
+    expect(db.sendAudits[0]).toMatchObject({
+      provider_id: "managed_gateway",
+      provider_status: "gateway_redirect",
+      status: "failed",
+    });
   });
 
   it("reuses the durable pending audit id after a lost gateway response", async () => {
