@@ -127,7 +127,7 @@ export async function decommissionManagedInstall(
   await reportStage("deleting_queues");
   await deleteIfPresent(
     api,
-    `/accounts/${input.accountId}/workers/scripts/${contract.workerName}`,
+    `/accounts/${input.accountId}/workers/services/${contract.workerName}?force=false`,
   );
   await assertMissing(
     api,

@@ -60,7 +60,7 @@ test("cleans an authorized never-public provision and verifies exact absence", a
     ({ method, resource }, index) =>
       index >= runStart &&
       method === "DELETE" &&
-      resource === `/workers/scripts/${WORKER_NAME}`,
+      resource === `/workers/services/${WORKER_NAME}`,
   );
   assert.ok(r2DeleteIndex < tombstoneCallIndex);
   assert.ok(tombstoneCallIndex < workerDeleteIndex);
@@ -339,11 +339,18 @@ function createFixture() {
         ),
       );
     }
-    if (resource === `/workers/scripts/${WORKER_NAME}`) {
-      if (method === "DELETE") {
-        state.worker = false;
-        state.producerBindings.clear();
+    if (resource === `/workers/services/${WORKER_NAME}` && method === "DELETE") {
+      assert.equal(parsed.searchParams.get("force"), "false");
+      state.worker = false;
+      state.producerBindings.clear();
+      for (const queue of state.queues.values()) {
+        queue.consumers = queue.consumers.filter(
+          (consumer) => consumer.script_name !== WORKER_NAME,
+        );
       }
+      return success(null);
+    }
+    if (resource === `/workers/scripts/${WORKER_NAME}`) {
       return state.worker
         ? new Response("worker module", { status: 200 })
         : missing();

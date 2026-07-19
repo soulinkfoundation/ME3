@@ -78,7 +78,7 @@ test("removes Worker producer bindings before queue deletion and retries safely 
     ({ method, path }, index) =>
       index >= runStart &&
       method === "DELETE" &&
-      path.endsWith(`/workers/scripts/${WORKER_NAME}`),
+      path.endsWith(`/workers/services/${WORKER_NAME}?force=false`),
   );
   assert.ok(r2DeleteIndex < tombstoneCallIndex);
   assert.ok(tombstoneCallIndex < workerDeleteIndex);
@@ -510,7 +510,7 @@ test("retains D1 proof when an acknowledged Worker deletion is not observed as a
     const parsed = new URL(url);
     if (
       (init.method || "GET") === "DELETE" &&
-      parsed.pathname.endsWith(`/workers/scripts/${WORKER_NAME}`)
+      parsed.pathname.endsWith(`/workers/services/${WORKER_NAME}`)
     ) {
       return success(null);
     }
@@ -634,7 +634,7 @@ test("retries safely after every destructive stage has already taken effect", as
           (interruptedAfter === "r2" && method === "DELETE" && path.includes("/r2/buckets/")) ||
           (interruptedAfter === "consumer" && method === "DELETE" && path.includes("/consumers/")) ||
           (interruptedAfter === "queue" && method === "DELETE" && /\/queues\/[^/]+$/.test(path)) ||
-          (interruptedAfter === "worker" && method === "DELETE" && path.includes("/workers/scripts/")) ||
+          (interruptedAfter === "worker" && method === "DELETE" && path.includes("/workers/services/")) ||
           (interruptedAfter === "d1" && method === "DELETE" && path.includes("/d1/database/"));
         if (matched && !injected) {
           injected = true;
@@ -867,13 +867,20 @@ function createCloudflareFixture() {
       }
       return success({ bindings: structuredClone(state.workerBindings) });
     }
-    if (resource === `/workers/scripts/${WORKER_NAME}`) {
-      if (method === "DELETE") {
-        state.worker = false;
-        if (!state.retainProducerBindingOnWorkerDelete) {
-          state.producerBindings.clear();
-        }
+    if (resource === `/workers/services/${WORKER_NAME}` && method === "DELETE") {
+      assert.equal(parsed.searchParams.get("force"), "false");
+      state.worker = false;
+      if (!state.retainProducerBindingOnWorkerDelete) {
+        state.producerBindings.clear();
       }
+      for (const queue of state.queues.values()) {
+        queue.consumers = queue.consumers.filter(
+          (consumer) => !isManagedFixtureConsumer(consumer),
+        );
+      }
+      return success(null);
+    }
+    if (resource === `/workers/scripts/${WORKER_NAME}`) {
       return state.worker
         ? new Response("worker module", { status: 200, headers: { "Content-Type": "text/plain" } })
         : missing();
@@ -881,6 +888,13 @@ function createCloudflareFixture() {
     throw new Error(`unexpected Cloudflare fixture request: ${method} ${resource}`);
   };
   return { state, calls, request };
+}
+
+function isManagedFixtureConsumer(consumer) {
+  return (
+    consumer?.script_name === WORKER_NAME &&
+    (consumer?.type === undefined || consumer?.type === "worker")
+  );
 }
 
 function queueById(state, id) {
