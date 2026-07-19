@@ -5,6 +5,7 @@ import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
   clearManagedWorkerBindings,
+  deleteManagedWorkerService,
   deployDurableObjectTombstone,
   orderedDedicatedQueueNames,
   waitForManagedQueueBindingsDetached,
@@ -109,9 +110,15 @@ export async function cleanupFailedManagedProvision(
   );
 
   await reportStage("deleting_queues");
-  await deleteIfPresent(
+  await deleteManagedWorkerService(
     api,
-    `/accounts/${input.accountId}/workers/services/${contract.workerName}?force=false`,
+    input.accountId,
+    contract.workerName,
+    dedicatedQueueNames,
+    {
+      operationId: contract.operationId,
+      deployTombstone,
+    },
   );
   await assertMissing(
     api,
@@ -265,13 +272,7 @@ async function inspectResources(api, accountId, contract) {
     const queue = await findQueue(api, accountId, queueName);
     if (!queue) continue;
     const consumers = await listQueueConsumers(api, accountId, queue);
-    if (
-      consumers.some(
-        (consumer) =>
-          (consumer?.type !== undefined && consumer?.type !== "worker") ||
-          consumer?.script_name !== contract.workerName,
-      )
-    ) {
+    if (consumers.some((consumer) => !isWorkerConsumer(consumer, contract.workerName))) {
       throw new Error(`failed provision queue consumer identity does not match: ${queueName}`);
     }
     queues.push({ ...queue, consumers });
@@ -364,24 +365,40 @@ function createCloudflareApi(accountId, apiToken, request) {
   if (!/^[0-9a-f]{32}$/.test(accountId || "") || !apiToken) {
     throw new Error("Cloudflare failed provision cleanup credentials are invalid");
   }
-  return async (path, init = {}, { missingOk = false } = {}) => {
+  return async (
+    path,
+    init = {},
+    { missingOk = false, rawResponse = false } = {},
+  ) => {
     const response = await request(`${API_ROOT}${path}`, {
       ...init,
       headers: { Authorization: `Bearer ${apiToken}`, ...(init.headers || {}) },
     });
     if (response.status === 404 && missingOk) return null;
+    if (response.ok && rawResponse) return response;
     let body = null;
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("json")) body = await response.json();
     if (!response.ok || body?.success === false) {
       const details = summarizeCloudflareApiErrors(body);
-      throw new Error(
+      const error = new Error(
         `Cloudflare failed provision cleanup failed with status ${response.status}${details}`,
       );
+      error.cloudflareStatus = response.status;
+      error.cloudflareErrorCodes = cloudflareApiErrorCodes(body);
+      throw error;
     }
     if (!body) return { present: true };
     return Object.hasOwn(body, "result") ? body.result : body;
   };
+}
+
+function cloudflareApiErrorCodes(body) {
+  return Array.isArray(body?.errors)
+    ? body.errors
+        .map((error) => Number(error?.code))
+        .filter((code) => Number.isSafeInteger(code))
+    : [];
 }
 
 function summarizeCloudflareApiErrors(body) {
@@ -439,10 +456,44 @@ async function listAllQueues(api, accountId) {
 }
 
 function isWorkerConsumer(consumer, workerName) {
+  return queueWorkerConsumerName(consumer) === workerName;
+}
+
+function queueWorkerConsumerName(consumer) {
+  if (
+    !consumer ||
+    typeof consumer !== "object" ||
+    (consumer.type !== undefined && consumer.type !== "worker")
+  ) {
+    return null;
+  }
+  const names = ["script", "service", "script_name"]
+    .filter((key) => Object.hasOwn(consumer, key))
+    .map((key) => consumer[key]);
   return (
-    consumer?.script_name === workerName &&
-    (consumer?.type === undefined || consumer?.type === "worker")
-  );
+    names.length > 0 &&
+    names.every((name) => typeof name === "string" && name.length > 0) &&
+    new Set(names).size === 1
+  )
+    ? names[0]
+    : null;
+}
+
+function isRecognizedQueueConsumer(consumer) {
+  if (
+    !consumer ||
+    typeof consumer !== "object" ||
+    typeof consumer.consumer_id !== "string" ||
+    consumer.consumer_id.length === 0
+  ) {
+    return false;
+  }
+  if (consumer.type === "http_pull") {
+    return ["script", "service", "script_name"].every(
+      (key) => !Object.hasOwn(consumer, key),
+    );
+  }
+  return queueWorkerConsumerName(consumer) !== null;
 }
 
 async function listQueueConsumers(api, accountId, queue) {
@@ -458,6 +509,9 @@ async function listQueueConsumers(api, accountId, queue) {
     consumers.length !== expectedCount
   ) {
     throw new Error("failed provision queue consumer listing is incomplete");
+  }
+  if (consumers.some((consumer) => !isRecognizedQueueConsumer(consumer))) {
+    throw new Error("failed provision queue consumer identity evidence is incomplete");
   }
   return consumers;
 }

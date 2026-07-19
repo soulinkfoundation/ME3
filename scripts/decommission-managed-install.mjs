@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,17 @@ export const MANAGED_DECOMMISSION_TOMBSTONE_SOURCE = [
   "};",
   "",
 ].join("\n");
+const MANAGED_DECOMMISSION_TOMBSTONE_SHA256 = createHash("sha256")
+  .update(normalizeWorkerSource(MANAGED_DECOMMISSION_TOMBSTONE_SOURCE), "utf8")
+  .digest("hex");
+
+export function managedDecommissionTombstoneTag(operationId) {
+  return `managed-delete-${operationId}`;
+}
+
+export function managedDecommissionTombstoneMessage(operationId) {
+  return `me3-delete:${operationId}:sha256:${MANAGED_DECOMMISSION_TOMBSTONE_SHA256}`;
+}
 
 export async function decommissionManagedInstall(
   input,
@@ -124,9 +136,15 @@ export async function decommissionManagedInstall(
   // binding. Enter the queue-teardown stage, normal-delete the proven inert
   // Worker without force, and keep D1 as the retry anchor.
   await reportStage("deleting_queues");
-  await deleteIfPresent(
+  await deleteManagedWorkerService(
     api,
-    `/accounts/${input.accountId}/workers/services/${contract.workerName}?force=false`,
+    input.accountId,
+    contract.workerName,
+    dedicatedQueueNames,
+    {
+      operationId: contract.operationId,
+      deployTombstone,
+    },
   );
   await assertMissing(
     api,
@@ -399,20 +417,32 @@ function createCloudflareApi({ accountId, apiToken }, request) {
       headers: { Authorization: `Bearer ${apiToken}`, ...(init.headers || {}) },
     });
     if (response.status === 404 && options.missingOk) return null;
+    if (response.ok && options.rawResponse) return response;
     let body = null;
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("json")) body = await response.json();
     if (!response.ok || (body && body.success === false)) {
       const details = summarizeCloudflareApiErrors(body);
-      throw new Error(
+      const error = new Error(
         `Cloudflare resource operation failed with status ${response.status}${details}`,
       );
+      error.cloudflareStatus = response.status;
+      error.cloudflareErrorCodes = cloudflareApiErrorCodes(body);
+      throw error;
     }
     if (!body) return { present: true };
     return Object.hasOwn(body, "result") ? body.result : body;
   };
   api.accountId = accountId;
   return api;
+}
+
+function cloudflareApiErrorCodes(body) {
+  return Array.isArray(body?.errors)
+    ? body.errors
+        .map((error) => Number(error?.code))
+        .filter((code) => Number.isSafeInteger(code))
+    : [];
 }
 
 function summarizeCloudflareApiErrors(body) {
@@ -636,6 +666,381 @@ export async function clearManagedWorkerBindings(api, accountId, workerName) {
   }
 }
 
+export async function deleteManagedWorkerService(
+  api,
+  accountId,
+  workerName,
+  dedicatedQueueNames,
+  { operationId, deployTombstone = deployDurableObjectTombstone } = {},
+) {
+  const servicePath = `/accounts/${accountId}/workers/services/${workerName}`;
+  try {
+    await deleteIfPresent(api, `${servicePath}?force=false`);
+    return;
+  } catch (error) {
+    if (
+      error?.cloudflareStatus !== 403 ||
+      !Array.isArray(error?.cloudflareErrorCodes) ||
+      error.cloudflareErrorCodes.length !== 1 ||
+      error.cloudflareErrorCodes[0] !== 10064
+    ) {
+      throw error;
+    }
+  }
+
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      operationId || "",
+    ) ||
+    typeof deployTombstone !== "function"
+  ) {
+    throw new Error("guarded Worker force-delete tombstone configuration is invalid");
+  }
+
+  // A normal delete can fail against a stale Queue association even after the
+  // visible consumer was removed. Before considering force, deploy a fresh,
+  // operation-tagged inert version so the exact immutable version and source
+  // can be pinned on both sides of the remaining safety checks.
+  await deployTombstone({
+    workerName,
+    operationId,
+    deleteDurableObject: false,
+  });
+  await clearManagedWorkerBindings(api, accountId, workerName);
+  const pinnedTombstone = await readManagedTombstoneIdentity(
+    api,
+    accountId,
+    workerName,
+    operationId,
+  );
+  await assertGuardedWorkerForceDeleteSafe(
+    api,
+    accountId,
+    workerName,
+    dedicatedQueueNames,
+  );
+  const confirmedTombstone = await readManagedTombstoneIdentity(
+    api,
+    accountId,
+    workerName,
+    operationId,
+  );
+  if (JSON.stringify(confirmedTombstone) !== JSON.stringify(pinnedTombstone)) {
+    throw new Error("guarded Worker force-delete tombstone identity changed during preflight");
+  }
+  await deleteIfPresent(api, `${servicePath}?force=true`);
+}
+
+async function readManagedTombstoneIdentity(
+  api,
+  accountId,
+  workerName,
+  operationId,
+) {
+  const deploymentResult = await api(
+    `/accounts/${accountId}/workers/scripts/${workerName}/deployments`,
+  );
+  const deployments = deploymentResult?.deployments;
+  const deployment = Array.isArray(deployments) ? deployments[0] : null;
+  if (
+    !deployment ||
+    typeof deployment.id !== "string" ||
+    !Array.isArray(deployment.versions) ||
+    deployment.versions.length !== 1 ||
+    typeof deployment.versions[0]?.version_id !== "string" ||
+    Number(deployment.versions[0]?.percentage) !== 100
+  ) {
+    throw new Error("guarded Worker force-delete deployment evidence is incomplete");
+  }
+
+  const versionId = deployment.versions[0].version_id;
+  const version = await api(
+    `/accounts/${accountId}/workers/scripts/${workerName}/versions/${versionId}`,
+  );
+  if (
+    version?.id !== versionId ||
+    version?.annotations?.["workers/tag"] !==
+      managedDecommissionTombstoneTag(operationId) ||
+    version?.annotations?.["workers/message"] !==
+      managedDecommissionTombstoneMessage(operationId) ||
+    !Array.isArray(version?.resources?.bindings) ||
+    version.resources.bindings.some((binding) => !isRetainedTombstoneBinding(binding))
+  ) {
+    throw new Error("guarded Worker force-delete requires the exact tagged tombstone version");
+  }
+
+  const content = await api(
+    `/accounts/${accountId}/workers/scripts/${workerName}/content/v2?version=${encodeURIComponent(versionId)}`,
+    {},
+    { rawResponse: true },
+  );
+  const source = await readSingleWorkerEntrypoint(content);
+  const sourceSha256 = createHash("sha256")
+    .update(normalizeWorkerSource(source), "utf8")
+    .digest("hex");
+  if (sourceSha256 !== MANAGED_DECOMMISSION_TOMBSTONE_SHA256) {
+    throw new Error("guarded Worker force-delete source is not the exact inert tombstone");
+  }
+
+  return {
+    deploymentId: deployment.id,
+    versionId,
+    sourceSha256,
+  };
+}
+
+async function readSingleWorkerEntrypoint(response) {
+  if (!(response instanceof Response) || !response.ok) {
+    throw new Error("guarded Worker force-delete source evidence is incomplete");
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.toLowerCase().startsWith("multipart/form-data")) {
+    const entrypoint = response.headers.get("cf-entrypoint");
+    const form = await response.formData();
+    const executableParts = [...form.entries()].filter(
+      ([, part]) =>
+        typeof part !== "string" && part.type !== "application/source-map",
+    );
+    const entrypointPart = entrypoint ? form.get(entrypoint) : null;
+    if (
+      !entrypoint ||
+      typeof entrypointPart === "string" ||
+      !entrypointPart ||
+      executableParts.length !== 1 ||
+      executableParts[0][0] !== entrypoint
+    ) {
+      throw new Error("guarded Worker force-delete source contains unexpected modules");
+    }
+    return entrypointPart.text();
+  }
+  if (!/(?:java|ecma)script/i.test(contentType)) {
+    throw new Error("guarded Worker force-delete source content type is invalid");
+  }
+  return response.text();
+}
+
+function normalizeWorkerSource(source) {
+  if (typeof source !== "string") return "";
+  return `${source.replace(/\r\n?/g, "\n").replace(/\n?$/, "")}\n`;
+}
+
+async function assertGuardedWorkerForceDeleteSafe(
+  api,
+  accountId,
+  workerName,
+  dedicatedQueueNames,
+) {
+  if (
+    typeof api !== "function" ||
+    !/^[0-9a-f]{32}$/.test(accountId || "") ||
+    !workerName ||
+    !Array.isArray(dedicatedQueueNames) ||
+    dedicatedQueueNames.some(
+      (queueName) =>
+        typeof queueName !== "string" || !queueName.startsWith(`${workerName}-`),
+    )
+  ) {
+    throw new Error("guarded Worker force-delete configuration is invalid");
+  }
+
+  const settings = await api(
+    `/accounts/${accountId}/workers/scripts/${workerName}/settings`,
+    {},
+    { missingOk: true },
+  );
+  if (
+    !settings ||
+    !Array.isArray(settings.bindings) ||
+    settings.bindings.some((binding) => !isRetainedTombstoneBinding(binding))
+  ) {
+    throw new Error("guarded Worker force-delete requires a binding-free tombstone");
+  }
+
+  const allowedProducerQueues = new Set(dedicatedQueueNames);
+  const queues = await listAllQueues(api, accountId);
+  const eventSubscriptions = await listQueueEventSubscriptions(api, accountId);
+  for (const queue of queues) {
+    const consumers = await listQueueConsumers(api, accountId, queue);
+    if (consumers.some((consumer) => !isRecognizedQueueConsumer(consumer))) {
+      throw new Error("guarded Worker force-delete Queue consumer evidence is incomplete");
+    }
+    if (consumers.some((consumer) => isWorkerConsumer(consumer, workerName))) {
+      throw new Error("guarded Worker force-delete requires every Queue consumer detached");
+    }
+
+    const producerCount = Number(queue.producers_total_count);
+    if (
+      !Array.isArray(queue.producers) ||
+      !Number.isSafeInteger(producerCount) ||
+      producerCount < 0 ||
+      queue.producers.length !== producerCount ||
+      queue.producers.some((producer) => !isRecognizedQueueProducer(producer))
+    ) {
+      throw new Error("guarded Worker force-delete Queue producer evidence is incomplete");
+    }
+    if (
+      queue.producers.some(
+        (producer) =>
+          isWorkerQueueProducer(producer) &&
+          producer.script === workerName &&
+          !allowedProducerQueues.has(queue.queue_name),
+      )
+    ) {
+      throw new Error("guarded Worker force-delete found a producer outside owned Queues");
+    }
+
+    if (allowedProducerQueues.has(queue.queue_name)) {
+      if (
+        eventSubscriptions.some(
+          (subscription) => subscription.destination.queue_id === queue.queue_id,
+        )
+      ) {
+        throw new Error("guarded Worker force-delete found an event subscription");
+      }
+    }
+  }
+
+  const namespaces = await listDurableObjectNamespaces(api, accountId);
+  if (namespaces.some((namespace) => namespace?.script === workerName)) {
+    throw new Error("guarded Worker force-delete requires every Durable Object namespace absent");
+  }
+
+  const references = await api(
+    `/accounts/${accountId}/workers/scripts/${workerName}/references`,
+  );
+  const referenceKeys = references && typeof references === "object"
+    ? Object.keys(references)
+    : [];
+  const serviceKeys = references?.services && typeof references.services === "object"
+    ? Object.keys(references.services)
+    : [];
+  const incomingServices = references?.services?.incoming;
+  const outgoingServices = references?.services?.outgoing;
+  const durableObjectReferences = references?.durable_objects;
+  const dispatchOutbounds = references?.dispatch_outbounds;
+  if (
+    !references ||
+    referenceKeys.some(
+      (key) => !["services", "durable_objects", "dispatch_outbounds"].includes(key),
+    ) ||
+    !referenceKeys.includes("services") ||
+    !referenceKeys.includes("durable_objects") ||
+    !referenceKeys.includes("dispatch_outbounds") ||
+    serviceKeys.some(
+      (key) => !["incoming", "outgoing", "pages_function"].includes(key),
+    ) ||
+    !serviceKeys.includes("incoming") ||
+    !serviceKeys.includes("outgoing") ||
+    !serviceKeys.includes("pages_function") ||
+    !Array.isArray(incomingServices) ||
+    !Array.isArray(outgoingServices) ||
+    !Array.isArray(durableObjectReferences) ||
+    !Array.isArray(dispatchOutbounds) ||
+    references.services.pages_function !== false ||
+    durableObjectReferences.some(
+      (reference) => typeof reference?.service !== "string",
+    )
+  ) {
+    throw new Error("guarded Worker force-delete dependency evidence is incomplete");
+  }
+  if (
+    incomingServices.length > 0 ||
+    outgoingServices.length > 0 ||
+    durableObjectReferences.some((reference) => reference?.service !== workerName) ||
+    dispatchOutbounds.length > 0
+  ) {
+    throw new Error("guarded Worker force-delete found an external dependency");
+  }
+
+  const tailProducers = await api(
+    `/accounts/${accountId}/workers/tails/by-consumer/${workerName}`,
+  );
+  if (!Array.isArray(tailProducers)) {
+    throw new Error("guarded Worker force-delete tail evidence is incomplete");
+  }
+  if (tailProducers.length > 0) {
+    throw new Error("guarded Worker force-delete found a tail dependency");
+  }
+}
+
+function isWorkerQueueProducer(producer) {
+  const hasScript = typeof producer?.script === "string" && producer.script.length > 0;
+  const hasBucket =
+    typeof producer?.bucket_name === "string" && producer.bucket_name.length > 0;
+  return (
+    producer &&
+    typeof producer === "object" &&
+    hasScript &&
+    !hasBucket &&
+    (producer.type === undefined || producer.type === "worker") &&
+    Object.keys(producer).every((key) =>
+      ["script", "type"].includes(key),
+    )
+  );
+}
+
+function isRecognizedQueueProducer(producer) {
+  if (isWorkerQueueProducer(producer)) return true;
+  const hasScript = typeof producer?.script === "string" && producer.script.length > 0;
+  const hasBucket =
+    typeof producer?.bucket_name === "string" && producer.bucket_name.length > 0;
+  return (
+    producer &&
+    typeof producer === "object" &&
+    hasBucket &&
+    !hasScript &&
+    (producer.type === undefined || producer.type === "r2_bucket") &&
+    Object.keys(producer).every((key) =>
+      ["bucket_name", "type"].includes(key),
+    )
+  );
+}
+
+function isRecognizedQueueConsumer(consumer) {
+  if (
+    !consumer ||
+    typeof consumer !== "object" ||
+    typeof consumer.consumer_id !== "string" ||
+    consumer.consumer_id.length === 0
+  ) {
+    return false;
+  }
+  const identityKeys = ["script", "service", "script_name"];
+  if (consumer.type === "http_pull") {
+    return identityKeys.every((key) => !Object.hasOwn(consumer, key));
+  }
+  return queueWorkerConsumerName(consumer) !== null;
+}
+
+async function listQueueEventSubscriptions(api, accountId) {
+  const subscriptions = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const query = new URLSearchParams({
+      page: String(page),
+      per_page: "100",
+    });
+    const result = await api(
+      `/accounts/${accountId}/event_subscriptions/subscriptions?${query}`,
+    );
+    if (!Array.isArray(result)) {
+      throw new Error("guarded Worker force-delete event subscription evidence is incomplete");
+    }
+    for (const subscription of result) {
+      if (
+        typeof subscription?.id !== "string" ||
+        subscription?.destination?.type !== "queues.queue" ||
+        typeof subscription.destination.queue_id !== "string" ||
+        subscription.destination.queue_id.length === 0
+      ) {
+        throw new Error("guarded Worker force-delete event subscription evidence is invalid");
+      }
+      subscriptions.push(subscription);
+    }
+    if (result.length < 100) return subscriptions;
+  }
+  throw new Error("guarded Worker force-delete event subscriptions exceeded the safe page limit");
+}
+
 async function hasManagedWorkerResourceBindings(api, accountId, workerName) {
   const settings = await api(
     `/accounts/${accountId}/workers/scripts/${workerName}/settings`,
@@ -680,14 +1085,34 @@ async function listQueueConsumers(api, accountId, queue) {
     const scope = LEGACY_SHARED_QUEUES.has(queue.queue_name) ? "shared" : "dedicated";
     throw new Error(`Cloudflare ${scope} queue consumer listing is incomplete`);
   }
+  if (consumers.some((consumer) => !isRecognizedQueueConsumer(consumer))) {
+    throw new Error("Cloudflare queue consumer identity evidence is incomplete");
+  }
   return consumers;
 }
 
 function isWorkerConsumer(consumer, workerName) {
+  return queueWorkerConsumerName(consumer) === workerName;
+}
+
+function queueWorkerConsumerName(consumer) {
+  if (
+    !consumer ||
+    typeof consumer !== "object" ||
+    (consumer.type !== undefined && consumer.type !== "worker")
+  ) {
+    return null;
+  }
+  const names = ["script", "service", "script_name"]
+    .filter((key) => Object.hasOwn(consumer, key))
+    .map((key) => consumer[key]);
   return (
-    consumer?.script_name === workerName &&
-    (consumer?.type === undefined || consumer?.type === "worker")
-  );
+    names.length > 0 &&
+    names.every((name) => typeof name === "string" && name.length > 0) &&
+    new Set(names).size === 1
+  )
+    ? names[0]
+    : null;
 }
 
 async function listDurableObjectNamespaces(api, accountId) {
@@ -736,7 +1161,7 @@ export function deployDurableObjectTombstone({
     writeFileSync(configPath, config.join("\n"), { mode: 0o600 });
     const result = spawnSync(
       "pnpm",
-      ["exec", "wrangler", "deploy", "--config", configPath, "--strict"],
+      managedDecommissionTombstoneDeployArgs(configPath, operationId),
       {
         encoding: "utf8",
         cwd: process.env.ME3_MANAGED_SOURCE_DIR || process.cwd(),
@@ -750,6 +1175,22 @@ export function deployDurableObjectTombstone({
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+export function managedDecommissionTombstoneDeployArgs(configPath, operationId) {
+  return [
+    "exec",
+    "wrangler",
+    "deploy",
+    "--config",
+    configPath,
+    "--strict",
+    "--no-bundle",
+    "--tag",
+    managedDecommissionTombstoneTag(operationId),
+    "--message",
+    managedDecommissionTombstoneMessage(operationId),
+  ];
 }
 
 function delay(milliseconds) {

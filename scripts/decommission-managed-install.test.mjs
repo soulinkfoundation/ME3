@@ -3,6 +3,9 @@ import test from "node:test";
 import {
   decommissionManagedInstall,
   MANAGED_DECOMMISSION_TOMBSTONE_SOURCE,
+  managedDecommissionTombstoneDeployArgs,
+  managedDecommissionTombstoneMessage,
+  managedDecommissionTombstoneTag,
   orderedDedicatedQueueNames,
 } from "./decommission-managed-install.mjs";
 
@@ -17,11 +20,31 @@ const MD5 = "b".repeat(32);
 const SHA256 = "c".repeat(64);
 const DEDICATED_QUEUE = `${WORKER_NAME}-assistant-job-events`;
 const SHARED_QUEUE = "me3-booking-reminders";
+const DEPLOYMENT_ID = "44444444-4444-4444-8444-444444444444";
+const VERSION_ID = "55555555-5555-4555-8555-555555555555";
 
 test("the transitional tombstone retries rather than acknowledges late Queue batches", () => {
   assert.match(MANAGED_DECOMMISSION_TOMBSTONE_SOURCE, /queue\(batch\)/);
   assert.match(MANAGED_DECOMMISSION_TOMBSTONE_SOURCE, /batch\.retryAll\(\)/);
   assert.doesNotMatch(MANAGED_DECOMMISSION_TOMBSTONE_SOURCE, /\back(?:All)?\s*\(/);
+  assert.ok(managedDecommissionTombstoneTag(OPERATION_ID).length <= 64);
+  assert.ok(managedDecommissionTombstoneMessage(OPERATION_ID).length <= 120);
+  assert.deepEqual(
+    managedDecommissionTombstoneDeployArgs("/tmp/wrangler.toml", OPERATION_ID),
+    [
+      "exec",
+      "wrangler",
+      "deploy",
+      "--config",
+      "/tmp/wrangler.toml",
+      "--strict",
+      "--no-bundle",
+      "--tag",
+      managedDecommissionTombstoneTag(OPERATION_ID),
+      "--message",
+      managedDecommissionTombstoneMessage(OPERATION_ID),
+    ],
+  );
 });
 
 test("removes Worker producer bindings before queue deletion and retries safely after Cloudflare 400", async () => {
@@ -84,7 +107,7 @@ test("removes Worker producer bindings before queue deletion and retries safely 
   assert.ok(tombstoneCallIndex < workerDeleteIndex);
   assert.ok(workerDeleteIndex < queueDeleteIndex);
   assert.deepEqual(
-    fake.state.queues.get(SHARED_QUEUE).consumers.map((consumer) => consumer.script_name),
+    fake.state.queues.get(SHARED_QUEUE).consumers.map(fixtureConsumerName),
     ["unrelated-worker"],
   );
   assert.equal(
@@ -139,7 +162,7 @@ test("decommissions without S3 evidence only after persisted purge proof and ver
   assert.equal(fake.state.r2, null);
   assert.equal(fake.state.queues.has(DEDICATED_QUEUE), false);
   assert.deepEqual(
-    fake.state.queues.get(SHARED_QUEUE).consumers.map((consumer) => consumer.script_name),
+    fake.state.queues.get(SHARED_QUEUE).consumers.map(fixtureConsumerName),
     ["unrelated-worker"],
   );
   const runtimeProofIndex = fake.calls.findIndex(({ path }) =>
@@ -160,6 +183,163 @@ test("decommissions without S3 evidence only after persisted purge proof and ver
   assert.ok(runtimeProofIndex < r2DeleteIndex);
   assert.ok(r2DeleteIndex < r2AbsenceIndex);
   assert.ok(r2AbsenceIndex < firstLaterDeleteIndex);
+});
+
+test("uses guarded force only for a stale Queue-consumer delete conflict", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.rejectNonForceWorkerDelete = true;
+  fake.state.retainProducerBindingOnPatch = true;
+
+  const result = await decommissionManagedInstall(waivedContract(), {
+    request: fake.request,
+    deployTombstone: async () => {
+      fake.state.namespaces = [];
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(fake.state.worker, false);
+  const workerDeletes = fake.calls.filter(
+    ({ method, path }) => method === "DELETE" && path.includes("/workers/services/"),
+  );
+  assert.deepEqual(
+    workerDeletes.map(({ path }) => new URL(`https://example.test${path}`).searchParams.get("force")),
+    ["false", "true"],
+  );
+});
+
+test("refuses guarded force when the Worker has an external dependency", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.rejectNonForceWorkerDelete = true;
+  fake.state.references.services.incoming.push({ script: "dependent-worker" });
+
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), {
+      request: fake.request,
+      deployTombstone: async () => {
+        fake.state.producerBindings.clear();
+        fake.state.namespaces = [];
+      },
+    }),
+    /guarded Worker force-delete found an external dependency/,
+  );
+  assert.equal(fake.state.worker, true);
+  assert.notEqual(fake.state.d1, null);
+  assert.equal(
+    fake.calls.some(
+      ({ method, path }) =>
+        method === "DELETE" &&
+        path.includes("/workers/services/") &&
+        new URL(`https://example.test${path}`).searchParams.get("force") === "true",
+    ),
+    false,
+  );
+});
+
+test("refuses guarded force when Cloudflare returns any error besides the exact stale-consumer code", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.rejectNonForceWorkerDelete = true;
+  fake.state.nonForceWorkerDeleteErrorCodes = [10064, 99999];
+  let tombstones = 0;
+
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), {
+      request: fake.request,
+      deployTombstone: async () => {
+        tombstones += 1;
+        fake.state.producerBindings.clear();
+        fake.state.namespaces = [];
+      },
+    }),
+    /Cloudflare resource operation failed with status 403/,
+  );
+  assert.equal(fake.state.worker, true);
+  assert.equal(tombstones, 1);
+  assert.equal(workerForceDeletes(fake).length, 0);
+});
+
+test("refuses guarded force when the pinned tombstone identity changes during preflight", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.rejectNonForceWorkerDelete = true;
+  fake.state.driftDeploymentOnSecondRead = true;
+
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), {
+      request: fake.request,
+      deployTombstone: async () => {
+        fake.state.producerBindings.clear();
+        fake.state.namespaces = [];
+      },
+    }),
+    /tombstone identity changed during preflight/,
+  );
+  assert.equal(fake.state.worker, true);
+  assert.equal(workerForceDeletes(fake).length, 0);
+});
+
+test("refuses guarded force when dependency evidence omits a known category", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.rejectNonForceWorkerDelete = true;
+  delete fake.state.references.services;
+
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), {
+      request: fake.request,
+      deployTombstone: async () => {
+        fake.state.producerBindings.clear();
+        fake.state.namespaces = [];
+      },
+    }),
+    /dependency evidence is incomplete/,
+  );
+  assert.equal(fake.state.worker, true);
+  assert.equal(workerForceDeletes(fake).length, 0);
+});
+
+test("refuses guarded force when an owned Queue has an event subscription", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.rejectNonForceWorkerDelete = true;
+  fake.state.eventSubscriptions = [
+    {
+      id: "event-subscription-id",
+      destination: { type: "queues.queue", queue_id: "dedicated-id" },
+    },
+  ];
+
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), {
+      request: fake.request,
+      deployTombstone: async () => {
+        fake.state.producerBindings.clear();
+        fake.state.namespaces = [];
+      },
+    }),
+    /found an event subscription/,
+  );
+  assert.equal(fake.state.worker, true);
+  assert.equal(workerForceDeletes(fake).length, 0);
+});
+
+test("ignores a validated event subscription for an unrelated Queue", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.rejectNonForceWorkerDelete = true;
+  fake.state.eventSubscriptions = [
+    {
+      id: "unrelated-event-subscription-id",
+      destination: { type: "queues.queue", queue_id: "shared-id" },
+    },
+  ];
+
+  const result = await decommissionManagedInstall(waivedContract(), {
+    request: fake.request,
+    deployTombstone: async () => {
+      fake.state.producerBindings.clear();
+      fake.state.namespaces = [];
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(fake.state.worker, false);
+  assert.equal(workerForceDeletes(fake).length, 1);
 });
 
 test("redeploys a binding-free tombstone when the Worker remains after its DO namespace is absent", async () => {
@@ -281,6 +461,19 @@ test("waits for the exact Queue consumer to disappear before tombstone deploymen
   assert.equal(fake.state.worker, true);
   assert.notEqual(fake.state.d1, null);
   assert.equal(fake.state.queues.has(DEDICATED_QUEUE), true);
+});
+
+test("rejects conflicting or malformed Queue consumer identity aliases", async () => {
+  const fake = createCloudflareFixture();
+  const managed = fake.state.queues.get(SHARED_QUEUE).consumers[0];
+  managed.service = 123;
+
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), { request: fake.request }),
+    /queue consumer identity evidence is incomplete/,
+  );
+  assert.equal(fake.state.worker, true);
+  assert.notEqual(fake.state.r2, null);
 });
 
 test("orders source queues before dead-letter queues independently of manifest order", () => {
@@ -750,6 +943,19 @@ function createCloudflareFixture() {
     retainConsumerOnDelete: false,
     retainProducerBindingOnPatch: false,
     retainProducerBindingOnWorkerDelete: false,
+    rejectNonForceWorkerDelete: false,
+    nonForceWorkerDeleteErrorCodes: [10064],
+    references: {
+      services: { incoming: [], outgoing: [], pages_function: false },
+      durable_objects: [],
+      dispatch_outbounds: [],
+    },
+    tailProducers: [],
+    eventSubscriptions: [],
+    deploymentId: DEPLOYMENT_ID,
+    versionId: VERSION_ID,
+    deploymentReads: 0,
+    driftDeploymentOnSecondRead: false,
     lifecycle: {
       state: "suspended",
       credentials_revoked_at: "2026-07-18T12:00:00Z",
@@ -764,6 +970,7 @@ function createCloudflareFixture() {
           consumers: [
             {
               consumer_id: "dedicated-managed-consumer",
+              type: "worker",
               script_name: WORKER_NAME,
             },
           ],
@@ -778,12 +985,12 @@ function createCloudflareFixture() {
             {
               consumer_id: "shared-managed-consumer",
               type: "worker",
-              script_name: WORKER_NAME,
+              script: WORKER_NAME,
             },
             {
               consumer_id: "shared-unrelated-consumer",
               type: "worker",
-              script_name: "unrelated-worker",
+              service: "unrelated-worker",
             },
           ],
         },
@@ -875,8 +1082,69 @@ function createCloudflareFixture() {
       }
       return success({ bindings: structuredClone(state.workerBindings) });
     }
+    if (resource === `/workers/scripts/${WORKER_NAME}/references` && method === "GET") {
+      return success(structuredClone(state.references));
+    }
+    if (resource === `/workers/tails/by-consumer/${WORKER_NAME}` && method === "GET") {
+      return success(structuredClone(state.tailProducers));
+    }
+    if (resource === `/workers/scripts/${WORKER_NAME}/deployments` && method === "GET") {
+      state.deploymentReads += 1;
+      const deploymentId =
+        state.driftDeploymentOnSecondRead && state.deploymentReads > 1
+          ? "66666666-6666-4666-8666-666666666666"
+          : state.deploymentId;
+      return success({
+        deployments: [
+          {
+            id: deploymentId,
+            versions: [{ version_id: state.versionId, percentage: 100 }],
+          },
+        ],
+      });
+    }
+    if (
+      resource === `/workers/scripts/${WORKER_NAME}/versions/${VERSION_ID}` &&
+      method === "GET"
+    ) {
+      return success({
+        id: VERSION_ID,
+        annotations: {
+          "workers/tag": managedDecommissionTombstoneTag(OPERATION_ID),
+          "workers/message": managedDecommissionTombstoneMessage(OPERATION_ID),
+        },
+        resources: {
+          bindings: state.workerBindings.filter(
+            (binding) => binding.type === "secret_text" || binding.type === "version_metadata",
+          ),
+        },
+      });
+    }
+    if (resource === `/workers/scripts/${WORKER_NAME}/content/v2` && method === "GET") {
+      assert.equal(parsed.searchParams.get("version"), VERSION_ID);
+      return new Response(MANAGED_DECOMMISSION_TOMBSTONE_SOURCE, {
+        status: 200,
+        headers: { "Content-Type": "application/javascript+module" },
+      });
+    }
+    if (resource === "/event_subscriptions/subscriptions" && method === "GET") {
+      return success(structuredClone(state.eventSubscriptions));
+    }
     if (resource === `/workers/services/${WORKER_NAME}` && method === "DELETE") {
-      assert.equal(parsed.searchParams.get("force"), "false");
+      const force = parsed.searchParams.get("force");
+      assert.ok(force === "false" || force === "true");
+      if (force === "false" && state.rejectNonForceWorkerDelete) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            errors: state.nonForceWorkerDeleteErrorCodes.map((code) => ({
+              code,
+              message: "Cannot delete this Worker as it is a consumer for a Queue.",
+            })),
+          }),
+          { status: 403, headers: { "Content-Type": "application/json" } },
+        );
+      }
       state.worker = false;
       if (!state.retainProducerBindingOnWorkerDelete) {
         state.producerBindings.clear();
@@ -899,9 +1167,19 @@ function createCloudflareFixture() {
 }
 
 function isManagedFixtureConsumer(consumer) {
-  return (
-    consumer?.script_name === WORKER_NAME &&
-    (consumer?.type === undefined || consumer?.type === "worker")
+  return fixtureConsumerName(consumer) === WORKER_NAME;
+}
+
+function fixtureConsumerName(consumer) {
+  return consumer?.script || consumer?.service || consumer?.script_name || null;
+}
+
+function workerForceDeletes(fake) {
+  return fake.calls.filter(
+    ({ method, path }) =>
+      method === "DELETE" &&
+      path.includes("/workers/services/") &&
+      new URL(`https://example.test${path}`).searchParams.get("force") === "true",
   );
 }
 
@@ -920,7 +1198,7 @@ function publicQueue(queue, state) {
     producerVisible = true;
   }
   const producers = producerVisible
-    ? [{ type: "worker", script: WORKER_NAME }]
+    ? [{ script: WORKER_NAME }]
     : [];
   const result = {
     queue_id: queue.queue_id,

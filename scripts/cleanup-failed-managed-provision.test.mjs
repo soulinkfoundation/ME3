@@ -306,7 +306,8 @@ function createFixture() {
           consumers: [
             {
               consumer_id: "managed-consumer",
-              script_name: WORKER_NAME,
+              type: "worker",
+              script: WORKER_NAME,
             },
           ],
         },
@@ -345,7 +346,8 @@ function createFixture() {
       state.producerBindings.clear();
       for (const queue of state.queues.values()) {
         queue.consumers = queue.consumers.filter(
-          (consumer) => consumer.script_name !== WORKER_NAME,
+          (consumer) =>
+            (consumer.script || consumer.service || consumer.script_name) !== WORKER_NAME,
         );
       }
       return success(null);
