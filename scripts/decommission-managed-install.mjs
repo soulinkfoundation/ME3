@@ -564,7 +564,11 @@ export function deployDurableObjectTombstone({
         cwd: process.env.ME3_MANAGED_SOURCE_DIR || process.cwd(),
       },
     );
-    if (result.status !== 0) throw new Error("Durable Object delete migration failed");
+    if (result.status !== 0) {
+      throw new Error(
+        `Durable Object delete migration failed: ${summarizeManagedCommandFailure(result)}`,
+      );
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -572,6 +576,33 @@ export function deployDurableObjectTombstone({
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function summarizeManagedCommandFailure(result) {
+  let output = [result?.error?.message, result?.stdout, result?.stderr]
+    .filter(Boolean)
+    .join("\n")
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .trim();
+
+  for (const [name, value] of Object.entries(process.env)) {
+    if (
+      /(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|ACCESS_KEY)/i.test(name) &&
+      typeof value === "string" &&
+      value.length >= 8
+    ) {
+      output = output.split(value).join("[redacted]");
+    }
+  }
+
+  output = output
+    .replace(/(authorization\s*:\s*bearer\s+)[^\s]+/gi, "$1[redacted]")
+    .replace(/(api[_ -]?token\s*[=:]\s*)[^\s]+/gi, "$1[redacted]");
+
+  if (!output) {
+    return `exit status ${String(result?.status ?? "unknown")}`;
+  }
+  return output.slice(-3_000);
 }
 
 function parseArgs(values) {
