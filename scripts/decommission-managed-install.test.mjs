@@ -194,6 +194,7 @@ test("polls complete Queue binding evidence and fails closed when detachment nev
   assert.equal(pauses, 2);
 
   const stuck = createCloudflareFixture();
+  stuck.state.retainProducerBindingOnPatch = true;
   await assert.rejects(
     decommissionManagedInstall(waivedContract(), {
       request: stuck.request,
@@ -707,9 +708,17 @@ function createCloudflareFixture() {
     r2: { name: `${WORKER_NAME}-r2` },
     namespaces: [{ id: DO_ID, script: WORKER_NAME, class: "Me3UserAgent" }],
     producerBindings: new Set([DEDICATED_QUEUE]),
+    workerBindings: [
+      {
+        name: "SOCIAL_PUBLISH_QUEUE",
+        type: "queue",
+        queue_name: DEDICATED_QUEUE,
+      },
+    ],
     producerDetachPollsRemaining: 0,
     omitProducerArray: false,
     retainConsumerOnDelete: false,
+    retainProducerBindingOnPatch: false,
     lifecycle: {
       state: "suspended",
       credentials_revoked_at: "2026-07-18T12:00:00Z",
@@ -813,6 +822,17 @@ function createCloudflareFixture() {
     }
     if (resource === "/workers/durable_objects/namespaces" && method === "GET") {
       return success(state.namespaces);
+    }
+    if (resource === `/workers/scripts/${WORKER_NAME}/settings`) {
+      if (method === "PATCH") {
+        const settings = JSON.parse(init.body.get("settings"));
+        assert.deepEqual(settings, { bindings: [] });
+        state.workerBindings = [];
+        if (!state.retainProducerBindingOnPatch) {
+          state.producerBindings.clear();
+        }
+      }
+      return success({ bindings: structuredClone(state.workerBindings) });
     }
     if (resource === `/workers/scripts/${WORKER_NAME}`) {
       if (method === "DELETE") {

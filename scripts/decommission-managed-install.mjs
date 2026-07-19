@@ -110,6 +110,7 @@ export async function decommissionManagedInstall(
       throw new Error("Durable Object namespace deletion was not verified");
     }
   }
+  await clearManagedWorkerBindings(api, input.accountId, contract.workerName);
 
   const dedicatedQueueNames = orderedDedicatedQueueNames(
     contract.queueNames,
@@ -535,6 +536,31 @@ export async function waitForManagedQueueConsumersDetached(
     if (!detached) {
       throw new Error(`managed queue consumer did not detach: ${queueName}`);
     }
+  }
+}
+
+export async function clearManagedWorkerBindings(api, accountId, workerName) {
+  if (
+    typeof api !== "function" ||
+    !/^[0-9a-f]{32}$/.test(accountId || "") ||
+    !workerName
+  ) {
+    throw new Error("managed Worker binding cleanup configuration is invalid");
+  }
+  const path = `/accounts/${accountId}/workers/scripts/${workerName}/settings`;
+  const before = await api(path, {}, { missingOk: true });
+  if (!before) return;
+  if (!Array.isArray(before.bindings)) {
+    throw new Error("Cloudflare managed Worker binding listing is invalid");
+  }
+  if (before.bindings.length > 0) {
+    const body = new FormData();
+    body.set("settings", JSON.stringify({ bindings: [] }));
+    await api(path, { method: "PATCH", body });
+  }
+  const after = await api(path, {}, { missingOk: true });
+  if (after && (!Array.isArray(after.bindings) || after.bindings.length !== 0)) {
+    throw new Error("managed Worker binding removal was not verified");
   }
 }
 

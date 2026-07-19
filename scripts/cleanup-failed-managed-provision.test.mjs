@@ -282,6 +282,13 @@ function createFixture() {
     r2Objects: ["bootstrap.txt"],
     namespaces: [{ id: DO_ID, script: WORKER_NAME, class: "Me3UserAgent" }],
     producerBindings: new Set([QUEUE_NAME]),
+    workerBindings: [
+      {
+        name: "SOCIAL_PUBLISH_QUEUE",
+        type: "queue",
+        queue_name: QUEUE_NAME,
+      },
+    ],
     queues: new Map([
       [
         QUEUE_NAME,
@@ -398,6 +405,15 @@ function createFixture() {
     }
     if (resource === "/workers/durable_objects/namespaces" && method === "GET") {
       return success(state.namespaces);
+    }
+    if (resource === `/workers/scripts/${WORKER_NAME}/settings`) {
+      if (method === "PATCH") {
+        const settings = JSON.parse(init.body.get("settings"));
+        assert.deepEqual(settings, { bindings: [] });
+        state.workerBindings = [];
+        state.producerBindings.clear();
+      }
+      return success({ bindings: structuredClone(state.workerBindings) });
     }
     throw new Error(`unexpected request: ${method} ${resource}`);
   };

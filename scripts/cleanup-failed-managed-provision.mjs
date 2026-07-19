@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
+  clearManagedWorkerBindings,
   deployDurableObjectTombstone,
   orderedDedicatedQueueNames,
   waitForManagedQueueBindingsDetached,
@@ -94,6 +95,7 @@ export async function cleanupFailedManagedProvision(
       throw new Error("failed provision Durable Object namespace deletion was not verified");
     }
   }
+  await clearManagedWorkerBindings(api, input.accountId, contract.workerName);
 
   const dedicatedQueueNames = orderedDedicatedQueueNames(
     contract.queueNames,
