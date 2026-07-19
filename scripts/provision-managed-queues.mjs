@@ -11,12 +11,13 @@ export function provisionManagedQueues({
 }) {
   const names = normalizeQueueNames(queueNames, workerName);
   for (const name of names) {
-    const created = run(["queues", "create", name, "--config", configPath]);
-    if (!created.ok && !/already exists/i.test(created.output)) {
-      throw new Error(`managed queue provisioning failed: ${name}`);
-    }
-    const verified = run(["queues", "info", name, "--config", configPath]);
-    if (!verified.ok) throw new Error(`managed queue verification failed: ${name}`);
+    const infoArgs = ["queues", "info", name, "--config", configPath];
+    const existing = run(infoArgs);
+    if (existing.ok) continue;
+
+    run(["queues", "create", name, "--config", configPath]);
+    const verified = run(infoArgs);
+    if (!verified.ok) throw new Error(`managed queue provisioning failed: ${name}`);
   }
   return names;
 }
