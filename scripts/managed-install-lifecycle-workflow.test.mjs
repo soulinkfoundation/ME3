@@ -31,6 +31,10 @@ test("pins trusted controls, keeps secrets off job scope, and rejects legacy run
   assert.match(getStep("Check out lifecycle controls"), /ref: \$\{\{ github\.sha \}\}/);
   assert.match(getStep("Check out lifecycle controls"), /persist-credentials: false/);
   assert.doesNotMatch(getStep("Check out lifecycle controls"), /ref: main/);
+  assert.ok(
+    lifecycle.indexOf("Check out lifecycle controls") <
+      lifecycle.indexOf("Validate the complete lifecycle contract"),
+  );
   assert.doesNotMatch(
     getStep("Install trusted lifecycle controls without dependency lifecycle scripts"),
     /secrets\./,

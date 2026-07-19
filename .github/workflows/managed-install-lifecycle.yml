@@ -127,6 +127,15 @@ jobs:
       ME3_MANAGED_SOURCE_DIR: ${{ github.workspace }}/control
 
     steps:
+      # Checkout trusted controls before validating untrusted dispatch inputs so
+      # even a validation failure can report through the authenticated callback.
+      - name: Check out lifecycle controls
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+
       - name: Validate the complete lifecycle contract
         shell: bash
         run: |
@@ -176,13 +185,6 @@ jobs:
             test "$WORKER_EVER_PUBLIC" = false
             test -z "$EXPORT_OPERATION_ID$EXPORT_KEY_VERSION$EVIDENCE_OBJECT_KEY$EVIDENCE_SHA256$EVIDENCE_MD5$EVIDENCE_ETAG$EVIDENCE_SIZE_BYTES"
           fi
-
-      - name: Check out lifecycle controls
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          path: control
-          persist-credentials: false
 
       - name: Report lifecycle validation
         env:
