@@ -1,5 +1,6 @@
 import type { DbAiModelDefault, DbAiProviderCredential, Env } from "./types";
 import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL } from "@me3-core/plugin-agent-chat";
+import { normalizeMe3DeploymentMode } from "@me3-core/plugin-agent-chat";
 import {
   INSTALL_ENCRYPTION_KEY_NAME,
   getOrCreateInstallEncryptionKey,
@@ -64,6 +65,7 @@ export type AiModelRouteRecord = {
 };
 
 export type AiSettingsResponse = {
+  deploymentMode: "managed" | "self_hosted";
   encryptionConfigured: boolean;
   providers: AiProviderSettingsRecord[];
   routes: AiModelRouteRecord[];
@@ -246,6 +248,10 @@ export async function getAiSettings(env: Env, ownerId: string): Promise<AiSettin
   ) as Record<AiRouteId, AiModelRouteRecord>;
 
   return {
+    deploymentMode:
+      normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) === "managed"
+        ? "managed"
+        : "self_hosted",
     encryptionConfigured,
     providers,
     routes: AI_ROUTE_IDS.map((routeId) => defaults[routeId]),

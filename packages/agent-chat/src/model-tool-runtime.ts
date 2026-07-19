@@ -25,11 +25,16 @@ export async function runAgentToolModelStep(
       route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
         ? { gateway: { id: route.aiGateway.gatewayId } }
         : undefined;
-    const request = toWorkersAiToolRequest(messages, tools);
+    const anthropicModel = isAnthropicUnifiedModel(route.model);
+    const request = anthropicModel
+      ? { max_tokens: 800, ...toAnthropicToolRequest(messages, tools) }
+      : toWorkersAiToolRequest(messages, tools);
     const result = options
       ? await route.ai.run(route.model, request, options)
       : await route.ai.run(route.model, request);
-    const response = fromWorkersAiToolResponse(result);
+    const response = anthropicModel
+      ? fromAnthropicToolResponse(result)
+      : fromWorkersAiToolResponse(result);
     if (response.usage) {
       await route.recordUsage?.({ model: route.model, usage: response.usage });
     }
@@ -88,6 +93,10 @@ export async function runAgentToolModelStep(
   const result = fromAnthropicToolResponse(payload);
   if (result.usage) await route.recordUsage?.({ model: route.model, usage: result.usage });
   return result;
+}
+
+function isAnthropicUnifiedModel(model: string): boolean {
+  return model.trim().toLowerCase().replace(/^@cf\//, "").startsWith("anthropic/");
 }
 
 function providerHeaders(

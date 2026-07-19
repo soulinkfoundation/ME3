@@ -321,11 +321,31 @@ async function runWorkersAi(
           },
         }
       : undefined;
-  // ponytail: Workers AI vision binding currently documents one top-level image;
-  // move to provider message parts when Cloudflare documents multi-image input here.
-  const input = images[0]
-    ? { messages, image: images[0].dataUrl }
-    : { messages };
+  const anthropicModel = route.model
+    .trim()
+    .toLowerCase()
+    .replace(/^@cf\//, "")
+    .startsWith("anthropic/");
+  const system = messages.find((message) => message.role === "system")?.content || "";
+  const input = anthropicModel
+    ? {
+        max_tokens: 800,
+        system,
+        messages: withAnthropicImageContent(
+          messages
+            .filter(
+              (
+                message,
+              ): message is AgentChatTextMessage & { role: "user" | "assistant" } =>
+                message.role !== "system",
+            )
+            .map((message) => ({ role: message.role, content: message.content })),
+          images,
+        ),
+      }
+    : images[0]
+      ? { messages, image: images[0].dataUrl }
+      : { messages };
   const result = requestOptions
     ? await route.ai.run(route.model, input, requestOptions)
     : await route.ai.run(route.model, input);

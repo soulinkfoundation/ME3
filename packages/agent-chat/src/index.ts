@@ -4765,6 +4765,12 @@ async function resolveAiRoute(
   }
 
   const rawModelSelectionAllowed = allowsAgentChatRawModelSelection(env);
+  const managedEveryday =
+    mode !== "advanced" &&
+    normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) === "managed";
+  const managedPolicy = managedEveryday
+    ? await readManagedAiPolicy(env.DB)
+    : null;
   const stored = rawModelSelectionAllowed
     ? await (mode === "advanced"
         ? getStoredReasoningDefault(env, ownerId)
@@ -4789,6 +4795,7 @@ async function resolveAiRoute(
     ) || normalizeModel(env.ME3_AI_MODEL);
   const storedProvider = normalizeProviderId(stored?.provider_id);
   const providerId =
+    (managedEveryday ? "workers-ai" : null) ||
     selectedProvider ||
     storedProvider ||
     envProvider ||
@@ -4797,6 +4804,7 @@ async function resolveAiRoute(
     (env.ANTHROPIC_API_KEY ? "anthropic" : null) ||
     (env.AI ? "workers-ai" : "workers-ai");
   const model =
+    (managedEveryday ? managedPolicy?.defaultModel || MANAGED_DEFAULT_MODEL : null) ||
     selectedModelName ||
     normalizeModel(stored?.model) ||
     envModel ||
@@ -4846,9 +4854,57 @@ async function resolveAiRoute(
   };
 }
 
-const MANAGED_EVERYDAY_MODEL = "moonshotai/kimi-k3";
+export const MANAGED_AI_MODELS = [
+  "moonshotai/kimi-k3",
+  "anthropic/claude-sonnet-4.6",
+  "openai/gpt-5.5",
+] as const;
+const MANAGED_AI_MODEL_SET = new Set<string>(MANAGED_AI_MODELS);
+const MANAGED_DEFAULT_MODEL = MANAGED_AI_MODELS[0];
 const MANAGED_AI_INCLUDED_MONTHLY_CENTS = 500;
 const MANAGED_AI_POLICY_SECRET = "ME3_MANAGED_AI_BILLING_POLICY";
+
+type ManagedAiPolicy = {
+  defaultModel: string;
+  overagesEnabled: boolean;
+  monthlyMaximumCents: number;
+};
+
+async function readManagedAiPolicy(db: D1Like): Promise<ManagedAiPolicy> {
+  const fallback: ManagedAiPolicy = {
+    defaultModel: MANAGED_DEFAULT_MODEL,
+    overagesEnabled: false,
+    monthlyMaximumCents: MANAGED_AI_INCLUDED_MONTHLY_CENTS,
+  };
+  try {
+    const policy = await db.prepare(
+      "SELECT value FROM install_secrets WHERE name = ?",
+    )
+      .bind(MANAGED_AI_POLICY_SECRET)
+      .first<{ value: string }>();
+    if (!policy?.value) return fallback;
+    const parsed = JSON.parse(policy.value) as {
+      defaultModel?: unknown;
+      overagesEnabled?: unknown;
+      monthlyMaximumCents?: unknown;
+    };
+    const defaultModel = normalizeManagedAiModel(String(parsed.defaultModel || ""));
+    return {
+      defaultModel: MANAGED_AI_MODEL_SET.has(defaultModel)
+        ? defaultModel
+        : fallback.defaultModel,
+      overagesEnabled: parsed.overagesEnabled === true,
+      monthlyMaximumCents:
+        typeof parsed.monthlyMaximumCents === "number" &&
+        Number.isInteger(parsed.monthlyMaximumCents) &&
+        parsed.monthlyMaximumCents >= MANAGED_AI_INCLUDED_MONTHLY_CENTS
+          ? parsed.monthlyMaximumCents
+          : fallback.monthlyMaximumCents,
+    };
+  } catch {
+    return fallback;
+  }
+}
 
 async function isManagedEverydayBudgetExceeded(
   env: CoreAgentChatEnv,
@@ -4859,35 +4915,15 @@ async function isManagedEverydayBudgetExceeded(
   if (
     normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) !== "managed" ||
     providerId !== "workers-ai" ||
-    normalizeManagedEverydayModel(model) !== MANAGED_EVERYDAY_MODEL
+    !MANAGED_AI_MODEL_SET.has(normalizeManagedAiModel(model))
   ) {
     return false;
   }
 
-  let maximumCents = MANAGED_AI_INCLUDED_MONTHLY_CENTS;
-  try {
-    const policy = await env.DB.prepare(
-      "SELECT value FROM install_secrets WHERE name = ?",
-    )
-      .bind(MANAGED_AI_POLICY_SECRET)
-      .first<{ value: string }>();
-    if (policy?.value) {
-      const parsed = JSON.parse(policy.value) as {
-        overagesEnabled?: unknown;
-        monthlyMaximumCents?: unknown;
-      };
-      if (
-        parsed.overagesEnabled === true &&
-        typeof parsed.monthlyMaximumCents === "number" &&
-        Number.isInteger(parsed.monthlyMaximumCents) &&
-        parsed.monthlyMaximumCents >= MANAGED_AI_INCLUDED_MONTHLY_CENTS
-      ) {
-        maximumCents = parsed.monthlyMaximumCents;
-      }
-    }
-  } catch {
-    // The included allowance remains the safe default when no policy is cached.
-  }
+  const policy = await readManagedAiPolicy(env.DB);
+  const maximumCents = policy.overagesEnabled
+    ? policy.monthlyMaximumCents
+    : MANAGED_AI_INCLUDED_MONTHLY_CENTS;
 
   try {
     const usage = await env.DB.prepare(
@@ -4895,10 +4931,10 @@ async function isManagedEverydayBudgetExceeded(
        FROM ai_usage_events
        WHERE user_id = ?
          AND kind = 'text'
-         AND lower(replace(model, '@cf/', '')) = ?
+         AND lower(replace(model, '@cf/', '')) IN (?, ?, ?)
          AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')`,
     )
-      .bind(ownerId, MANAGED_EVERYDAY_MODEL)
+      .bind(ownerId, ...MANAGED_AI_MODELS)
       .first<{ total: number }>();
     return Number(usage?.total || 0) >= maximumCents / 100;
   } catch {
@@ -4915,11 +4951,11 @@ async function recordManagedEverydayUsage(
 ): Promise<void> {
   if (
     providerId !== "workers-ai" ||
-    normalizeManagedEverydayModel(model) !== MANAGED_EVERYDAY_MODEL
+    !MANAGED_AI_MODEL_SET.has(normalizeManagedAiModel(model))
   ) {
     return;
   }
-  const estimate = estimateManagedKimiK3Usage(usage);
+  const estimate = estimateManagedAiUsage(model, usage);
   try {
     await db.prepare(
       `INSERT INTO ai_usage_events (
@@ -4954,6 +4990,20 @@ export function estimateManagedKimiK3Usage(usage: AgentModelUsage): {
   costUsd: number;
   pricing: string;
 } {
+  return estimateManagedAiUsage(MANAGED_DEFAULT_MODEL, usage);
+}
+
+export function estimateManagedAiUsage(model: string, usage: AgentModelUsage): {
+  costUsd: number;
+  pricing: string;
+} {
+  const normalizedModel = normalizeManagedAiModel(model);
+  const pricing = {
+    "moonshotai/kimi-k3": { input: 3, cached: 0.3, output: 15, id: "cloudflare-unified-kimi-k3-2026-07" },
+    "anthropic/claude-sonnet-4.6": { input: 3, cached: 0.3, output: 15, id: "cloudflare-unified-claude-sonnet-4-6-2026-07" },
+    "openai/gpt-5.5": { input: 5, cached: 0.5, output: 30, id: "cloudflare-unified-gpt-5-5-2026-07" },
+  }[normalizedModel];
+  if (!pricing) throw new Error("Unsupported managed AI model");
   const inputTokens = Math.max(0, Math.trunc(usage.inputTokens));
   const cachedInputTokens = Math.min(
     inputTokens,
@@ -4962,15 +5012,17 @@ export function estimateManagedKimiK3Usage(usage: AgentModelUsage): {
   const outputTokens = Math.max(0, Math.trunc(usage.outputTokens));
   const uncachedInputTokens = inputTokens - cachedInputTokens;
   const providerCost =
-    (uncachedInputTokens * 3 + cachedInputTokens * 0.3 + outputTokens * 15) /
+    (uncachedInputTokens * pricing.input +
+      cachedInputTokens * pricing.cached +
+      outputTokens * pricing.output) /
     1_000_000;
   return {
     costUsd: providerCost * 1.05,
-    pricing: "cloudflare-unified-kimi-k3-2026-07",
+    pricing: pricing.id,
   };
 }
 
-function normalizeManagedEverydayModel(model: string): string {
+function normalizeManagedAiModel(model: string): string {
   return model.trim().toLowerCase().replace(/^@cf\//, "");
 }
 

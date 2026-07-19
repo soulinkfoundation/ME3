@@ -1,4 +1,5 @@
 import {
+  fromAnthropicToolResponse,
   fromWorkersAiToolResponse,
   toAnthropicToolRequest,
   toOpenAiToolRequest,
@@ -27,7 +28,10 @@ export async function runAgentToolModelStreamStep(
   throwIfAborted(signal);
   if (route.providerId === "workers-ai") {
     if (!route.ai) throw new Error("Workers AI binding is not configured");
-    const request = { ...toWorkersAiToolRequest(messages, tools), stream: true };
+    const anthropicModel = isAnthropicUnifiedModel(route.model);
+    const request = anthropicModel
+      ? { max_tokens: 800, ...toAnthropicToolRequest(messages, tools), stream: true }
+      : { ...toWorkersAiToolRequest(messages, tools), stream: true };
     const options = route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
       ? { gateway: { id: route.aiGateway.gatewayId } }
       : undefined;
@@ -35,19 +39,23 @@ export async function runAgentToolModelStreamStep(
       ? await route.ai.run(route.model, request, options)
       : await route.ai.run(route.model, request);
     if (!isReadableStream(result)) {
-      const response = fromWorkersAiToolResponse(result);
+      const response = anthropicModel
+        ? fromAnthropicToolResponse(result)
+        : fromWorkersAiToolResponse(result);
       if (response.text) await onDelta(response.text);
       if (response.usage) {
         await route.recordUsage?.({ model: route.model, usage: response.usage });
       }
       return response;
     }
-    const response = await accumulateOpenAiCompatibleStream(
-      result,
-      onDelta,
-      signal,
-      "Workers AI",
-    );
+    const response = anthropicModel
+      ? await accumulateAnthropicStream(result, onDelta, signal)
+      : await accumulateOpenAiCompatibleStream(
+          result,
+          onDelta,
+          signal,
+          "Workers AI",
+        );
     if (response.usage) {
       await route.recordUsage?.({ model: route.model, usage: response.usage });
     }
@@ -114,6 +122,10 @@ export async function runAgentToolModelStreamStep(
   const result = await accumulateAnthropicStream(response.body, onDelta, signal);
   if (result.usage) await route.recordUsage?.({ model: route.model, usage: result.usage });
   return result;
+}
+
+function isAnthropicUnifiedModel(model: string): boolean {
+  return model.trim().toLowerCase().replace(/^@cf\//, "").startsWith("anthropic/");
 }
 
 async function accumulateOpenAiCompatibleStream(

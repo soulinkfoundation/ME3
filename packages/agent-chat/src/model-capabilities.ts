@@ -56,6 +56,16 @@ const AI_MODEL_CAPABILITY_RECORDS: readonly AiModelCapabilityRecord[] = [
   },
   {
     providerId: "workers-ai",
+    model: "anthropic/claude-sonnet-4.6",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "workers-ai",
+    model: "openai/gpt-5.5",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "workers-ai",
     model: "@cf/moonshotai/kimi-k2.7-code",
     capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
     image: {

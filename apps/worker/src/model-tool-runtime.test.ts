@@ -44,6 +44,34 @@ describe("live agent tool model adapters", () => {
     expect(result.toolCalls[0]).toMatchObject({ name: "core_reminders_list" });
   });
 
+  it("uses Anthropic's native schema for a unified Workers AI model", async () => {
+    const run = vi.fn(async () => ({
+      content: [{
+        type: "tool_use",
+        id: "anthropic-unified-1",
+        name: "core_reminders_list",
+        input: {},
+      }],
+    }));
+    const result = await runAgentToolModelStep(
+      route("workers-ai", {
+        model: "anthropic/claude-sonnet-4.6",
+        ai: { run },
+      }),
+      [{ role: "user", content: "List reminders" }],
+      TOOLS,
+    );
+
+    expect(run).toHaveBeenCalledWith(
+      "anthropic/claude-sonnet-4.6",
+      expect.objectContaining({
+        max_tokens: 800,
+        tools: [expect.objectContaining({ name: "core_reminders_list" })],
+      }),
+    );
+    expect(result.toolCalls[0]).toMatchObject({ id: "anthropic-unified-1" });
+  });
+
   it("calls OpenAI Chat Completions with strict sequential tools", async () => {
     const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Response.json({

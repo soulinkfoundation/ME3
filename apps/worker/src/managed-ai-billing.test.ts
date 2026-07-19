@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { estimateManagedKimiK3Usage } from "../../../packages/agent-chat/src";
+import {
+  estimateManagedAiUsage,
+  estimateManagedKimiK3Usage,
+} from "../../../packages/agent-chat/src";
 
 describe("managed Everyday AI billing", () => {
   it("prices Kimi K3 input, cached input, output, and the Unified Billing fee", () => {
@@ -28,5 +31,26 @@ describe("managed Everyday AI billing", () => {
         outputTokens: 0,
       }).costUsd,
     ).toBeCloseTo(0.0000315, 10);
+  });
+
+  it("uses the curated provider pricing for alternate managed models", () => {
+    const claude = estimateManagedAiUsage("anthropic/claude-sonnet-4.6", {
+        inputTokens: 1_000_000,
+        cachedInputTokens: 0,
+        outputTokens: 100_000,
+      });
+    expect(claude.costUsd).toBeCloseTo(4.725, 8);
+    expect(claude).toMatchObject({
+      pricing: "cloudflare-unified-claude-sonnet-4-6-2026-07",
+    });
+    const openai = estimateManagedAiUsage("openai/gpt-5.5", {
+        inputTokens: 1_000_000,
+        cachedInputTokens: 0,
+        outputTokens: 100_000,
+      });
+    expect(openai.costUsd).toBeCloseTo(8.4, 8);
+    expect(openai).toMatchObject({
+      pricing: "cloudflare-unified-gpt-5-5-2026-07",
+    });
   });
 });

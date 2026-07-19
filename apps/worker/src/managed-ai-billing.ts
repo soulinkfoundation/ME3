@@ -3,13 +3,27 @@ import type { Env } from "./types";
 
 export const MANAGED_AI_BILLING_POLICY_SECRET = "ME3_MANAGED_AI_BILLING_POLICY";
 const INCLUDED_MONTHLY_CENTS = 500;
-const MANAGED_EVERYDAY_MODEL = "moonshotai/kimi-k3";
+const DEFAULT_MANAGED_MODEL = "moonshotai/kimi-k3";
+const MANAGED_MODELS = [
+  "moonshotai/kimi-k3",
+  "anthropic/claude-sonnet-4.6",
+  "openai/gpt-5.5",
+] as const;
+
+export type ManagedAiModelOption = {
+  id: string;
+  label: string;
+  description: string;
+  recommended: boolean;
+};
 
 export type ManagedAiBillingSettings = {
   available: boolean;
   managed: boolean;
   currency: "usd";
   billingSource: "internal" | "storekit" | "stripe" | null;
+  defaultModel: string;
+  models: ManagedAiModelOption[];
   eligible: boolean;
   ineligibleReason: string | null;
   overagesEnabled: boolean;
@@ -64,7 +78,11 @@ export async function getManagedAiBillingSettings(
 
 export async function updateManagedAiBillingSettings(
   env: Env,
-  input: { overagesEnabled: boolean; monthlyMaximumCents: number },
+  input: {
+    defaultModel: string;
+    overagesEnabled: boolean;
+    monthlyMaximumCents: number;
+  },
 ): Promise<ManagedAiBillingSettings> {
   if (!isManaged(env)) throw new ManagedAiBillingInputError("Managed AI billing is unavailable", 404);
   const bridge = await getManagedCommerceBridgeConfig(env);
@@ -109,13 +127,13 @@ export async function syncManagedAiUsage(
               estimated_cost_usd, metadata_json, created_at
        FROM ai_usage_events
        WHERE kind = 'text'
-         AND lower(replace(model, '@cf/', '')) = ?
+         AND lower(replace(model, '@cf/', '')) IN (?, ?, ?)
          AND created_at >= datetime('now', '-35 days')
          AND json_extract(metadata_json, '$.managedBillingReportedAt') IS NULL
        ORDER BY created_at ASC
        LIMIT 100`,
     )
-      .bind(MANAGED_EVERYDAY_MODEL)
+      .bind(...MANAGED_MODELS)
       .all<LocalUsageRow>();
     rows = result.results || [];
   } catch (error) {
@@ -197,6 +215,7 @@ async function cacheManagedAiBillingPolicy(
     .bind(
       MANAGED_AI_BILLING_POLICY_SECRET,
       JSON.stringify({
+        defaultModel: settings.defaultModel,
         overagesEnabled: settings.overagesEnabled,
         monthlyMaximumCents: settings.monthlyMaximumCents,
         cachedAt: new Date().toISOString(),
@@ -215,6 +234,8 @@ function unavailableSettings(
     managed,
     currency: "usd",
     billingSource: null,
+    defaultModel: DEFAULT_MANAGED_MODEL,
+    models: [],
     eligible: false,
     ineligibleReason: reason,
     overagesEnabled: false,
@@ -241,6 +262,8 @@ function isManagedAiBillingSettings(value: unknown): value is ManagedAiBillingSe
     typeof root.available === "boolean" &&
     root.managed === true &&
     typeof root.overagesEnabled === "boolean" &&
+    typeof root.defaultModel === "string" &&
+    Array.isArray(root.models) &&
     typeof root.includedMonthlyCents === "number" &&
     typeof root.monthlyMaximumCents === "number" &&
     typeof root.currentMonthUsageMicrousd === "number",

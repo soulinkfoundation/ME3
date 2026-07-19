@@ -178,6 +178,7 @@ type AiRouteRecord = {
 };
 
 type AiSettingsResponse = {
+  deploymentMode: "managed" | "self_hosted";
   encryptionConfigured: boolean;
   providers: AiProviderRecord[];
   routes: AiRouteRecord[];
@@ -736,6 +737,7 @@ const selectedModelId = ref(initialAssistantModelId);
 const selectedModelTouched = ref(Boolean(storedAssistantModelId));
 const aiSettingsLoading = ref(true);
 const aiSettingsError = ref("");
+const managedDeployment = ref(false);
 const aiProviders = ref<AiProviderRecord[]>([]);
 const {
   canUse: canUseVoiceDictation,
@@ -1038,7 +1040,7 @@ const showConfigureStarterPrompt = computed(() => {
   }
   if (pageError.value || aiSettingsError.value || assistantSettingsError.value)
     return true;
-  if (!selectedModelSetup.value.configured) return true;
+  if (!managedDeployment.value && !selectedModelSetup.value.configured) return true;
   if (jobs.value.some((job) => job.status === "needs_setup")) return true;
   return recipes.value.some((recipe) => recipe.state === "needs_setup");
 });
@@ -1105,7 +1107,11 @@ const assistantAttachmentIssue = computed(() => {
   const hasImage = assistantAttachments.value.some(
     (attachment) => attachment.kind === "image",
   );
-  if (hasImage && !resolveAssistantTurnModel(assistantAttachments.value)) {
+  if (
+    hasImage &&
+    !managedDeployment.value &&
+    !resolveAssistantTurnModel(assistantAttachments.value)
+  ) {
     return "No image-input-capable model is available for this attachment.";
   }
 
@@ -2491,9 +2497,12 @@ async function loadAiSettings() {
 
   try {
     const response = await api.get<AiSettingsResponse>("/ai-settings");
+    managedDeployment.value = response.deploymentMode === "managed";
     aiProviders.value = response.providers || [];
-    applyDefaultChatModel(response);
-    syncVisibleAssistantModelSelection();
+    if (!managedDeployment.value) {
+      applyDefaultChatModel(response);
+      syncVisibleAssistantModelSelection();
+    }
   } catch (err) {
     aiSettingsError.value = messageFromUnknown(
       err,
@@ -2668,6 +2677,7 @@ function preferredImageInputModel() {
 function resolveAssistantTurnModel(
   attachments: ReadonlyArray<AgentChatMessageAttachment>,
 ) {
+  if (managedDeployment.value) return null;
   const currentModel = selectedModel.value;
   if (!attachmentsContainReadyImage(attachments)) return currentModel;
   if (modelHasImageInput(currentModel.capabilities)) return currentModel;
@@ -5838,7 +5848,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
             <div class="assistant-composer__right">
               <div
-                v-if="voiceDictationState !== 'listening'"
+                v-if="
+                  voiceDictationState !== 'listening' &&
+                  !aiSettingsLoading &&
+                  !managedDeployment
+                "
                 class="model-picker"
               >
                 <span class="sr-only">Model</span>

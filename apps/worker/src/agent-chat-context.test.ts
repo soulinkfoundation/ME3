@@ -33,6 +33,7 @@ type FakeDbState = {
   assistantAttachments: Array<Record<string, unknown>>;
   assistantMessageAssets: Array<Record<string, unknown>>;
   aiUsageEvents: Array<Record<string, unknown>>;
+  managedAiPolicy: string | null;
   agentToolExecutions: Array<Record<string, unknown>>;
   queries: string[];
   persistedMessages: Array<{
@@ -172,6 +173,7 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     assistantAttachments: [],
     assistantMessageAssets: [],
     aiUsageEvents: [],
+    managedAiPolicy: null,
     agentToolExecutions: [],
     queries: [],
     persistedMessages: [],
@@ -202,7 +204,11 @@ function createEnv(state: Partial<FakeDbState> = {}) {
                 row.user_id === values[0] && row.provider_id === values[1],
             ) || null) as T;
           }
-          if (sql.includes("FROM install_secrets")) return null;
+          if (sql.includes("FROM install_secrets")) {
+            return dbState.managedAiPolicy
+              ? ({ value: dbState.managedAiPolicy } as T)
+              : null;
+          }
           if (sql.includes("FROM ai_usage_events") && sql.includes("SUM")) {
             return {
               total: dbState.aiUsageEvents.reduce(
@@ -1077,10 +1083,39 @@ describe("Core chat native context", () => {
       },
     );
 
-    expect(response.model).toBe("@cf/example/managed-everyday-model");
+    expect(response.model).toBe("moonshotai/kimi-k3");
     expect(aiRun).toHaveBeenCalledWith(
-      "@cf/example/managed-everyday-model",
+      "moonshotai/kimi-k3",
       expect.any(Object),
+    );
+  });
+
+  it("uses the managed default model cached from the control plane", async () => {
+    const aiRun = vi.fn(async () => ({
+      content: [{ type: "text", text: "Managed Claude reply." }],
+    }));
+    const env = createEnv({
+      managedAiPolicy: JSON.stringify({
+        defaultModel: "anthropic/claude-sonnet-4.6",
+        overagesEnabled: false,
+        monthlyMaximumCents: 500,
+      }),
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_DEPLOYMENT_MODE: "managed",
+      } as never,
+      createStorage(),
+      { ...dispatchInput("Use my managed default."), mode: "everyday" },
+    );
+
+    expect(response.model).toBe("anthropic/claude-sonnet-4.6");
+    expect(aiRun).toHaveBeenCalledWith(
+      "anthropic/claude-sonnet-4.6",
+      expect.objectContaining({ max_tokens: 800 }),
     );
   });
 

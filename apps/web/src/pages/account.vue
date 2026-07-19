@@ -161,6 +161,7 @@ type AiRouteRecord = {
 };
 
 type AiSettingsResponse = {
+  deploymentMode: "managed" | "self_hosted";
   encryptionConfigured: boolean;
   providers: AiProviderRecord[];
   routes: AiRouteRecord[];
@@ -172,6 +173,8 @@ type ManagedAiBillingSettings = {
   managed: boolean;
   currency: "usd";
   billingSource: "internal" | "storekit" | "stripe" | null;
+  defaultModel: string;
+  models: ManagedAiModelOption[];
   eligible: boolean;
   ineligibleReason: string | null;
   overagesEnabled: boolean;
@@ -185,6 +188,15 @@ type ManagedAiBillingSettings = {
   effectiveMaximumCents: number;
   fallbackActive: boolean;
 };
+
+type ManagedAiModelOption = {
+  id: string;
+  label: string;
+  description: string;
+  recommended: boolean;
+};
+
+type ManagedAiLimitChoice = "25" | "50" | "100" | "custom";
 
 type AiRouteInputs = Record<AiRouteId, { providerId: string; model: string }>;
 
@@ -373,9 +385,13 @@ const aiProviderKeyInputs = ref<Record<string, string>>({});
 const aiRouteInputs = ref<AiRouteInputs>(createEmptyAiRouteInputs());
 const aiSettingsMessage = ref<string | null>(null);
 const aiSettingsError = ref<string | null>(null);
+const aiDeploymentMode = ref<"managed" | "self_hosted" | null>(null);
 const managedAiBilling = ref<ManagedAiBillingSettings | null>(null);
+const managedAiDefaultModelInput = ref("");
 const managedAiOveragesEnabledInput = ref(false);
-const managedAiMonthlyMaximumDollarsInput = ref(6);
+const managedAiLimitChoice = ref<ManagedAiLimitChoice>("25");
+const managedAiCustomMaximumDollarsInput = ref(300);
+const managedAiLimitPresets = ["25", "50", "100"] as const;
 const emailProviderLoading = ref(false);
 const emailProviderSaving = ref(false);
 const emailProviderTesting = ref(false);
@@ -736,8 +752,17 @@ const aiSettingsSaveDisabled = computed(
     (aiProviderKeyInputCount.value > 0 && !aiEncryptionConfigured.value),
 );
 
-const managedAiMonthlyMaximumCentsInput = computed(() =>
-  Math.round(Number(managedAiMonthlyMaximumDollarsInput.value) * 100),
+const managedAiMonthlyMaximumCentsInput = computed(() => {
+  if (managedAiLimitChoice.value === "custom") {
+    return Math.round(Number(managedAiCustomMaximumDollarsInput.value) * 100);
+  }
+  return Number(managedAiLimitChoice.value) * 100;
+});
+
+const managedAiSelectedModel = computed(() =>
+  managedAiBilling.value?.models.find(
+    (model) => model.id === managedAiDefaultModelInput.value,
+  ) || null,
 );
 
 const managedAiBillingSaveDisabled = computed(() => {
@@ -749,8 +774,10 @@ const managedAiBillingSaveDisabled = computed(() => {
     !Number.isInteger(maximum) ||
     maximum < settings.minimumMonthlyMaximumCents ||
     maximum > settings.maximumMonthlyMaximumCents ||
-    (managedAiOveragesEnabledInput.value === settings.overagesEnabled &&
-      maximum === settings.monthlyMaximumCents)
+    (managedAiDefaultModelInput.value === settings.defaultModel &&
+      managedAiOveragesEnabledInput.value === settings.overagesEnabled &&
+      (!managedAiOveragesEnabledInput.value && !settings.overagesEnabled ||
+        maximum === settings.monthlyMaximumCents))
   );
 });
 
@@ -765,9 +792,7 @@ const managedAiUsagePercent = computed(() => {
 });
 
 const managedAiUsageLabel = computed(() => {
-  const settings = managedAiBilling.value;
-  if (!settings) return "$0.00 of $5.00";
-  return `${formatManagedAiMicrousd(settings.currentMonthUsageMicrousd)} of ${formatManagedAiCents(settings.effectiveMaximumCents)}`;
+  return `${Math.round(managedAiUsagePercent.value)}% used`;
 });
 
 const activeEmailProvider = computed(
@@ -1468,6 +1493,7 @@ function handleAgentModelChange(model: string) {
 }
 
 function syncAiSettings(response: AiSettingsResponse) {
+  aiDeploymentMode.value = response.deploymentMode;
   aiProviders.value = response.providers || [];
   aiRoutes.value = response.routes || [];
   aiEncryptionConfigured.value = response.encryptionConfigured;
@@ -1489,10 +1515,23 @@ function syncAiSettings(response: AiSettingsResponse) {
 
 function syncManagedAiBilling(response: ManagedAiBillingSettings) {
   managedAiBilling.value = response;
+  managedAiDefaultModelInput.value = response.defaultModel;
   managedAiOveragesEnabledInput.value = response.overagesEnabled;
-  managedAiMonthlyMaximumDollarsInput.value =
-    Math.max(response.monthlyMaximumCents, response.minimumMonthlyMaximumCents) /
-    100;
+  const maximumCents = Math.max(
+    response.monthlyMaximumCents,
+    response.minimumMonthlyMaximumCents,
+  );
+  const preset = ([2_500, 5_000, 10_000] as const).find(
+    (value) => value === maximumCents,
+  );
+  if (preset) {
+    managedAiLimitChoice.value = String(preset / 100) as ManagedAiLimitChoice;
+  } else if (maximumCents > response.includedMonthlyCents) {
+    managedAiLimitChoice.value = "custom";
+    managedAiCustomMaximumDollarsInput.value = maximumCents / 100;
+  } else {
+    managedAiLimitChoice.value = "25";
+  }
 }
 
 async function loadAiSettings() {
@@ -1522,14 +1561,15 @@ async function saveManagedAiBillingSettings() {
     const response = await api.put<ManagedAiBillingSettings>(
       "/managed-ai-billing-settings",
       {
+        defaultModel: managedAiDefaultModelInput.value,
         overagesEnabled: managedAiOveragesEnabledInput.value,
         monthlyMaximumCents: managedAiMonthlyMaximumCentsInput.value,
       },
     );
     syncManagedAiBilling(response);
     aiSettingsMessage.value = response.overagesEnabled
-      ? `AI overages enabled with a ${formatManagedAiCents(response.monthlyMaximumCents)} monthly maximum.`
-      : "AI overages disabled. Everyday AI will use the included $5 allowance.";
+      ? `AI settings saved with a ${formatManagedAiCents(response.monthlyMaximumCents)} monthly maximum.`
+      : "AI settings saved. Additional usage is off.";
   } catch (e: any) {
     aiSettingsError.value = e.message || "Failed to save AI overage settings";
   } finally {
@@ -1543,15 +1583,6 @@ function formatManagedAiCents(cents: number): string {
     currency: "USD",
     minimumFractionDigits: 2,
   }).format(cents / 100);
-}
-
-function formatManagedAiMicrousd(microusd: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(microusd / 1_000_000);
 }
 
 async function saveAiSettings() {
@@ -2228,6 +2259,7 @@ onBeforeUnmount(() => {
 
       <template v-else>
         <section
+          v-if="aiDeploymentMode === 'self_hosted'"
           class="core-update-callout"
           aria-labelledby="core-update-title"
           aria-live="polite"
@@ -3196,109 +3228,142 @@ onBeforeUnmount(() => {
                 </p>
 
                 <template v-if="managedAiBilling?.managed">
-                  <div class="managed-ai-summary">
-                    <div class="managed-ai-summary__header">
-                      <div>
-                        <span class="managed-ai-summary__eyebrow">Everyday AI</span>
-                        <h3>Kimi K3</h3>
-                      </div>
-                      <span
-                        class="managed-ai-summary__status"
-                        :class="{
-                          'managed-ai-summary__status--fallback':
-                            managedAiBilling.fallbackActive,
-                        }"
-                      >
-                        {{
-                          managedAiBilling.fallbackActive
-                            ? "Allowance reached"
-                            : "Managed"
-                        }}
-                      </span>
+                  <div class="managed-ai-settings">
+                    <div class="managed-ai-row">
+                      <label class="field managed-ai-model-field">
+                        <span>Default model</span>
+                        <select
+                          v-model="managedAiDefaultModelInput"
+                          class="input"
+                          :disabled="aiSettingsSaving || !managedAiBilling.available"
+                        >
+                          <option
+                            v-for="model in managedAiBilling.models"
+                            :key="model.id"
+                            :value="model.id"
+                          >
+                            {{ model.label }}{{ model.recommended ? " — Recommended" : "" }}
+                          </option>
+                        </select>
+                      </label>
+                      <p v-if="managedAiSelectedModel" class="managed-ai-help">
+                        {{ managedAiSelectedModel.description }}
+                      </p>
                     </div>
 
-                    <p class="managed-ai-summary__description">
-                      Kimi K3 is included for everyday chat and tool use. Your
-                      managed plan includes $5 of usage each calendar month.
-                    </p>
-
-                    <div class="managed-ai-usage">
+                    <div class="managed-ai-row managed-ai-usage">
                       <div class="managed-ai-usage__labels">
-                        <span>This month</span>
+                        <span>Monthly usage</span>
                         <strong>{{ managedAiUsageLabel }}</strong>
                       </div>
                       <div
                         class="managed-ai-usage__track"
                         role="progressbar"
-                        aria-label="Everyday AI monthly usage"
+                        aria-label="Monthly AI usage"
                         aria-valuemin="0"
-                        :aria-valuemax="managedAiBilling.effectiveMaximumCents"
-                        :aria-valuenow="
-                          Math.min(
-                            managedAiBilling.effectiveMaximumCents,
-                            Math.round(
-                              managedAiBilling.currentMonthUsageMicrousd / 10000,
-                            ),
-                          )
-                        "
+                        aria-valuemax="100"
+                        :aria-valuenow="Math.round(managedAiUsagePercent)"
                       >
                         <span
                           class="managed-ai-usage__fill"
                           :style="{ width: `${managedAiUsagePercent}%` }"
                         />
                       </div>
-                    </div>
-                  </div>
-
-                  <div class="managed-ai-overages">
-                    <div class="managed-ai-overages__copy">
-                      <h3>Opt-in overages</h3>
-                      <p>
-                        Keep Kimi K3 available after the included allowance.
-                        Only usage above $5 is invoiced through Stripe, up to
-                        your monthly maximum.
+                      <p class="managed-ai-help">
+                        Resets each calendar month. At the limit, ME3 switches
+                        to a lower-cost backup model until the next month.
                       </p>
                     </div>
 
-                    <label class="checkbox-row managed-ai-overages__toggle">
-                      <input
-                        v-model="managedAiOveragesEnabledInput"
-                        type="checkbox"
-                        :disabled="
-                          aiSettingsSaving ||
-                          !managedAiBilling.available ||
-                          !managedAiBilling.eligible
-                        "
-                      />
-                      <span>Allow paid usage above $5</span>
-                    </label>
-
-                    <div class="managed-ai-overages__actions">
-                      <label class="field managed-ai-overages__maximum">
-                        <span>Monthly maximum</span>
-                        <span class="managed-ai-overages__money-input">
-                          <span aria-hidden="true">$</span>
+                    <div class="managed-ai-row managed-ai-additional">
+                      <div class="managed-ai-row__heading">
+                        <div>
+                          <h3>Additional usage</h3>
+                          <p class="managed-ai-help">
+                            Continue using your selected model after the included allowance.
+                          </p>
+                        </div>
+                        <label class="managed-ai-switch">
+                          <span class="sr-only">Allow additional paid AI usage</span>
                           <input
-                            v-model.number="managedAiMonthlyMaximumDollarsInput"
-                            class="input"
-                            type="number"
-                            inputmode="decimal"
-                            step="1"
-                            :min="
-                              managedAiBilling.minimumMonthlyMaximumCents / 100
-                            "
-                            :max="
-                              managedAiBilling.maximumMonthlyMaximumCents / 100
-                            "
+                            v-model="managedAiOveragesEnabledInput"
+                            type="checkbox"
                             :disabled="
                               aiSettingsSaving ||
                               !managedAiBilling.available ||
                               !managedAiBilling.eligible
                             "
                           />
-                        </span>
-                      </label>
+                        </label>
+                      </div>
 
+                      <fieldset
+                        v-if="managedAiBilling.eligible"
+                        class="managed-ai-limit"
+                        :disabled="aiSettingsSaving || !managedAiOveragesEnabledInput"
+                      >
+                        <legend>Monthly maximum</legend>
+                        <div class="managed-ai-limit__options">
+                          <button
+                            v-for="choice in managedAiLimitPresets"
+                            :key="choice"
+                            type="button"
+                            class="managed-ai-limit__option"
+                            :class="{ 'managed-ai-limit__option--active': managedAiLimitChoice === choice }"
+                            :aria-pressed="managedAiLimitChoice === choice"
+                            @click="managedAiLimitChoice = choice"
+                          >
+                            ${{ choice }}
+                          </button>
+                          <button
+                            type="button"
+                            class="managed-ai-limit__option"
+                            :class="{ 'managed-ai-limit__option--active': managedAiLimitChoice === 'custom' }"
+                            :aria-pressed="managedAiLimitChoice === 'custom'"
+                            @click="managedAiLimitChoice = 'custom'"
+                          >
+                            Custom
+                          </button>
+                        </div>
+
+                        <label
+                          v-if="managedAiLimitChoice === 'custom'"
+                          class="field managed-ai-limit__custom"
+                        >
+                          <span>Custom monthly maximum</span>
+                          <span class="managed-ai-money-input">
+                            <span aria-hidden="true">$</span>
+                            <input
+                              v-model.number="managedAiCustomMaximumDollarsInput"
+                              class="input"
+                              type="number"
+                              inputmode="decimal"
+                              step="1"
+                              :min="managedAiBilling.minimumMonthlyMaximumCents / 100"
+                              :max="managedAiBilling.maximumMonthlyMaximumCents / 100"
+                            />
+                          </span>
+                        </label>
+                      </fieldset>
+
+                      <p
+                        v-if="!managedAiBilling.eligible"
+                        class="managed-ai-unavailable"
+                      >
+                        {{
+                          managedAiBilling.billingSource === "internal"
+                            ? "Additional usage is not available for this test installation."
+                            : managedAiBilling.ineligibleReason ||
+                              "Additional usage is not available for this subscription."
+                        }}
+                      </p>
+                      <p v-else class="managed-ai-help">
+                        Only additional usage is billed through Stripe. You’ll
+                        never be charged above your selected limit.
+                      </p>
+                    </div>
+
+                    <div class="managed-ai-actions">
                       <Button
                         color="primary"
                         size="compact"
@@ -3306,23 +3371,17 @@ onBeforeUnmount(() => {
                         :disabled="managedAiBillingSaveDisabled"
                         @click="saveManagedAiBillingSettings"
                       >
-                        {{ aiSettingsSaving ? "Saving..." : "Save" }}
+                        {{ aiSettingsSaving ? "Saving..." : "Save AI settings" }}
                       </Button>
                     </div>
 
-                    <p class="managed-ai-overages__note">
-                      The maximum includes your $5 allowance. At the limit,
-                      Everyday AI switches to the lower-cost backup model until
-                      the next calendar month.
-                    </p>
                     <p
-                      v-if="!managedAiBilling.eligible"
-                      class="managed-ai-overages__unavailable"
+                      v-if="aiSettingsMessage"
+                      class="success"
+                      role="status"
+                      aria-live="polite"
                     >
-                      {{
-                        managedAiBilling.ineligibleReason ||
-                        "AI overages are not available for this subscription."
-                      }}
+                      {{ aiSettingsMessage }}
                     </p>
                   </div>
                 </template>
@@ -4566,72 +4625,54 @@ h1 {
   gap: 6px;
 }
 
-.managed-ai-summary,
-.managed-ai-overages {
+.managed-ai-settings {
   display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 12px);
-  background: var(--ui-surface-soft, var(--color-bg));
+  gap: 0;
 }
 
-.managed-ai-summary__header {
+.managed-ai-row {
+  display: grid;
+  gap: 8px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--ui-border, var(--color-border));
+}
+
+.managed-ai-row:first-child {
+  padding-top: 0;
+}
+
+.managed-ai-row__heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
 }
 
-.managed-ai-summary__eyebrow {
-  display: block;
-  margin-bottom: 3px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.managed-ai-summary h3,
-.managed-ai-overages h3 {
+.managed-ai-row h3 {
   margin: 0;
   color: var(--ui-text, var(--color-text));
   font-size: 15px;
   line-height: 1.3;
 }
 
-.managed-ai-summary__status {
-  flex-shrink: 0;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: color-mix(
-    in oklab,
-    var(--ui-accent, #4caf50) 14%,
-    transparent
-  );
-  color: var(--ui-accent-strong, var(--color-text));
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.managed-ai-summary__status--fallback {
-  background: color-mix(in oklab, var(--ui-warning, #b26a00) 14%, transparent);
-  color: var(--ui-warning, #8a5200);
-}
-
-.managed-ai-summary__description,
-.managed-ai-overages__copy p,
-.managed-ai-overages__note,
-.managed-ai-overages__unavailable {
+.managed-ai-help,
+.managed-ai-unavailable {
   margin: 0;
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 12px;
   line-height: 1.5;
 }
 
+.managed-ai-model-field {
+  gap: 6px;
+  margin: 0;
+}
+
+.managed-ai-model-field .input {
+  min-height: 44px;
+}
+
 .managed-ai-usage {
-  display: grid;
   gap: 7px;
 }
 
@@ -4663,46 +4704,86 @@ h1 {
   background: var(--ui-accent, var(--color-accent));
 }
 
-.managed-ai-overages__copy {
-  display: grid;
-  gap: 4px;
-}
-
-.managed-ai-overages__toggle {
-  width: fit-content;
+.managed-ai-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
   min-height: 44px;
+  cursor: pointer;
 }
 
-.managed-ai-overages__toggle input {
-  width: 18px;
-  height: 18px;
+.managed-ai-switch input {
+  width: 20px;
+  height: 20px;
   margin: 0;
   accent-color: var(--ui-accent, var(--color-accent));
 }
 
-.managed-ai-overages__actions {
-  display: flex;
-  align-items: flex-end;
+.managed-ai-limit {
+  display: grid;
   gap: 8px;
-  flex-wrap: wrap;
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
 }
 
-.managed-ai-overages__maximum {
-  flex: 1 1 180px;
-  min-width: 0;
-  gap: 5px;
-  margin: 0;
+.managed-ai-limit legend,
+.managed-ai-limit__custom > span:first-child {
+  margin-bottom: 6px;
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 12px;
   font-weight: 600;
 }
 
-.managed-ai-overages__money-input {
+.managed-ai-limit__options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.managed-ai-limit__option {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.managed-ai-limit__option:hover:not(:disabled) {
+  border-color: var(--ui-accent, var(--color-accent));
+}
+
+.managed-ai-limit__option--active {
+  border-color: var(--ui-accent, var(--color-accent));
+  background: color-mix(in oklab, var(--ui-accent, #009578) 12%, transparent);
+}
+
+.managed-ai-limit__option:focus-visible {
+  outline: 2px solid var(--ui-accent, var(--color-accent));
+  outline-offset: 2px;
+}
+
+.managed-ai-limit:disabled .managed-ai-limit__option {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.managed-ai-limit__custom {
+  gap: 0;
+  margin: 4px 0 0;
+}
+
+.managed-ai-money-input {
   position: relative;
   display: block;
 }
 
-.managed-ai-overages__money-input > span {
+.managed-ai-money-input > span {
   position: absolute;
   top: 50%;
   left: 12px;
@@ -4712,14 +4793,34 @@ h1 {
   pointer-events: none;
 }
 
-.managed-ai-overages__money-input .input {
+.managed-ai-money-input .input {
   width: 100%;
   min-height: 44px;
   padding-left: 26px;
 }
 
-.managed-ai-overages__unavailable {
-  color: var(--ui-danger, #b42318);
+.managed-ai-unavailable {
+  padding: 10px 12px;
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface-soft, var(--color-bg));
+}
+
+.managed-ai-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 16px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .account-inline-actions {
@@ -5875,16 +5976,11 @@ h1 {
     flex-basis: 100%;
   }
 
-  .managed-ai-overages__actions {
-    align-items: stretch;
-    flex-direction: column;
+  .managed-ai-limit__options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .managed-ai-overages__maximum {
-    flex-basis: auto;
-  }
-
-  .managed-ai-overages__actions :deep(.me3-btn) {
+  .managed-ai-actions :deep(.me3-btn) {
     width: 100%;
     min-height: 44px;
   }

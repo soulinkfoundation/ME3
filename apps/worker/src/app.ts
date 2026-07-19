@@ -1177,6 +1177,8 @@ app.put("/api/managed-ai-billing-settings", async (c) => {
     ? body as Record<string, unknown>
     : {};
   if (
+    typeof input.defaultModel !== "string" ||
+    !input.defaultModel.trim() ||
     typeof input.overagesEnabled !== "boolean" ||
     typeof input.monthlyMaximumCents !== "number" ||
     !Number.isInteger(input.monthlyMaximumCents)
@@ -1186,6 +1188,7 @@ app.put("/api/managed-ai-billing-settings", async (c) => {
   try {
     return c.json(
       await updateManagedAiBillingSettings(c.env, {
+        defaultModel: input.defaultModel.trim(),
         overagesEnabled: input.overagesEnabled,
         monthlyMaximumCents: input.monthlyMaximumCents,
       }),
