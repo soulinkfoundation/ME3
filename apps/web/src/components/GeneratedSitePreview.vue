@@ -76,8 +76,26 @@ function previewNavigationScript(currentFile: string): string {
   return `<script>(function(){document.addEventListener('click',function(event){var link=event.target&&event.target.closest?event.target.closest('a'):null;if(!link)return;var href=link.getAttribute('href')||'';if(!href||/^(?:https?:|mailto:|tel:|#)/i.test(href))return;event.preventDefault();parent.postMessage({type:'me3-preview-navigation',href:href,currentFile:${JSON.stringify(currentFile)}},'*');});})();<` + "/script>";
 }
 
+function previewBaseHref(currentFile: string): string {
+  const username = (wizard.username || wizard.profile.handle || "").trim();
+  if (!username) return "";
+
+  const directory = currentFile
+    .split("/")
+    .slice(0, -1)
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  const directoryPath = directory ? `${directory}/` : "";
+  return `/preview/${encodeURIComponent(username)}/${directoryPath}`;
+}
+
 function withPreviewNavigation(html: string, currentFile: string): string {
-  return html.replace("</body>", `${previewNavigationScript(currentFile)}</body>`);
+  const baseHref = previewBaseHref(currentFile);
+  const withBase = baseHref
+    ? html.replace("<head>", `<head><base href="${baseHref}">`)
+    : html;
+  return withBase.replace("</body>", `${previewNavigationScript(currentFile)}</body>`);
 }
 
 function resolvePreviewFile(href: string, currentFile: string): string {
