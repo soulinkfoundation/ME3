@@ -288,6 +288,7 @@ function createFixture() {
         type: "queue",
         queue_name: QUEUE_NAME,
       },
+      { name: "JWT_SECRET", type: "secret_text" },
     ],
     queues: new Map([
       [
@@ -410,7 +411,9 @@ function createFixture() {
       if (method === "PATCH") {
         const settings = JSON.parse(init.body.get("settings"));
         assert.deepEqual(settings, { bindings: [] });
-        state.workerBindings = [];
+        state.workerBindings = state.workerBindings.filter(
+          (binding) => binding.type === "secret_text",
+        );
         state.producerBindings.clear();
       }
       return success({ bindings: structuredClone(state.workerBindings) });

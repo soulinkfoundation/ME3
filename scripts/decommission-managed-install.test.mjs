@@ -714,6 +714,7 @@ function createCloudflareFixture() {
         type: "queue",
         queue_name: DEDICATED_QUEUE,
       },
+      { name: "JWT_SECRET", type: "secret_text" },
     ],
     producerDetachPollsRemaining: 0,
     omitProducerArray: false,
@@ -827,7 +828,9 @@ function createCloudflareFixture() {
       if (method === "PATCH") {
         const settings = JSON.parse(init.body.get("settings"));
         assert.deepEqual(settings, { bindings: [] });
-        state.workerBindings = [];
+        state.workerBindings = state.workerBindings.filter(
+          (binding) => binding.type === "secret_text",
+        );
         if (!state.retainProducerBindingOnPatch) {
           state.producerBindings.clear();
         }

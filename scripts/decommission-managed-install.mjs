@@ -559,8 +559,16 @@ export async function clearManagedWorkerBindings(api, accountId, workerName) {
     await api(path, { method: "PATCH", body });
   }
   const after = await api(path, {}, { missingOk: true });
-  if (after && (!Array.isArray(after.bindings) || after.bindings.length !== 0)) {
-    throw new Error("managed Worker binding removal was not verified");
+  const retainedBindings = after?.bindings;
+  if (
+    after &&
+    (!Array.isArray(retainedBindings) ||
+      retainedBindings.some(
+        (binding) =>
+          binding?.type !== "secret_text" && binding?.type !== "version_metadata",
+      ))
+  ) {
+    throw new Error("managed Worker resource binding removal was not verified");
   }
 }
 
