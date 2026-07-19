@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useSitesStore, type SitePage } from "../../stores/sites";
+import { LANDING_PAGES_PLUGIN_ID } from "@me3-core/plugin-landing-pages";
+import { api } from "../../api";
 import BrandLogo from "../../components/BrandLogo.vue";
 import Button from "../../components/Button.vue";
 import UiIcon from "../../components/UiIcon.vue";
@@ -16,6 +18,7 @@ definePage({
 });
 
 const sites = useSitesStore();
+const landingPagesEnabled = ref(false);
 
 const profileSite = computed(() =>
   sites.sites.find((site) => (site.site_type || "profile") === "profile"),
@@ -27,7 +30,7 @@ const legacyLandingSites = computed(() =>
 
 const landingPageCards = computed(() => {
   const profileUsername = profileSite.value?.username;
-  if (!profileUsername) return [];
+  if (!profileUsername || !landingPagesEnabled.value) return [];
 
   const pages = sites.sitePages.map((page: SitePage) => ({
     key: `page-${page.id}`,
@@ -51,6 +54,14 @@ const landingPageCards = computed(() => {
   return [...pages, ...legacy];
 });
 
+const visibleSitesError = computed(() => {
+  const message = sites.error?.trim();
+  if (!message || message.toLowerCase().includes("activate me3 landing pages")) {
+    return null;
+  }
+  return message;
+});
+
 const createLandingPagePath = computed(() =>
   profileSite.value
     ? `/sites/${encodeURIComponent(profileSite.value.username)}/landing-pages/new`
@@ -61,11 +72,38 @@ function statusLabel(published: boolean): string {
   return published ? "Published" : "Draft";
 }
 
-onMounted(async () => {
-  await sites.fetchSites();
-  if (profileSite.value) {
+async function syncLandingPagesPlugin(): Promise<void> {
+  try {
+    const response = await api.get<{
+      plugins: Array<{ id: string; enabled: boolean; status: string }>;
+    }>("/plugins");
+    landingPagesEnabled.value = response.plugins.some(
+      (plugin) =>
+        plugin.id === LANDING_PAGES_PLUGIN_ID &&
+        plugin.enabled &&
+        plugin.status === "installed",
+    );
+  } catch {
+    landingPagesEnabled.value = false;
+  }
+
+  if (landingPagesEnabled.value && profileSite.value) {
     await sites.fetchSitePages(profileSite.value.username);
   }
+}
+
+function handlePluginsChanged() {
+  void syncLandingPagesPlugin();
+}
+
+onMounted(async () => {
+  await sites.fetchSites();
+  await syncLandingPagesPlugin();
+  window.addEventListener("me3:plugins-changed", handlePluginsChanged);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("me3:plugins-changed", handlePluginsChanged);
 });
 </script>
 
@@ -74,7 +112,7 @@ onMounted(async () => {
     <main class="sites-shell">
       <header class="sites-header">
         <Button
-          v-if="profileSite"
+          v-if="profileSite && landingPagesEnabled"
           color="ghost"
           shape="soft"
           size="compact"
@@ -87,8 +125,8 @@ onMounted(async () => {
         </Button>
       </header>
 
-      <p v-if="sites.error" class="sites-message sites-message--error">
-        {{ sites.error }}
+      <p v-if="visibleSitesError" class="sites-message sites-message--error">
+        {{ visibleSitesError }}
       </p>
 
       <section v-if="profileSite" class="sites-grid" aria-label="Your sites">
