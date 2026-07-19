@@ -56,18 +56,21 @@ export async function cleanupFailedManagedProvision(
   await assertMissing(api, `/accounts/${input.accountId}/r2/buckets/${contract.r2Name}`, "R2 bucket");
 
   await reportStage("removing_consumers");
-  for (const queue of before.queues) {
-    for (const consumer of queue.consumers) {
-      await deleteIfPresent(
-        api,
-        `/accounts/${input.accountId}/queues/${queue.queue_id}/consumers/${consumer.consumer_id}`,
-      );
+  const consumerQueues = await listAllQueues(api, input.accountId);
+  for (const queue of consumerQueues) {
+    for (const consumer of await listQueueConsumers(api, input.accountId, queue)) {
+      if (isWorkerConsumer(consumer, contract.workerName)) {
+        await deleteIfPresent(
+          api,
+          `/accounts/${input.accountId}/queues/${queue.queue_id}/consumers/${consumer.consumer_id}`,
+        );
+      }
     }
   }
   await waitForManagedQueueConsumersDetached(
     api,
     input.accountId,
-    contract.queueNames,
+    consumerQueues.map((queue) => queue.queue_name),
     contract.workerName,
     {
       ...(pause ? { pause } : {}),
@@ -410,6 +413,38 @@ async function findQueue(api, accountId, name) {
   return matches[0] || null;
 }
 
+async function listAllQueues(api, accountId) {
+  const queues = [];
+  const queueIds = new Set();
+  for (let page = 1; page <= 100; page += 1) {
+    const query = new URLSearchParams({ page: String(page), per_page: "100" });
+    const result = await api(`/accounts/${accountId}/queues?${query}`);
+    if (!Array.isArray(result)) {
+      throw new Error("failed provision queue listing is invalid");
+    }
+    for (const queue of result) {
+      if (
+        typeof queue?.queue_id !== "string" ||
+        typeof queue?.queue_name !== "string" ||
+        queueIds.has(queue.queue_id)
+      ) {
+        throw new Error("failed provision queue listing is incomplete");
+      }
+      queueIds.add(queue.queue_id);
+      queues.push(queue);
+    }
+    if (result.length < 100) return queues;
+  }
+  throw new Error("failed provision queue listing exceeded the safe page limit");
+}
+
+function isWorkerConsumer(consumer, workerName) {
+  return (
+    consumer?.script_name === workerName &&
+    (consumer?.type === undefined || consumer?.type === "worker")
+  );
+}
+
 async function listQueueConsumers(api, accountId, queue) {
   if (!queue?.queue_id) throw new Error("failed provision queue id is invalid");
   const consumers = await api(
@@ -486,6 +521,17 @@ async function assertFailedProvisionProviderResourcesAbsent(api, accountId, cont
   for (const queueName of contract.queueNames) {
     if (await findQueue(api, accountId, queueName)) {
       throw new Error(`failed provision queue deletion was not verified: ${queueName}`);
+    }
+  }
+  for (const queue of await listAllQueues(api, accountId)) {
+    if (
+      (await listQueueConsumers(api, accountId, queue)).some((consumer) =>
+        isWorkerConsumer(consumer, contract.workerName),
+      )
+    ) {
+      throw new Error(
+        `failed provision queue consumer removal was not verified: ${queue.queue_name}`,
+      );
     }
   }
   const namespaces = await listDurableObjectNamespaces(api, accountId);

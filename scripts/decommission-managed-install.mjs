@@ -66,9 +66,8 @@ export async function decommissionManagedInstall(
   await assertMissing(api, `/accounts/${input.accountId}/r2/buckets/${contract.r2Name}`, "R2 bucket");
 
   await reportStage("removing_consumers");
-  for (const queueName of contract.queueNames) {
-    const queue = await findQueue(api, input.accountId, queueName);
-    if (!queue) continue;
+  const consumerQueues = await listAllQueues(api, input.accountId);
+  for (const queue of consumerQueues) {
     for (const consumer of await listQueueConsumers(api, input.accountId, queue)) {
       if (isWorkerConsumer(consumer, contract.workerName)) {
         await deleteIfPresent(
@@ -81,7 +80,7 @@ export async function decommissionManagedInstall(
   await waitForManagedQueueConsumersDetached(
     api,
     input.accountId,
-    contract.queueNames,
+    consumerQueues.map((queue) => queue.queue_name),
     contract.workerName,
     { pause, maxAttempts: queueDetachMaxAttempts },
   );
@@ -461,13 +460,14 @@ async function assertManagedProviderResourcesAbsent(api, accountId, contract) {
     if (queueName.startsWith(`${contract.workerName}-`) && queue) {
       throw new Error(`managed queue deletion was not verified: ${queueName}`);
     }
+  }
+  for (const queue of await listAllQueues(api, accountId)) {
     if (
-      queue &&
       (await listQueueConsumers(api, accountId, queue)).some((consumer) =>
         isWorkerConsumer(consumer, contract.workerName),
       )
     ) {
-      throw new Error(`managed queue consumer removal was not verified: ${queueName}`);
+      throw new Error(`managed queue consumer removal was not verified: ${queue.queue_name}`);
     }
   }
   const namespaces = await listDurableObjectNamespaces(api, accountId);
@@ -483,6 +483,29 @@ async function findQueue(api, accountId, name) {
   const matches = queues.filter((queue) => queue?.queue_name === name);
   if (matches.length > 1) throw new Error(`Cloudflare queue identity is ambiguous: ${name}`);
   return matches[0] || null;
+}
+
+async function listAllQueues(api, accountId) {
+  const queues = [];
+  const queueIds = new Set();
+  for (let page = 1; page <= 100; page += 1) {
+    const query = new URLSearchParams({ page: String(page), per_page: "100" });
+    const result = await api(`/accounts/${accountId}/queues?${query}`);
+    if (!Array.isArray(result)) throw new Error("Cloudflare queue listing is invalid");
+    for (const queue of result) {
+      if (
+        typeof queue?.queue_id !== "string" ||
+        typeof queue?.queue_name !== "string" ||
+        queueIds.has(queue.queue_id)
+      ) {
+        throw new Error("Cloudflare queue listing is incomplete");
+      }
+      queueIds.add(queue.queue_id);
+      queues.push(queue);
+    }
+    if (result.length < 100) return queues;
+  }
+  throw new Error("Cloudflare queue listing exceeded the safe page limit");
 }
 
 export async function waitForManagedQueueBindingsDetached(

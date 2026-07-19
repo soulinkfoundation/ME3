@@ -816,8 +816,16 @@ function createCloudflareFixture() {
       return state.r2 ? success(state.r2) : missing();
     }
     if (resource === "/queues" && method === "GET") {
-      const queue = state.queues.get(parsed.searchParams.get("name"));
-      return success(queue ? [publicQueue(queue, state)] : []);
+      const queueName = parsed.searchParams.get("name");
+      if (queueName) {
+        const queue = state.queues.get(queueName);
+        return success(queue ? [publicQueue(queue, state)] : []);
+      }
+      return success(
+        Number(parsed.searchParams.get("page") || "1") === 1
+          ? [...state.queues.values()].map((queue) => publicQueue(queue, state))
+          : [],
+      );
     }
     const consumerList = /^\/queues\/([^/]+)\/consumers$/.exec(resource);
     if (consumerList && method === "GET") {

@@ -370,23 +370,13 @@ function createFixture() {
       return state.r2 ? success(state.r2) : missing();
     }
     if (resource === "/queues" && method === "GET") {
-      const queue = state.queues.get(parsed.searchParams.get("name"));
-      return success(
-        queue
-          ? [
-              {
-                queue_id: queue.queue_id,
-                queue_name: queue.queue_name,
-                consumers: structuredClone(queue.consumers),
-                consumers_total_count: queue.consumers.length,
-                producers: state.producerBindings.has(queue.queue_name)
-                  ? [{ type: "worker", script: WORKER_NAME }]
-                  : [],
-                producers_total_count: state.producerBindings.has(queue.queue_name) ? 1 : 0,
-              },
-            ]
-          : [],
-      );
+      const queueName = parsed.searchParams.get("name");
+      const queues = queueName
+        ? [state.queues.get(queueName)].filter(Boolean)
+        : Number(parsed.searchParams.get("page") || "1") === 1
+          ? [...state.queues.values()]
+          : [];
+      return success(queues.map((queue) => publicQueue(queue, state)));
     }
     const consumerList = /^\/queues\/([^/]+)\/consumers$/.exec(resource);
     if (consumerList && method === "GET") {
@@ -439,6 +429,20 @@ function createFixture() {
 
 function queueById(state, id) {
   return [...state.queues.values()].find((queue) => queue.queue_id === id) || null;
+}
+
+function publicQueue(queue, state) {
+  const producers = state.producerBindings.has(queue.queue_name)
+    ? [{ type: "worker", script: WORKER_NAME }]
+    : [];
+  return {
+    queue_id: queue.queue_id,
+    queue_name: queue.queue_name,
+    consumers: structuredClone(queue.consumers),
+    consumers_total_count: queue.consumers.length,
+    producers,
+    producers_total_count: producers.length,
+  };
 }
 
 function success(result) {
