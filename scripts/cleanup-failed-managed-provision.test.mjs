@@ -291,7 +291,6 @@ function createFixture() {
           consumers: [
             {
               consumer_id: "managed-consumer",
-              type: "worker",
               script_name: WORKER_NAME,
             },
           ],

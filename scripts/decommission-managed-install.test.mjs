@@ -223,6 +223,29 @@ test("polls complete Queue binding evidence and fails closed when detachment nev
   assert.equal(incomplete.state.queues.has(DEDICATED_QUEUE), true);
 });
 
+test("waits for the exact Queue consumer to disappear before tombstone deployment", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.retainConsumerOnDelete = true;
+  let tombstones = 0;
+
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), {
+      request: fake.request,
+      pause: async () => {},
+      queueDetachMaxAttempts: 2,
+      deployTombstone: async () => {
+        tombstones += 1;
+      },
+    }),
+    /queue consumer did not detach/,
+  );
+
+  assert.equal(tombstones, 0);
+  assert.equal(fake.state.worker, true);
+  assert.notEqual(fake.state.d1, null);
+  assert.equal(fake.state.queues.has(DEDICATED_QUEUE), true);
+});
+
 test("orders source queues before dead-letter queues independently of manifest order", () => {
   assert.deepEqual(
     orderedDedicatedQueueNames(
@@ -530,6 +553,28 @@ test("fails closed when a shared queue consumer listing is incomplete", async ()
   assert.notEqual(fake.state.r2, null);
 });
 
+test("fails closed when a dedicated queue consumer listing is incomplete", async () => {
+  const fake = createCloudflareFixture();
+  const incompleteRequest = async (url, init = {}) => {
+    const parsed = new URL(url);
+    const response = await fake.request(url, init);
+    if (
+      (init.method || "GET") === "GET" &&
+      parsed.pathname.endsWith("/queues/dedicated-id/consumers")
+    ) {
+      return success([]);
+    }
+    return response;
+  };
+
+  await assert.rejects(
+    decommissionManagedInstall(contract(), { request: incompleteRequest }),
+    /dedicated queue consumer listing is incomplete/,
+  );
+  assert.equal(fake.calls.some(({ method }) => method === "DELETE"), false);
+  assert.notEqual(fake.state.r2, null);
+});
+
 test("retries safely after every destructive stage has already taken effect", async (t) => {
   const stages = ["r2", "consumer", "queue", "tombstone", "worker", "d1"];
   for (const interruptedAfter of stages) {
@@ -657,6 +702,7 @@ function createCloudflareFixture() {
     producerBindings: new Set([DEDICATED_QUEUE]),
     producerDetachPollsRemaining: 0,
     omitProducerArray: false,
+    retainConsumerOnDelete: false,
     lifecycle: {
       state: "suspended",
       credentials_revoked_at: "2026-07-18T12:00:00Z",
@@ -671,7 +717,6 @@ function createCloudflareFixture() {
           consumers: [
             {
               consumer_id: "dedicated-managed-consumer",
-              type: "worker",
               script_name: WORKER_NAME,
             },
           ],
@@ -736,9 +781,11 @@ function createCloudflareFixture() {
     if (consumerDelete && method === "DELETE") {
       const queue = queueById(state, consumerDelete[1]);
       if (!queue) return missing();
-      queue.consumers = queue.consumers.filter(
-        (consumer) => consumer.consumer_id !== consumerDelete[2],
-      );
+      if (!state.retainConsumerOnDelete) {
+        queue.consumers = queue.consumers.filter(
+          (consumer) => consumer.consumer_id !== consumerDelete[2],
+        );
+      }
       return success(null);
     }
     const queueDelete = /^\/queues\/([^/]+)$/.exec(resource);

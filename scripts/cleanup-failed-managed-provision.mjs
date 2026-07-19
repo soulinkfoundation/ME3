@@ -7,6 +7,7 @@ import {
   deployDurableObjectTombstone,
   orderedDedicatedQueueNames,
   waitForManagedQueueBindingsDetached,
+  waitForManagedQueueConsumersDetached,
 } from "./decommission-managed-install.mjs";
 import { listR2Objects } from "./list-r2-s3.mjs";
 import { sendManagedLifecycleWorkflowCallback } from "./managed-lifecycle-workflow-callback.mjs";
@@ -62,6 +63,16 @@ export async function cleanupFailedManagedProvision(
       );
     }
   }
+  await waitForManagedQueueConsumersDetached(
+    api,
+    input.accountId,
+    contract.queueNames,
+    contract.workerName,
+    {
+      ...(pause ? { pause } : {}),
+      ...(queueDetachMaxAttempts ? { maxAttempts: queueDetachMaxAttempts } : {}),
+    },
+  );
 
   // Producer bindings are part of the Worker deployment and survive Queue
   // consumer deletion. Replace the never-public Worker with the exact
@@ -238,7 +249,8 @@ async function inspectResources(api, accountId, contract) {
     if (
       consumers.some(
         (consumer) =>
-          consumer?.type !== "worker" || consumer?.script_name !== contract.workerName,
+          (consumer?.type !== undefined && consumer?.type !== "worker") ||
+          consumer?.script_name !== contract.workerName,
       )
     ) {
       throw new Error(`failed provision queue consumer identity does not match: ${queueName}`);

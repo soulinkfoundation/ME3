@@ -67,6 +67,13 @@ export async function decommissionManagedInstall(
       }
     }
   }
+  await waitForManagedQueueConsumersDetached(
+    api,
+    input.accountId,
+    contract.queueNames,
+    contract.workerName,
+    { pause, maxAttempts: queueDetachMaxAttempts },
+  );
 
   // Queue producer bindings belong to the Worker deployment, not the Queue
   // consumer records above. Deploy the exact binding-free tombstone before
@@ -476,6 +483,50 @@ export async function waitForManagedQueueBindingsDetached(
   }
 }
 
+export async function waitForManagedQueueConsumersDetached(
+  api,
+  accountId,
+  queueNames,
+  workerName,
+  {
+    pause = delay,
+    maxAttempts = QUEUE_DETACH_MAX_ATTEMPTS,
+  } = {},
+) {
+  if (
+    typeof api !== "function" ||
+    !/^[0-9a-f]{32}$/.test(accountId || "") ||
+    !Array.isArray(queueNames) ||
+    !workerName ||
+    typeof pause !== "function" ||
+    !Number.isSafeInteger(maxAttempts) ||
+    maxAttempts < 1 ||
+    maxAttempts > QUEUE_DETACH_MAX_ATTEMPTS
+  ) {
+    throw new Error("managed queue consumer detachment proof configuration is invalid");
+  }
+
+  for (const queueName of queueNames) {
+    let detached = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const queue = await findQueue(api, accountId, queueName);
+      if (!queue) {
+        detached = true;
+        break;
+      }
+      const consumers = await listQueueConsumers(api, accountId, queue);
+      if (!consumers.some((consumer) => isWorkerConsumer(consumer, workerName))) {
+        detached = true;
+        break;
+      }
+      if (attempt < maxAttempts) await pause(QUEUE_DETACH_DELAY_MS);
+    }
+    if (!detached) {
+      throw new Error(`managed queue consumer did not detach: ${queueName}`);
+    }
+  }
+}
+
 export function orderedDedicatedQueueNames(queueNames, workerName) {
   return queueNames
     .filter((name) => name.startsWith(`${workerName}-`))
@@ -492,24 +543,25 @@ async function listQueueConsumers(api, accountId, queue) {
     `/accounts/${accountId}/queues/${queue.queue_id}/consumers`,
   );
   if (!Array.isArray(consumers)) throw new Error("Cloudflare queue consumer listing is invalid");
-  // Cloudflare exposes this endpoint as a single page. Legacy queues are shared
-  // across installations, so their queue-level count is the completeness proof
-  // that prevents a later consumer from being missed and left attached.
-  if (LEGACY_SHARED_QUEUES.has(queue.queue_name)) {
-    const expectedCount = Number(queue.consumers_total_count);
-    if (
-      !Number.isSafeInteger(expectedCount) ||
-      expectedCount < 0 ||
-      consumers.length !== expectedCount
-    ) {
-      throw new Error("Cloudflare shared queue consumer listing is incomplete");
-    }
+  // Cloudflare exposes this endpoint as a single page. Require its length to
+  // match the Queue summary before treating an exact Worker consumer as absent.
+  const expectedCount = Number(queue.consumers_total_count);
+  if (
+    !Number.isSafeInteger(expectedCount) ||
+    expectedCount < 0 ||
+    consumers.length !== expectedCount
+  ) {
+    const scope = LEGACY_SHARED_QUEUES.has(queue.queue_name) ? "shared" : "dedicated";
+    throw new Error(`Cloudflare ${scope} queue consumer listing is incomplete`);
   }
   return consumers;
 }
 
 function isWorkerConsumer(consumer, workerName) {
-  return consumer?.type === "worker" && consumer?.script_name === workerName;
+  return (
+    consumer?.script_name === workerName &&
+    (consumer?.type === undefined || consumer?.type === "worker")
+  );
 }
 
 async function listDurableObjectNamespaces(api, accountId) {
