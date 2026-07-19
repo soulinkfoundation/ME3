@@ -514,11 +514,11 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.ME3_MANAGED_RETENTION_R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ME3_MANAGED_RETENTION_R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+          RETENTION_R2_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_RETENTION_R2_ACCOUNT_ID }}
           RETENTION_R2_BUCKET: ${{ secrets.ME3_MANAGED_RETENTION_R2_BUCKET }}
           ME3_MANAGED_EXPORT_KEYRING: ${{ secrets.ME3_MANAGED_EXPORT_KEYRING }}
         run: |
-          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          endpoint="https://${RETENTION_R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           key="managed-exports/${ME3_MANAGED_INSTALLATION_ID}/${ME3_MANAGED_OPERATION_ID}.me3-managed-export-v1.enc"
           node control/scripts/managed-retained-export.mjs retain \
             --endpoint "$endpoint" \
@@ -548,11 +548,11 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.ME3_MANAGED_RETENTION_R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ME3_MANAGED_RETENTION_R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+          RETENTION_R2_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_RETENTION_R2_ACCOUNT_ID }}
           RETENTION_R2_BUCKET: ${{ secrets.ME3_MANAGED_RETENTION_R2_BUCKET }}
           ME3_MANAGED_EXPORT_KEYRING: ${{ secrets.ME3_MANAGED_EXPORT_KEYRING }}
         run: |
-          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          endpoint="https://${RETENTION_R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           node control/scripts/managed-retained-export.mjs verify \
             --endpoint "$endpoint" \
             --bucket "$RETENTION_R2_BUCKET" \
@@ -628,11 +628,11 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.ME3_MANAGED_RETENTION_R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ME3_MANAGED_RETENTION_R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+          RETENTION_R2_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_RETENTION_R2_ACCOUNT_ID }}
           RETENTION_R2_BUCKET: ${{ secrets.ME3_MANAGED_RETENTION_R2_BUCKET }}
           ME3_MANAGED_EXPORT_KEYRING: ${{ secrets.ME3_MANAGED_EXPORT_KEYRING }}
         run: |
-          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          endpoint="https://${RETENTION_R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           node control/scripts/managed-retained-export.mjs verify \
             --endpoint "$endpoint" \
             --bucket "$RETENTION_R2_BUCKET" \

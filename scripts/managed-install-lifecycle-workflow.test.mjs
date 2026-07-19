@@ -130,6 +130,30 @@ test("requires write-once retention and reversible suspension before export succ
   );
 });
 
+test("routes every retained-export R2 operation through the retention account", () => {
+  const retainedExportSteps = [
+    getStep("Conditionally retain and independently verify the export"),
+    getStep("Re-download and re-verify retained bytes before service termination"),
+    getStep("Re-verify retained evidence before destructive controls"),
+  ];
+
+  for (const step of retainedExportSteps) {
+    assert.match(
+      step,
+      /RETENTION_R2_ACCOUNT_ID: \$\{\{ secrets\.ME3_MANAGED_RETENTION_R2_ACCOUNT_ID \}\}/,
+    );
+    assert.match(
+      step,
+      /endpoint="https:\/\/\$\{RETENTION_R2_ACCOUNT_ID\}\.r2\.cloudflarestorage\.com"/,
+    );
+    assert.doesNotMatch(step, /secrets\.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID/);
+    assert.doesNotMatch(
+      step,
+      /endpoint="https:\/\/\$\{CLOUDFLARE_ACCOUNT_ID\}\.r2\.cloudflarestorage\.com"/,
+    );
+  }
+});
+
 test("re-verifies retained evidence and exact absence before decommission success", () => {
   const retryInspection = getStep("Inspect exact decommission retry state");
   const retained = getStep("Re-verify retained evidence before destructive controls");
