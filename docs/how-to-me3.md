@@ -253,9 +253,12 @@ hosted-only, do not belong in Core D1, and are never included.
 
 ### Managed Hosting Cancellation And Decommission
 
-Cancelling a managed hosting subscription is a two-operation process. Export and decommission use
-different operation and attempt IDs. A runtime-backed install is never deleted without a retained,
-cryptographically verified owner export.
+Cancelling a managed hosting subscription normally uses two operations. Export and decommission use
+different operation and attempt IDs, and the default path never deletes a runtime-backed install
+without a retained, cryptographically verified owner export. An account owner can instead request
+immediate deletion and explicitly waive both remaining paid service and the retained export. That
+strict waiver is recorded and attested before the workflow can enter any destructive stage; it is
+not inferred from a missing or failed export.
 
 At the paid service end, ME3 Cloud dispatches the export operation with the installation's complete,
 write-once resource manifest: exact Worker name, D1 name and UUID, R2 bucket, every dedicated Queue,
@@ -304,8 +307,16 @@ The later decommission operation re-downloads and re-verifies the same retained 
 version before any destructive control. It then suspends and drains again, revokes credentials,
 purges runtime-owned D1/R2/Durable Object data, proves the source R2 bucket empty, removes only Queue
 consumers whose exact `script_name` matches the managed Worker, deletes dedicated Queues, applies the
-Durable Object `deleted_classes` migration, and deletes the exact Worker, D1, and R2 resources. The
-operation succeeds only after GET/list checks prove every manifest resource absent. These deletion
+Durable Object `deleted_classes` migration, and deletes the exact Worker, D1, and R2 resources.
+
+The strict-waiver path skips retained-export capture and S3 credential derivation, but it does not
+weaken resource-deletion proof. The runtime must first persist that it is suspended and drained, its
+credentials are revoked, and storage purge completed. R2 bucket deletion is the first provider
+deletion: Cloudflare rejects deletion of a non-empty bucket, and the workflow must then confirm the
+exact bucket is absent before it can touch Queues, the Worker, Durable Objects, or D1. If R2 remains
+while the D1 purge proof is unavailable, the retry fails closed.
+
+Both paths succeed only after GET/list checks prove every manifest resource absent. These deletion
 steps are idempotent, so an interrupted attempt can retry without broad cleanup or name-prefix scans.
 An authoritative `NoSuchBucket` counts as an already-absent R2 bucket; authorization and transient
 errors never do. If the Worker is already absent or has been replaced by the Durable Object deletion
@@ -326,12 +337,13 @@ pnpm portable:verify -- --archive owner-portable-v1
 ```
 
 The lifecycle workflow requires separate, narrowly scoped GitHub secrets for the lifecycle callback,
-Cloudflare resource API, retained-export R2 access, and the versioned managed export keyring. It
-derives source R2 S3 credentials inside each runner job from the existing Cloudflare resource API
-token, masks them before writing them to the runner environment, and verifies access to the exact
-managed bucket. No separate source R2 access-key secret is stored. Do not reuse the provisioning
-callback secret as the lifecycle secret, and do not expose provider or export-key secrets to code
-checked out from an older deployed release.
+Cloudflare resource API, retained-export R2 access, and the versioned managed export keyring. For
+export and retained-export decommission, it derives source R2 S3 credentials inside each runner job
+from the existing Cloudflare resource API token, masks them before writing them to the runner
+environment, and verifies access to the exact managed bucket. A strict-waiver decommission and
+never-public failed-provision cleanup do not receive those S3 credentials. No separate source R2
+access-key secret is stored. Do not reuse the provisioning callback secret as the lifecycle secret,
+and do not expose provider or export-key secrets to code checked out from an older deployed release.
 
 ### Reproducible Local Proof
 

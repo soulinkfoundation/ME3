@@ -254,6 +254,7 @@ jobs:
           fi
 
       - name: Derive job-scoped source R2 S3 credentials
+        if: inputs.operation == 'export' || (inputs.operation == 'decommission' && inputs.export_waived == false)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
@@ -265,6 +266,7 @@ jobs:
           sha256sum --check "$RUNNER_TEMP/managed-control.sha256"
 
       - name: Verify job-scoped source R2 S3 access
+        if: inputs.operation == 'export' || (inputs.operation == 'decommission' && inputs.export_waived == false)
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
         shell: bash
@@ -713,7 +715,7 @@ jobs:
           NODE
 
       - name: Verify source R2 is empty after runtime purge
-        if: inputs.operation == 'decommission'
+        if: inputs.operation == 'decommission' && inputs.export_waived == false
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
         run: |
@@ -741,7 +743,6 @@ jobs:
             --r2-name "$R2_NAME"
             --queue-names "$QUEUE_NAMES"
             --durable-object-namespace-id "$DO_NAMESPACE_ID"
-            --r2-empty-listing "$RUNNER_TEMP/r2-empty.json"
           )
           if [[ "$EXPORT_WAIVED" = false ]]; then
             args+=(
@@ -753,6 +754,7 @@ jobs:
               --export-etag "$EVIDENCE_ETAG"
               --export-size-bytes "$EVIDENCE_SIZE_BYTES"
               --export-head "$RUNNER_TEMP/export-head.json"
+              --r2-empty-listing "$RUNNER_TEMP/r2-empty.json"
             )
           fi
           node control/scripts/decommission-managed-install.mjs "${args[@]}"

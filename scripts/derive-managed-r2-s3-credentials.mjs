@@ -29,13 +29,7 @@ export async function deriveManagedR2S3Credentials(
     throw new Error("managed source R2 credential contract is invalid");
   }
 
-  const verification = await request(`${API_ROOT}/user/tokens/verify`, {
-    headers: { Authorization: `Bearer ${apiToken}` },
-  });
-  const verified = await readCloudflareResult(
-    verification,
-    "managed source R2 token verification failed",
-  );
+  const verified = await verifyCloudflareToken({ accountId, apiToken, request });
   const accessKeyId = String(verified?.id || "").toLowerCase();
   if (!TOKEN_ID_PATTERN.test(accessKeyId) || verified?.status !== "active") {
     throw new Error("managed source R2 token is not active");
@@ -112,6 +106,38 @@ async function readCloudflareResult(response, failureMessage) {
     throw new Error(failureMessage);
   }
   return body.result;
+}
+
+async function verifyCloudflareToken({ accountId, apiToken, request }) {
+  const headers = { Authorization: `Bearer ${apiToken}` };
+  const accountResult = await tryReadCloudflareResult(() =>
+    request(`${API_ROOT}/accounts/${accountId}/tokens/verify`, { headers }),
+  );
+  if (accountResult !== null) return accountResult;
+
+  // Account-owned and user-owned API tokens have distinct verification
+  // endpoints. Keep user-token support for existing integrations, but only
+  // fall back when the account endpoint did not return a verifiable identity.
+  // https://developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/verify/
+  // https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/
+  const userResult = await tryReadCloudflareResult(() =>
+    request(`${API_ROOT}/user/tokens/verify`, { headers }),
+  );
+  if (userResult !== null) return userResult;
+
+  throw new Error("managed source R2 token verification failed");
+}
+
+async function tryReadCloudflareResult(makeRequest) {
+  try {
+    const response = await makeRequest();
+    if (!response?.ok) return null;
+    const body = await response.json().catch(() => null);
+    if (body?.success !== true || !Object.hasOwn(body, "result")) return null;
+    return body.result;
+  } catch {
+    return null;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

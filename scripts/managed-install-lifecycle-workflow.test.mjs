@@ -78,11 +78,19 @@ test("derives source R2 credentials from the existing Cloudflare token inside th
   const derive = getStep("Derive job-scoped source R2 S3 credentials");
   const verify = getStep("Verify job-scoped source R2 S3 access");
   assert.match(derive, /ME3_MANAGED_CLOUDFLARE_API_TOKEN/);
+  assert.match(
+    derive,
+    /if: inputs\.operation == 'export' \|\| \(inputs\.operation == 'decommission' && inputs\.export_waived == false\)/,
+  );
   assert.match(derive, /derive-managed-r2-s3-credentials\.mjs/);
   assert.match(derive, /sha256sum --check/);
   assert.match(verify, /aws s3api head-bucket/);
   assert.match(verify, /ME3_MANAGED_SOURCE_R2_PRESENT/);
   assert.match(verify, /ME3_MANAGED_R2_PRESENT/);
+  assert.match(
+    verify,
+    /if: inputs\.operation == 'export' \|\| \(inputs\.operation == 'decommission' && inputs\.export_waived == false\)/,
+  );
   assert.doesNotMatch(lifecycle, /secrets\.ME3_MANAGED_R2_ACCESS_KEY_ID/);
   assert.doesNotMatch(lifecycle, /secrets\.ME3_MANAGED_R2_SECRET_ACCESS_KEY/);
   assert.ok(lifecycle.indexOf(derive) < lifecycle.indexOf("Materialize a stable R2 snapshot"));
@@ -146,6 +154,7 @@ test("re-verifies retained evidence and exact absence before decommission succes
   assert.match(purge, /revoke_credentials/);
   assert.match(purge, /purge_storage/);
   assert.match(empty, /--allow-missing/);
+  assert.match(empty, /inputs\.export_waived == false/);
   assert.match(deletion, /--export-operation-id/);
   assert.match(deletion, /--export-waived "\$EXPORT_WAIVED"/);
   assert.match(deletion, /--export-md5/);
@@ -198,16 +207,21 @@ test("requires an explicit export waiver and keeps waived decommission fail-clos
   assert.match(waiverAttestation, /ME3_MANAGED_STATUS: running/);
   assert.match(waiverAttestation, /ME3_MANAGED_STAGE: export_waiver_verified/);
   assert.ok(lifecycle.indexOf(waiverAttestation) < lifecycle.indexOf(drain));
-  for (const destructiveStep of [drain, purge, empty, deletion]) {
+  for (const destructiveStep of [drain, purge]) {
     assert.doesNotMatch(destructiveStep, /export_waived == false/);
   }
+  assert.match(empty, /inputs\.export_waived == false/);
+  assert.match(deletion, /if: inputs\.operation == 'decommission'/);
   assert.match(deletion, /--export-waived "\$EXPORT_WAIVED"/);
   assert.match(deletion, /if \[\[ "\$EXPORT_WAIVED" = false \]\]; then/);
+  assert.match(deletion, /--r2-empty-listing "\$RUNNER_TEMP\/r2-empty\.json"/);
   assert.match(deletion, /node control\/scripts\/decommission-managed-install\.mjs "\$\{args\[@\]\}"/);
   assert.match(decommissionControl, /parseExportWaived/);
   assert.match(decommissionControl, /retained export inputs must be empty when export is waived/);
   assert.match(decommissionControl, /if \(presence\.d1\)/);
-  assert.match(decommissionControl, /validateEmptyR2Listing/);
+  assert.match(decommissionControl, /validateR2DeletionPrecondition/);
+  assert.match(decommissionControl, /if \(exportWaived && \(listing === undefined \|\| listing === null\)\) return/);
+  assert.match(decommissionControl, /persisted runtime termination proof is unavailable before R2 deletion/);
 });
 
 test("cleans a never-public failed provision through a distinct authorized operation", () => {
@@ -216,6 +230,8 @@ test("cleans a never-public failed provision through a distinct authorized opera
   const source = getStep("Check out the exact managed release");
   const cleanup = getStep("Clean only an authorized never-public failed provision");
   const success = getStep("Complete verified failed provision cleanup");
+  const derive = getStep("Derive job-scoped source R2 S3 credentials");
+  const verify = getStep("Verify job-scoped source R2 S3 access");
 
   assert.match(lifecycle, /options: \[export, decommission, cleanup_failed_provision\]/);
   assert.match(validation, /test "\$WORKER_EVER_PUBLIC" = false/);
@@ -226,6 +242,10 @@ test("cleans a never-public failed provision through a distinct authorized opera
   assert.match(cleanup, /--worker-ever-public "\$WORKER_EVER_PUBLIC"/);
   assert.match(cleanup, /ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET/);
   assert.doesNotMatch(cleanup, /managed-runtime-control|managed-retained-export/);
+  for (const s3Step of [derive, verify]) {
+    assert.match(s3Step, /if: inputs\.operation == 'export' \|\| \(inputs\.operation == 'decommission'/);
+    assert.doesNotMatch(s3Step, /cleanup_failed_provision/);
+  }
   assert.match(success, /ME3_MANAGED_STAGE: verified_absent/);
   assert.ok(lifecycle.indexOf(validation) < lifecycle.indexOf(cleanup));
   assert.ok(lifecycle.indexOf(cleanup) < lifecycle.indexOf(success));

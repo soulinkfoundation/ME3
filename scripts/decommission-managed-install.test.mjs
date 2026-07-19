@@ -71,7 +71,7 @@ test("deletes the exact manifest, matches queue script_name, verifies absence, a
   assert.equal(stages.at(-1), "verifying_absence");
 });
 
-test("decommissions with an explicit export waiver while preserving every resource proof", async () => {
+test("decommissions without S3 evidence only after persisted purge proof and verified REST absence", async () => {
   const fake = createCloudflareFixture();
   const stages = [];
   const result = await decommissionManagedInstall(waivedContract(), {
@@ -105,9 +105,21 @@ test("decommissions with an explicit export waiver while preserving every resour
   const runtimeProofIndex = fake.calls.findIndex(({ path }) =>
     path.includes(`/d1/database/${D1_ID}/query`),
   );
-  const firstDeleteIndex = fake.calls.findIndex(({ method }) => method === "DELETE");
+  const r2DeleteIndex = fake.calls.findIndex(
+    ({ method, path }) => method === "DELETE" && path.includes("/r2/buckets/"),
+  );
+  const r2AbsenceIndex = fake.calls.findIndex(
+    ({ method, path }, index) =>
+      index > r2DeleteIndex && method === "GET" && path.includes("/r2/buckets/"),
+  );
+  const firstLaterDeleteIndex = fake.calls.findIndex(
+    ({ method, path }, index) =>
+      index > r2DeleteIndex && method === "DELETE" && !path.includes("/r2/buckets/"),
+  );
   assert.notEqual(runtimeProofIndex, -1);
-  assert.ok(runtimeProofIndex < firstDeleteIndex);
+  assert.ok(runtimeProofIndex < r2DeleteIndex);
+  assert.ok(r2DeleteIndex < r2AbsenceIndex);
+  assert.ok(r2AbsenceIndex < firstLaterDeleteIndex);
 });
 
 test("requires an explicit strict export waiver value before any provider request", async (t) => {
@@ -190,6 +202,21 @@ test("ordinary decommission still requires every retained-export proof", async (
       assert.equal(requests, 0);
     });
   }
+
+  let requests = 0;
+  await assert.rejects(
+    decommissionManagedInstall(
+      { ...contract(), r2EmptyListing: undefined },
+      {
+        request: async () => {
+          requests += 1;
+          throw new Error("must not request");
+        },
+      },
+    ),
+    /verifiably empty/,
+  );
+  assert.equal(requests, 0);
 });
 
 test("refuses waived decommission when source R2 is not proven empty", async () => {
@@ -238,6 +265,61 @@ test("refuses waived Worker deletion when its runtime proof database is missing"
   assert.equal(fake.calls.some(({ method }) => method === "DELETE"), false);
   assert.equal(fake.state.worker, true);
   assert.notEqual(fake.state.r2, null);
+});
+
+test("refuses waived R2 deletion when both persisted proof resources are missing", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.worker = false;
+  fake.state.d1 = null;
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), { request: fake.request }),
+    /runtime termination proof is unavailable before R2 deletion/,
+  );
+  assert.equal(fake.calls.some(({ method }) => method === "DELETE"), false);
+  assert.notEqual(fake.state.r2, null);
+});
+
+test("stops before every later resource when REST does not prove R2 absence", async () => {
+  const fake = createCloudflareFixture();
+  const request = async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    if ((init.method || "GET") === "DELETE" && path.includes("/r2/buckets/")) {
+      return success(null);
+    }
+    return fake.request(url, init);
+  };
+
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), { request }),
+    /R2 bucket absence was not verified/,
+  );
+  assert.equal(fake.state.worker, true);
+  assert.notEqual(fake.state.d1, null);
+  assert.notEqual(fake.state.r2, null);
+  assert.equal(fake.state.queues.has(DEDICATED_QUEUE), true);
+});
+
+test("stops before every later resource when REST rejects deletion of a non-empty R2 bucket", async () => {
+  const fake = createCloudflareFixture();
+  const request = async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    if ((init.method || "GET") === "DELETE" && path.includes("/r2/buckets/")) {
+      return new Response(
+        JSON.stringify({ success: false, errors: [{ code: 10008, message: "Bucket is not empty" }] }),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return fake.request(url, init);
+  };
+
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), { request }),
+    /Cloudflare resource operation failed with status 409/,
+  );
+  assert.equal(fake.state.worker, true);
+  assert.notEqual(fake.state.d1, null);
+  assert.notEqual(fake.state.r2, null);
+  assert.equal(fake.state.queues.has(DEDICATED_QUEUE), true);
 });
 
 test("refuses a mismatched exact manifest before waived decommission deletes anything", async () => {
@@ -405,6 +487,7 @@ function waivedContract() {
   delete input.exportEtag;
   delete input.exportSizeBytes;
   delete input.exportHead;
+  delete input.r2EmptyListing;
   return input;
 }
 

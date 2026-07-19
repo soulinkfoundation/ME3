@@ -14,14 +14,14 @@ const bucket = "me3-mi-0123456789abcdef-r2";
 const tokenId = "b".repeat(32);
 const apiToken = "managed-cloudflare-api-token";
 
-test("derives S3 credentials only after verifying the active token and exact bucket", async () => {
+test("derives S3 credentials after account-owned token verification and exact bucket access", async () => {
   const requests = [];
   const credentials = await deriveManagedR2S3Credentials(
     { accountId, apiToken, bucket },
     {
       request: async (url, init) => {
         requests.push({ url, authorization: init.headers.Authorization });
-        if (url.endsWith("/user/tokens/verify")) {
+        if (url.endsWith(`/accounts/${accountId}/tokens/verify`)) {
           return cloudflareResponse({ id: tokenId, status: "active" });
         }
         return cloudflareResponse({ name: bucket });
@@ -36,7 +36,7 @@ test("derives S3 credentials only after verifying the active token and exact buc
   });
   assert.deepEqual(requests, [
     {
-      url: "https://api.cloudflare.com/client/v4/user/tokens/verify",
+      url: `https://api.cloudflare.com/client/v4/accounts/${accountId}/tokens/verify`,
       authorization: `Bearer ${apiToken}`,
     },
     {
@@ -46,9 +46,63 @@ test("derives S3 credentials only after verifying the active token and exact buc
   ]);
 });
 
+test("falls back to user-owned token verification when account verification fails", async () => {
+  const requests = [];
+  const credentials = await deriveManagedR2S3Credentials(
+    { accountId, apiToken, bucket },
+    {
+      request: async (url, init) => {
+        requests.push({ url, authorization: init.headers.Authorization });
+        if (url.endsWith(`/accounts/${accountId}/tokens/verify`)) {
+          return new Response(null, { status: 401 });
+        }
+        if (url.endsWith("/user/tokens/verify")) {
+          return cloudflareResponse({ id: tokenId, status: "active" });
+        }
+        return cloudflareResponse({ name: bucket });
+      },
+    },
+  );
+
+  assert.equal(credentials.accessKeyId, tokenId);
+  assert.deepEqual(
+    requests.map(({ url }) => url),
+    [
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/tokens/verify`,
+      "https://api.cloudflare.com/client/v4/user/tokens/verify",
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/buckets/${bucket}`,
+    ],
+  );
+  assert.ok(
+    requests.every(({ authorization }) => authorization === `Bearer ${apiToken}`),
+  );
+});
+
+test("fails closed when neither account nor user verification succeeds", async () => {
+  const requests = [];
+  await assert.rejects(
+    deriveManagedR2S3Credentials(
+      { accountId, apiToken, bucket },
+      {
+        request: async (url) => {
+          requests.push(url);
+          return url.includes(`/accounts/${accountId}/tokens/verify`)
+            ? new Response(null, { status: 403 })
+            : cloudflareEnvelope({ success: false, result: null }, 200);
+        },
+      },
+    ),
+    /token verification failed/,
+  );
+  assert.deepEqual(requests, [
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/tokens/verify`,
+    "https://api.cloudflare.com/client/v4/user/tokens/verify",
+  ]);
+});
+
 test("allows an already-absent bucket only for idempotent destructive retries", async () => {
   const request = async (url) =>
-    url.endsWith("/user/tokens/verify")
+    url.endsWith(`/accounts/${accountId}/tokens/verify`)
       ? cloudflareResponse({ id: tokenId, status: "active" })
       : new Response(null, { status: 404 });
 
@@ -63,15 +117,31 @@ test("allows an already-absent bucket only for idempotent destructive retries", 
   assert.equal(credentials.bucketPresent, false);
 });
 
-test("fails closed for inactive tokens, failed bucket access, and identity mismatches", async () => {
-  await assert.rejects(
-    deriveManagedR2S3Credentials(
-      { accountId, apiToken, bucket },
-      { request: async () => cloudflareResponse({ id: tokenId, status: "expired" }) },
-    ),
-    /token is not active/,
-  );
+test("fails closed for inactive or malformed recognized token identities", async () => {
+  for (const result of [
+    { id: tokenId, status: "expired" },
+    { id: "not-a-token-id", status: "active" },
+  ]) {
+    const requests = [];
+    await assert.rejects(
+      deriveManagedR2S3Credentials(
+        { accountId, apiToken, bucket },
+        {
+          request: async (url) => {
+            requests.push(url);
+            return cloudflareResponse(result);
+          },
+        },
+      ),
+      /token is not active/,
+    );
+    assert.deepEqual(requests, [
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/tokens/verify`,
+    ]);
+  }
+});
 
+test("fails closed for failed bucket access and identity mismatches", async () => {
   await assert.rejects(
     deriveManagedR2S3Credentials(
       { accountId, apiToken, bucket },
@@ -151,6 +221,10 @@ test("masks derived values before writing the runner environment", () => {
 
 function cloudflareResponse(result) {
   return Response.json({ success: true, result });
+}
+
+function cloudflareEnvelope(body, status) {
+  return Response.json(body, { status });
 }
 
 function sequenceRequest(...responses) {

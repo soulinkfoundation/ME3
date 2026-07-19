@@ -27,7 +27,7 @@ export async function decommissionManagedInstall(
 ) {
   const contract = validateContract(input);
   validateExportDisposition(input, contract);
-  validateEmptyR2Listing(input.r2EmptyListing);
+  validateR2DeletionPrecondition(input.r2EmptyListing, contract.exportWaived);
   const api = createCloudflareApi(
     { accountId: input.accountId, apiToken: input.apiToken },
     request,
@@ -38,6 +38,11 @@ export async function decommissionManagedInstall(
     await assertPersistedRuntimeTermination(api, input.accountId, contract.d1Id);
   } else if (presence.worker) {
     throw new Error("persisted runtime termination proof is unavailable before Worker deletion");
+  } else if (presence.r2) {
+    // R2 is deleted before Worker and D1 in this workflow. A remaining bucket
+    // without the exact D1 purge attestation is therefore not a valid retry
+    // state, even when the user waived export retention.
+    throw new Error("persisted runtime termination proof is unavailable before R2 deletion");
   }
   // The control-plane callback is the final authorization barrier. A stale or
   // cancelled attempt must be rejected here before the first provider delete.
@@ -253,7 +258,12 @@ function validateRetainedExport(input, contract) {
   }
 }
 
-function validateEmptyR2Listing(listing) {
+function validateR2DeletionPrecondition(listing, exportWaived) {
+  // Retained-export decommission independently lists the source bucket with
+  // job-scoped S3 credentials. The waived path deliberately has no S3
+  // credentials: its proof is the exact D1 runtime purge attestation below,
+  // followed by Cloudflare REST bucket deletion and verified absence.
+  if (exportWaived && (listing === undefined || listing === null)) return;
   if (
     !listing ||
     listing.IsTruncated === true ||
@@ -468,6 +478,7 @@ function parseArgs(values) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
   const exportHeadPath = args["export-head"];
+  const r2EmptyListingPath = args["r2-empty-listing"];
   const result = await decommissionManagedInstall(
     {
       accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
@@ -492,7 +503,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         exportHeadPath && args["export-waived"] !== "true"
           ? JSON.parse(readFileSync(exportHeadPath, "utf8"))
           : exportHeadPath,
-      r2EmptyListing: JSON.parse(readFileSync(args["r2-empty-listing"], "utf8")),
+      r2EmptyListing: r2EmptyListingPath
+        ? JSON.parse(readFileSync(r2EmptyListingPath, "utf8"))
+        : undefined,
     },
     {
       reportStage: async (stage) => {
