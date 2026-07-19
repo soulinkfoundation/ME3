@@ -10,7 +10,7 @@ const workflow = readFileSync(path.join(rootDir, ".github/workflows/update-core.
 const packageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
 
 test("copied-repository updates migrate before push and deployment", () => {
-  const update = getStep("Update ME3 Core");
+  const update = getStep("Update ME3");
   const migrations = getStep("Apply database migrations");
   const push = getStep("Commit and push Core update");
   const deploy = getStep("Deploy to Cloudflare");

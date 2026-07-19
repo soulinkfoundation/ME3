@@ -1,6 +1,6 @@
 # ME3 Knowledge
 
-Shared, typed product and capability knowledge for ME3 Core and hosted ME3 app
+Shared, typed product and capability knowledge for self-hosted and managed ME3
 surfaces.
 
 Think of this package as ME3's capability map, not as a single agent skill. Agent

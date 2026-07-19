@@ -25,7 +25,7 @@ test.describe("/start onboarding wizard", () => {
           user: {
             id: "owner-1",
             email: "owner@example.com",
-            name: "ME3 Core Owner",
+            name: "ME3 Owner",
             username: "owner",
             timezone: null,
           },

@@ -19,7 +19,7 @@ describe("landing pages package", () => {
         "Leadership sprint for creative founders.\n- Audit the offer\n- Rewrite the page\n- Build a launch plan",
       template: "service",
       profile: {
-        name: "ME3 Core Owner",
+        name: "ME3 Owner",
         bio: "A calm operator for creative businesses.",
         avatar: null,
         profileUrl: "https://core.example/sites/owner",
@@ -53,7 +53,7 @@ describe("landing pages package", () => {
       template: "event",
       sectionImage: "/files/table.jpg",
       profile: {
-        name: "ME3 Core Owner",
+        name: "ME3 Owner",
         bio: "A host for thoughtful rooms.",
         avatar: null,
         profileUrl: "https://core.example/sites/owner",

@@ -61,7 +61,7 @@ async function main() {
   const bootstrapResponse = await postJson(`${workerOrigin}/api/admin/bootstrap`, {
     bootstrapCode,
     email: "owner@example.test",
-    name: "ME3 Core Owner",
+    name: "ME3 Owner",
     username: "owner",
     bio: "Local boot verification owner.",
     password: ownerPassword,
@@ -98,7 +98,7 @@ async function main() {
   assert(profile.kind === "person", "me.json did not return a person profile");
   assert(typeof profile.handle === "string" && profile.handle, "me.json handle was empty");
 
-  console.log("ME3 Core local boot verification passed.");
+  console.log("ME3 local boot verification passed.");
 }
 
 function run(command, args) {

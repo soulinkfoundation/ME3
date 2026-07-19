@@ -517,7 +517,7 @@ const emailAddressIsValid = computed(
 
 const emailDisplayName = computed(() => {
   const name = auth.user?.name?.trim() || "";
-  return name === "ME3 Core Owner" ? "" : name;
+  return /^ME3(?: Core)? Owner$/i.test(name) ? "" : name;
 });
 
 const installationEmailDomain = computed(() => {
@@ -1060,7 +1060,7 @@ function syncEmailAddressInput(force = false) {
 function syncAccount(response: AccountResponse) {
   auth.setSession({
     ...response.user,
-    name: response.user.name ?? auth.user?.name ?? "ME3 Core Owner",
+    name: response.user.name ?? auth.user?.name ?? "ME3 Owner",
     username: response.user.username ?? auth.user?.username ?? "owner",
   });
   timezoneInput.value = response.user.timezone || "";
@@ -2243,8 +2243,8 @@ onBeforeUnmount(() => {
               <h2 id="core-update-title">
                 {{
                   coreGithubUpdateAvailable
-                    ? "ME3 Core update available"
-                    : "ME3 Core updater"
+                    ? "ME3 update available"
+                    : "ME3 updater"
                 }}
               </h2>
               <StatusBadge :tone="coreGithubStatusClass">
@@ -2332,7 +2332,7 @@ onBeforeUnmount(() => {
               <span class="accordion-header-hint">
                 {{
                   auth.user?.email ||
-                  "Used for signing in to this ME3 Core account."
+                  "Used for signing in to this ME3 account."
                 }}
               </span>
             </span>
@@ -2346,7 +2346,7 @@ onBeforeUnmount(() => {
             :hidden="!openSection.signin"
           >
             <p class="hint account-signin-hint">
-              Used for signing in to this ME3 Core account.
+              Used for signing in to this ME3 account.
             </p>
             <div class="email-row account-email-row">
               <label class="field account-email-field">
@@ -3685,9 +3685,9 @@ onBeforeUnmount(() => {
 
           <ol class="local-executor-steps">
             <li>
-              <strong>Clone your ME3 Core repo.</strong>
+              <strong>Clone your ME3 repo.</strong>
               <span>
-                Put the ME3 Core repo on the computer that will run local tasks.
+                Put the ME3 repo on the computer that will run local tasks.
                 This is the repo with
                 <code>packages/local-executor</code> inside it.
               </span>

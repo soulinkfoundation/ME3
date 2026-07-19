@@ -98,7 +98,7 @@ function isPluginToggleDisabled(plugin: PluginRecord) {
               v-else-if="isFixedCorePlugin(plugin)"
               class="plugin-row__badge"
             >
-              Core
+              Built in
             </span>
             <span
               v-else-if="recommendedPluginIdSet.has(plugin.id)"
@@ -137,7 +137,7 @@ function isPluginToggleDisabled(plugin: PluginRecord) {
                 isPluginComingSoon(plugin)
                   ? `${plugin.name} is coming soon`
                   : isFixedCorePlugin(plugin)
-                  ? `${plugin.name} is included in ME3 Core`
+                  ? `${plugin.name} is included in ME3`
                   : isPluginOn(plugin)
                   ? `Disable ${plugin.name}`
                   : `Enable ${plugin.name}`

@@ -161,7 +161,7 @@ function modelFallbackResponse(
           .filter(Boolean)
           .join(" ")
       : [
-          "I reached the ME3 Core agent runtime, but the model provider failed before it could answer.",
+          "I reached ME3, but the model provider failed before it could answer.",
           attemptedBackup
             ? "I also tried the backup model and it failed too."
             : null,

@@ -138,7 +138,7 @@ export async function ensureCoreRuntimeMigrationsForRequest(
     await ensureCoreRuntimeMigrations(env);
     return null;
   } catch (error) {
-    console.error("ME3 Core runtime migration failed", error);
+    console.error("ME3 runtime migration failed", error);
     const isApiRequest =
       new URL(request.url).pathname.startsWith("/api/") ||
       request.headers.get("accept")?.includes("application/json");

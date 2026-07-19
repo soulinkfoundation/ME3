@@ -115,14 +115,14 @@ export async function deliverInboundEmail(
     if (!mailbox) {
       return {
         status: "paused",
-        reason: "ME3 Core mailbox is not active for this installation.",
+        reason: "The ME3 mailbox is not active for this installation.",
       };
     }
 
     if (message.rawSize > MAX_INBOUND_EMAIL_BYTES) {
       return {
         status: "too_large",
-        reason: "Message is too large for this ME3 Core mailbox.",
+        reason: "Message is too large for this ME3 mailbox.",
       };
     }
 
@@ -237,7 +237,7 @@ export async function deliverInboundEmail(
     console.error("Inbound email processing failed", error);
     return {
       status: "unavailable",
-      reason: "ME3 Core could not process this email.",
+      reason: "ME3 could not process this email.",
     };
   }
 }
@@ -421,7 +421,7 @@ async function readEmailRawText(
     if (chunk.done) break;
     size += chunk.value.byteLength;
     if (size > maxBytes) {
-      throw new Error("Inbound email exceeded ME3 Core raw message limit.");
+      throw new Error("Inbound email exceeded the ME3 raw message limit.");
     }
     chunks.push(chunk.value);
   }

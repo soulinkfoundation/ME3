@@ -33,10 +33,11 @@ const REQUIRED_MANIFEST_KEYS = [
 const OPTIONAL_MANIFEST_KEYS = ["durableObjectClassName"];
 
 export class ManagedResourceAuditError extends Error {
-  constructor(code) {
+  constructor(code, details) {
     super(code);
     this.name = "ManagedResourceAuditError";
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -130,7 +131,13 @@ export async function runManagedCloudflareResourceAudit({
       error instanceof ManagedResourceAuditError
         ? error.code
         : "managed_resource_audit_failed";
-    stderr.write(`${JSON.stringify({ ok: false, error: code })}\n`);
+    stderr.write(`${JSON.stringify({
+      ok: false,
+      error: code,
+      ...(error instanceof ManagedResourceAuditError && error.details
+        ? { details: error.details }
+        : {}),
+    })}\n`);
     return 2;
   }
 }
@@ -536,23 +543,36 @@ async function listNumberedResources(api, resourcePath, scope) {
     resources.push(...body.result);
     const resultInfo = body.result_info;
     if (resultInfo !== undefined && !isPlainObject(resultInfo)) {
-      throw new ManagedResourceAuditError(`cloudflare_${scope}_pagination_invalid`);
+      throw numberedPaginationError(scope, page, body);
     }
     const hasTotalPages = !!resultInfo && Object.hasOwn(resultInfo, "total_pages");
-    const totalPages = optionalPositiveInteger(resultInfo?.total_pages);
+    const totalPages = optionalNonNegativeInteger(resultInfo?.total_pages);
     if (hasTotalPages && totalPages === null) {
-      throw new ManagedResourceAuditError(`cloudflare_${scope}_pagination_invalid`);
+      throw numberedPaginationError(scope, page, body);
     }
     const reportedPage = resultInfo?.page;
     if (
       reportedPage !== undefined &&
       (!Number.isSafeInteger(reportedPage) || reportedPage !== page)
     ) {
-      throw new ManagedResourceAuditError(`cloudflare_${scope}_pagination_invalid`);
+      throw numberedPaginationError(scope, page, body);
     }
     if (totalPages !== null) {
+      if (totalPages === 0) {
+        const count = resultInfo?.count;
+        const totalCount = resultInfo?.total_count;
+        if (
+          page === 1 &&
+          body.result.length === 0 &&
+          (count === undefined || count === 0) &&
+          (totalCount === undefined || totalCount === 0)
+        ) {
+          return resources;
+        }
+        throw numberedPaginationError(scope, page, body);
+      }
       if (totalPages < page || (declaredTotalPages !== null && totalPages !== declaredTotalPages)) {
-        throw new ManagedResourceAuditError(`cloudflare_${scope}_pagination_invalid`);
+        throw numberedPaginationError(scope, page, body);
       }
       declaredTotalPages = totalPages;
       if (page >= totalPages) return resources;
@@ -606,9 +626,32 @@ function isManagedQueueName(name) {
   return QUEUE_NAME_PATTERN.test(name) && MANAGED_QUEUE_NAME_PATTERN.test(name);
 }
 
-function optionalPositiveInteger(value) {
+function optionalNonNegativeInteger(value) {
   if (value === undefined || value === null) return null;
-  return Number.isSafeInteger(value) && value >= 1 ? value : null;
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function numberedPaginationError(scope, requestedPage, body) {
+  const resultInfo = isPlainObject(body?.result_info) ? body.result_info : null;
+  return new ManagedResourceAuditError(`cloudflare_${scope}_pagination_invalid`, {
+    scope,
+    requestedPage,
+    resultCount: Array.isArray(body?.result) ? body.result.length : null,
+    resultInfoType:
+      body?.result_info === undefined
+        ? "undefined"
+        : Array.isArray(body.result_info)
+          ? "array"
+          : typeof body.result_info,
+    reportedPage: safePaginationDiagnostic(resultInfo?.page),
+    totalPages: safePaginationDiagnostic(resultInfo?.total_pages),
+    count: safePaginationDiagnostic(resultInfo?.count),
+    totalCount: safePaginationDiagnostic(resultInfo?.total_count),
+  });
+}
+
+function safePaginationDiagnostic(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : typeof value;
 }
 
 function uniqueSafeValues(values) {

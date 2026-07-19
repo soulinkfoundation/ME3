@@ -13,7 +13,7 @@ export const ME3_BUNDLED_AGENT_SKILL_UPDATED_AT = "2026-06-12T00:00:00.000Z";
 export const ME3_BUNDLED_AGENT_SKILLS: readonly Me3BundledAgentSkill[] = [
   {
     id: "core.me3-configuration",
-    name: "ME3 Core Configuration",
+    name: "ME3 Configuration",
     description:
       "ME3-specific setup, update, configuration, jobs, plugins, local executor, and recovery guidance.",
     sourceRef: "docs/how-to-me3.md",
@@ -32,11 +32,11 @@ export const ME3_BUNDLED_AGENT_SKILLS: readonly Me3BundledAgentSkill[] = [
       "executor",
       "recovery",
     ],
-    instructions: `# ME3 Core Configuration
+    instructions: `# ME3 Configuration
 
 Use this skill for ME3-specific setup and configuration questions.
 
-ME3 Core setup guidance should stay focused on ME3 concepts: Core vs plugin-owned vs hosted-only boundaries, owner setup state, assistant configuration, custom domain state, mailbox state, Assistant Jobs, local executor capabilities, and recovery.
+ME3 setup guidance should stay focused on ME3 concepts: installable-runtime vs plugin-owned vs hosted-only boundaries, owner setup state, assistant configuration, custom domain state, mailbox state, Assistant Jobs, local executor capabilities, and recovery.
 
 When the owner asks for provider-specific mechanics, explain the ME3 state ME3 needs, then use the bundled provider skill for the provider details. For Cloudflare tasks, use the bundled Cloudflare Platform skill.
 
@@ -47,7 +47,7 @@ Do not claim external provider actions are complete unless a ME3 tool or provide
     id: "core.cloudflare-platform",
     name: "Cloudflare Platform",
     description:
-      "Cloudflare-specific setup context for ME3 Core installs running on Workers, D1, R2, KV, Queues, Email Routing, and Workers AI.",
+      "Cloudflare-specific setup context for ME3 installations running on Workers, D1, R2, KV, Queues, Email Routing, and Workers AI.",
     sourceRef: "https://github.com/cloudflare/skills/tree/main/skills/cloudflare",
     triggerHints: [
       "cloudflare",
@@ -68,9 +68,9 @@ Do not claim external provider actions are complete unless a ME3 tool or provide
     ],
     instructions: `# Cloudflare Platform
 
-Use this skill for Cloudflare-specific setup and troubleshooting inside ME3 Core.
+Use this skill for Cloudflare-specific setup and troubleshooting inside ME3.
 
-ME3 Core runs on Cloudflare infrastructure. Cloudflare knowledge is first-class setup knowledge for ME3, especially Workers, custom domains, D1 migrations, R2 assets, KV/session storage, Queues, scheduled triggers, Email Routing, Email Sending, Workers AI, and AI Gateway.
+ME3 runs on Cloudflare infrastructure. Cloudflare knowledge is first-class setup knowledge for ME3, especially Workers, custom domains, D1 migrations, R2 assets, KV/session storage, Queues, scheduled triggers, Email Routing, Email Sending, Workers AI, and AI Gateway.
 
 Keep the distinction clear:
 
@@ -82,4 +82,3 @@ For risky or external changes, ask for explicit owner confirmation before using 
     updatedAt: ME3_BUNDLED_AGENT_SKILL_UPDATED_AT,
   },
 ];
-

@@ -73,7 +73,7 @@ const statusHint = computed(() => {
   }
   if (isConnected.value) return "Connected";
   if (isRuntimeCallbackLocal.value) {
-    return "Use your live ME3 Core URL to connect Soulink.";
+    return "Use your live ME3 URL to connect Soulink.";
   }
   if (connection.value?.status === "disconnected") {
     return "Soulink assistant chat is disconnected.";

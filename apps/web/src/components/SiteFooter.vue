@@ -7,7 +7,7 @@
         <router-link to="/login">Sign in</router-link>
       </div>
     </div>
-    <p class="footer-attribution">Open source ME3 Core</p>
+    <p class="footer-attribution">Open source ME3</p>
   </footer>
 </template>
 

@@ -358,7 +358,14 @@ function mailboxCanonicalThreadKeySql(alias: string): string {
   )`;
   const ownMessageId = `CASE
     WHEN ${alias}.direction = 'outbound' AND json_valid(${metadata})
-      THEN NULLIF(TRIM(json_extract(${metadata}, '$.outbound_headers.message_id')), '')
+      THEN COALESCE(
+        CASE
+          WHEN INSTR(TRIM(COALESCE(${alias}.provider_message_id, '')), '<') > 0
+            AND INSTR(TRIM(COALESCE(${alias}.provider_message_id, '')), '>') > 0
+            THEN NULLIF(TRIM(${alias}.provider_message_id), '')
+        END,
+        NULLIF(TRIM(json_extract(${metadata}, '$.outbound_headers.message_id')), '')
+      )
     WHEN ${alias}.direction = 'inbound' AND json_valid(${headers})
       THEN NULLIF(TRIM(COALESCE(json_extract(${headers}, '$."message-id"'), json_extract(${headers}, '$."Message-ID"'), json_extract(${headers}, '$.messageId'))), '')
   END`;

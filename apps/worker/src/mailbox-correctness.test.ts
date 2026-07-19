@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createAgentMailboxDraft,
   getAgentMailboxDraftForApproval,
+  getAgentMailboxOverview,
   markAgentMailboxDraftFailed,
   markAgentMailboxDraftSent,
   rejectAgentMailboxDraft,
@@ -45,6 +46,23 @@ type MailboxMessageRow = {
 };
 
 describe("mailbox correctness", () => {
+  it("uses the managed me3.app address in mailbox overviews", async () => {
+    const state = createMailboxState();
+
+    const overview = await getAgentMailboxOverview(
+      { DB: state.db, ME3_DEPLOYMENT_MODE: "managed" } as never,
+      "owner",
+      undefined,
+      { includeRecentActivity: false },
+    );
+
+    expect(overview).toMatchObject({
+      cloudflareManaged: true,
+      mailbox: { aliasAddress: "owner@me3.app" },
+      sources: [{ address: "owner@me3.app" }],
+    });
+  });
+
   it("permanently deletes messages while preserving referenced attachment objects", async () => {
     const state = createMailboxState();
     const uniqueKey = "mailbox/mailbox-1/uploads/unique.txt";

@@ -20,7 +20,7 @@ definePage({
   path: "/",
   alias: ["/login"],
   meta: {
-    title: "Set up ME3 Core | Personal AI assistant",
+    title: "Set up ME3 | Personal AI assistant",
     description: "Claim installation with a ME3 account.",
     robots: "noindex,follow",
     ogImage: "/icons/icon-512.png",

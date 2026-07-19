@@ -31,7 +31,7 @@ definePage({
   meta: {
     requiresAuth: true,
     title: "Account | ME3",
-    description: "Manage your local ME3 Core account settings.",
+    description: "Manage your local ME3 account settings.",
     robots: "noindex,follow",
   },
 });
@@ -691,7 +691,7 @@ function chooseThemePreference(nextTheme: ThemePreference) {
 function syncAccount(response: AccountResponse) {
   auth.setSession({
     ...response.user,
-    name: response.user.name ?? auth.user?.name ?? "ME3 Core Owner",
+    name: response.user.name ?? auth.user?.name ?? "ME3 Owner",
     username: response.user.username ?? auth.user?.username ?? "owner",
   });
   timezoneInput.value = response.user.timezone || "";
@@ -992,7 +992,7 @@ function createDefaultEmailProviderInput(
     transport:
       id === "cloudflare-email" ? "binding" : id === "smtp" ? "smtp" : "rest",
     fromAddress: "",
-    fromName: "ME3 Core",
+    fromName: "ME3",
     replyToAddress: "",
     sendingDomain: "",
     accountId: "",
@@ -1695,7 +1695,7 @@ onMounted(async () => {
                           v-model="emailProviderInputs[selectedEmailProviderId].fromName"
                           class="input"
                           type="text"
-                          placeholder="ME3 Core"
+                          placeholder="ME3"
                         />
                       </label>
 
@@ -2162,7 +2162,7 @@ onMounted(async () => {
             <div>
               <strong>Delete your account</strong>
               <p>
-                This will permanently delete your ME3 Core account, all of your
+                This will permanently delete your ME3 account, all of your
                 sites, and associated data. This action cannot be undone.
               </p>
             </div>
@@ -2196,7 +2196,7 @@ onMounted(async () => {
         </div>
 
         <p class="hint">
-          This will permanently delete your ME3 Core account, all of your sites,
+          This will permanently delete your ME3 account, all of your sites,
           and associated data. This cannot be undone.
         </p>
 

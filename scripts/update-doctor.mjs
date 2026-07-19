@@ -9,7 +9,7 @@ const configPath = args.config || DEFAULT_CONFIG;
 const checks = [];
 
 if (!existsSync(configPath)) {
-  fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
+  fail(`Could not find ${configPath}. Run this from the ME3 repo root.`);
 }
 
 const config = readFileSync(configPath, "utf8");
@@ -152,7 +152,7 @@ if (checks.some((item) => !item.ok)) {
   process.exitCode = 1;
 } else if (!args.json) {
   console.log("");
-  console.log("ME3 Core update doctor passed.");
+  console.log("ME3 update doctor passed.");
 }
 
 function parseArgs(values) {

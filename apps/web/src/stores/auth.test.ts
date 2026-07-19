@@ -13,7 +13,7 @@ vi.mock("../api", () => ({
 const storedUser = {
   id: "owner",
   email: "owner@example.com",
-  name: "ME3 Core Owner",
+  name: "ME3 Owner",
   username: "owner",
   timezone: null,
   locale: "en-US",
@@ -47,7 +47,7 @@ describe("auth store", () => {
         user: {
           id: "owner",
           email: "owner@example.com",
-          name: "ME3 Core Owner",
+          name: "ME3 Owner",
           username: "owner",
           timezone: null,
         },
@@ -79,7 +79,7 @@ describe("auth store", () => {
         user: {
           id: "owner",
           email: "owner@example.com",
-          name: "ME3 Core Owner",
+          name: "ME3 Owner",
           username: "owner",
           timezone: null,
         },
@@ -102,7 +102,7 @@ describe("auth store", () => {
         owner: {
           id: "owner",
           email: "owner@example.com",
-          name: "ME3 Core Owner",
+          name: "ME3 Owner",
           username: "owner",
           timezone: "Europe/Dublin",
         },
@@ -112,7 +112,7 @@ describe("auth store", () => {
       const result = await store.bootstrapOwner({
         bootstrapCode: "local-code",
         email: "owner@example.com",
-        name: "ME3 Core Owner",
+        name: "ME3 Owner",
         username: "owner",
         password: "correct-horse-battery",
       });
@@ -128,7 +128,7 @@ describe("auth store", () => {
       expect(api.post).toHaveBeenCalledWith("/admin/bootstrap", {
         bootstrapCode: "local-code",
         email: "owner@example.com",
-        name: "ME3 Core Owner",
+        name: "ME3 Owner",
         username: "owner",
         password: "correct-horse-battery",
       });
@@ -140,7 +140,7 @@ describe("auth store", () => {
         owner: {
           id: "owner",
           email: null,
-          name: "ME3 Core Owner",
+          name: "ME3 Owner",
           username: "owner",
           timezone: "UTC",
         },
@@ -150,7 +150,7 @@ describe("auth store", () => {
       const result = await store.bootstrapOwner({
         bootstrapCode: "local-code",
         email: "   ",
-        name: "ME3 Core Owner",
+        name: "ME3 Owner",
         username: "owner",
         password: "correct-horse-battery",
       });
@@ -159,7 +159,7 @@ describe("auth store", () => {
       expect(api.post).toHaveBeenCalledWith("/admin/bootstrap", {
         bootstrapCode: "local-code",
         email: undefined,
-        name: "ME3 Core Owner",
+        name: "ME3 Owner",
         username: "owner",
         password: "correct-horse-battery",
       });
@@ -171,7 +171,7 @@ describe("auth store", () => {
       const store = useAuthStore();
       const result = await store.bootstrapOwner({
         bootstrapCode: "bad-code",
-        name: "ME3 Core Owner",
+        name: "ME3 Owner",
         username: "owner",
         password: "correct-horse-battery",
       });
@@ -189,7 +189,7 @@ describe("auth store", () => {
         owner: {
           id: "owner",
           email: "owner@example.com",
-          name: "ME3 Core Owner",
+          name: "ME3 Owner",
           username: "owner",
           timezone: "Europe/Dublin",
         },

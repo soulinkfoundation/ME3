@@ -261,7 +261,7 @@ describe("managed email outbound provider", () => {
     expect(headers.get("Idempotency-Key")).toBe(result.auditId);
     const body = JSON.parse(String(init.body)) as Record<string, any>;
     expect(body).toMatchObject({
-      from: { address: "my_name@me3.app", name: "ME3 Core" },
+      from: { address: "my_name@me3.app", name: "Tester" },
       to: "client@example.com",
       subject: "Approved reply",
       text: "The approved body.",
@@ -594,7 +594,11 @@ class ManagedEmailTestDb {
   readonly sendAudits: Array<Record<string, any>> = [];
   providerRowsRead = false;
 
-  constructor(readonly mailboxAlias = "owner") {}
+  constructor(
+    readonly mailboxAlias = "owner",
+    readonly ownerName = "Tester",
+    readonly ownerUsername = "tester",
+  ) {}
 
   prepare(sql: string) {
     return new ManagedEmailTestStatement(this, sql);
@@ -623,6 +627,12 @@ class ManagedEmailTestStatement {
   }
 
   async first<T>() {
+    if (this.sql.includes("FROM owner_profile")) {
+      return {
+        name: this.db.ownerName,
+        username: this.db.ownerUsername,
+      } as T;
+    }
     if (this.sql.includes("FROM install_secrets")) {
       const value = this.db.secrets.get(String(this.values[0]));
       return (value ? { value } : null) as T | null;

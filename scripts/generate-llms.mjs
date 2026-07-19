@@ -11,7 +11,7 @@ const repositoryUrl = "https://github.com/Soulink-Foundation/me3";
 
 const sourceDocuments = [
   {
-    title: "ME3 Core README",
+    title: "ME3 README",
     url: `${repositoryUrl}/blob/main/README.md`,
     description:
       "Installable Core overview, product principles, local setup, deploy flow, and Core vs hosted boundaries.",
@@ -32,7 +32,7 @@ const sourceDocuments = [
     title: "ME3 How-To Guide",
     url: `${repositoryUrl}/blob/main/docs/how-to-me3.md`,
     description:
-      "Public configuration and troubleshooting guide for ME3 Core installs.",
+      "Public configuration and troubleshooting guide for ME3 installations.",
   },
 ];
 

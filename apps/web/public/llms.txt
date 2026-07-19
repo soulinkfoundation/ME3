@@ -1,6 +1,6 @@
-# ME3 Core
+# ME3
 
-> Installable ME3 Core personal/business AI assistant scaffold. ME3 Core is an owner-controlled assistant, identity layer, public site, private workspace, and plugin surface for a person or business.
+> Installable ME3 personal/business AI assistant scaffold. ME3 is an owner-controlled assistant, identity layer, public site, private workspace, and plugin surface for a person or business.
 
 Repository: https://github.com/Soulink-Foundation/me3
 Knowledge schema: 2026-05-15.v1
@@ -11,7 +11,7 @@ Generated from the typed ME3 knowledge package. This file is public-safe and sho
 - What ME3 is: ME3 is an assistant, identity layer, public site, and action surface for a person or business.
 - Public and private boundaries: Public me.json/profile data is separate from private memory, provider secrets, tasks, approvals, and local context.
 - Consent before action: Sending, publishing, booking, paying, editing local files, and running code require clear owner permission and auditability.
-- Core and hosted portability: ME3 Core is owner-controlled and installable. Hosted ME3 should reuse shared capability contracts while keeping billing and managed ops outside Core.
+- Core and hosted portability: ME3 is owner-controlled and installable. Managed ME3 reuses shared capability contracts while keeping billing and managed operations outside the installable runtime.
 
 ## Core Boundaries
 
@@ -169,8 +169,8 @@ Generated from the typed ME3 knowledge package. This file is public-safe and sho
 
 ## Source Documents
 
-- [ME3 Core README](https://github.com/Soulink-Foundation/me3/blob/main/README.md): Installable Core overview, product principles, local setup, deploy flow, and Core vs hosted boundaries.
+- [ME3 README](https://github.com/Soulink-Foundation/me3/blob/main/README.md): Installable Core overview, product principles, local setup, deploy flow, and Core vs hosted boundaries.
 - [ME3 Knowledge README](https://github.com/Soulink-Foundation/me3/blob/main/packages/knowledge/README.md): Explains the shared typed product and capability knowledge package that powers this artifact.
 - [ME3 Knowledge Source](https://github.com/Soulink-Foundation/me3/blob/main/packages/knowledge/src/index.ts): Typed product facts, capability map, approval modes, side effects, data boundaries, routes, and agent tool ids.
-- [ME3 How-To Guide](https://github.com/Soulink-Foundation/me3/blob/main/docs/how-to-me3.md): Public configuration and troubleshooting guide for ME3 Core installs.
+- [ME3 How-To Guide](https://github.com/Soulink-Foundation/me3/blob/main/docs/how-to-me3.md): Public configuration and troubleshooting guide for ME3 installations.
 

@@ -41,7 +41,7 @@ const aiGatewayId =
     .slice(0, 64);
 
 if (!existsSync(configPath)) {
-  fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
+  fail(`Could not find ${configPath}. Run this from the ME3 repo root.`);
 }
 
 const originalConfig = readFileSync(configPath, "utf8");
@@ -73,7 +73,7 @@ if (args.dbId && !isValidDatabaseId(args.dbId)) {
   fail(`Invalid D1 database id "${args.dbId}". Expected a UUID from \`wrangler d1 list\`.`);
 }
 
-console.log("Preparing ME3 Core for a manual Cloudflare deploy.");
+console.log("Preparing ME3 for a manual Cloudflare deploy.");
 console.log(`Wrangler config: ${configPath}`);
 
 if (!args.yes) {
@@ -289,7 +289,7 @@ function parseQueueListOutput(output) {
 function printHelp() {
   console.log(`Usage: pnpm init:cloudflare -- [options]
 
-Prepares Cloudflare resources for a manual ME3 Core deploy.
+Prepares Cloudflare resources for a manual ME3 deploy.
 
 Options:
   --config <path>          Wrangler config path (default: wrangler.toml)

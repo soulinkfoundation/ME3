@@ -19,7 +19,7 @@ const args = parseArgs(process.argv.slice(2));
 const configPath = args.config || DEFAULT_CONFIG;
 
 if (!existsSync(configPath)) {
-  fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
+  fail(`Could not find ${configPath}. Run this from the ME3 repo root.`);
 }
 
 const originalConfig = readFileSync(configPath, "utf8");

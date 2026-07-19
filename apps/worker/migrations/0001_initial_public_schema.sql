@@ -1,4 +1,4 @@
--- ME3 Core initial public D1 schema baseline.
+-- ME3 initial public D1 schema baseline.
 -- Squashed from the private pre-release migration chain plus launch-ready Core migrations.
 -- After the first public release, published migration files are immutable; append new numbered migrations only.
 

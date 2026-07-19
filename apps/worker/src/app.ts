@@ -713,9 +713,9 @@ app.post("/api/admin/bootstrap", async (c) => {
   const owner: OwnerProfile = {
     id: "owner",
     email,
-    name: body.name ?? "ME3 Core Owner",
+    name: body.name ?? "ME3 Owner",
     username: body.username ?? "owner",
-    bio: body.bio ?? "Personal AI assistant powered by ME3 Core.",
+    bio: body.bio ?? "Personal AI assistant powered by ME3.",
     avatar_url: body.avatar_url ?? null,
     timezone:
       body.timezone !== undefined ? normalizeTimeZone(body.timezone) : null,
@@ -1695,7 +1695,7 @@ function serializeAccountOwner(owner: OwnerRecord) {
   return {
     id: owner.id,
     email: owner.email,
-    name: owner.name || "ME3 Core Owner",
+    name: owner.name || "ME3 Owner",
     username: owner.username || "owner",
     timezone: storedTimezone,
     locale: explicitLocale || inferLocaleFromTimeZone(effectiveTimezone),
@@ -1957,7 +1957,7 @@ async function upsertMe3ClaimedOwner(
     normalizeOwnerDisplayName(payload.name) ||
     normalizeOwnerDisplayName(payload.display_name) ||
     (email ? humanizeEmailLocalPart(email) : null) ||
-    "ME3 Core Owner";
+    "ME3 Owner";
 
   await env.DB.prepare(
     `INSERT INTO owner_profile (id, email, name, username, bio, avatar_url, timezone, password_hash, updated_at)

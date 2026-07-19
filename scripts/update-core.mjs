@@ -18,11 +18,11 @@ const packageJsonPath = path.join(rootDir, "package.json");
 const wranglerConfigPath = path.join(rootDir, "wrangler.toml");
 
 if (!existsSync(packageJsonPath)) {
-  fail("Could not find package.json. Run this from the root of your ME3 Core repository.");
+  fail("Could not find package.json. Run this from the root of your ME3 repository.");
 }
 
 if (!isGitRepository()) {
-  fail("This does not look like a Git repository. Run this from your copied ME3 Core repo.");
+  fail("This does not look like a Git repository. Run this from your copied ME3 repo.");
 }
 
 if (isMergeInProgress()) {
@@ -54,16 +54,16 @@ const targetTag = args.tag || latest.tag || (latest.version ? `v${latest.version
 const targetVersion = normalizeVersion(args.tag || latest.version || targetTag);
 
 if (!targetTag) {
-  fail("Could not determine the ME3 Core release tag to merge.");
+  fail("Could not determine the ME3 release tag to merge.");
 }
 
-printHeader(`ME3 Core installed: ${installedVersion || "unknown"}`);
-console.log(`ME3 Core target:    ${targetTag}${targetVersion ? ` (${targetVersion})` : ""}`);
+printHeader(`ME3 installed: ${installedVersion || "unknown"}`);
+console.log(`ME3 target:    ${targetTag}${targetVersion ? ` (${targetVersion})` : ""}`);
 console.log(`Manifest:           ${manifestUrl}`);
 
 if (!args.tag && targetVersion && installedVersion && compareVersions(installedVersion, targetVersion) >= 0) {
   console.log("");
-  console.log("ME3 Core is already up to date.");
+  console.log("ME3 is already up to date.");
   process.exit(0);
 }
 
@@ -114,7 +114,7 @@ if (!args.skipDoctor) run("pnpm", ["update:doctor"]);
 if (!args.skipBuild) run("pnpm", ["build"]);
 
 console.log("");
-console.log(`ME3 Core updated to ${targetTag}.`);
+console.log(`ME3 updated to ${targetTag}.`);
 console.log("When you are ready to deploy it through Cloudflare Workers Builds, run:");
 console.log("");
 console.log("  git push origin main");
@@ -147,7 +147,7 @@ async function connectUnrelatedHistory() {
     "--allow-unrelated-histories",
     baseTag,
     "-m",
-    `Connect ME3 Core upstream history at ${baseTag}`,
+    `Connect ME3 upstream history at ${baseTag}`,
   ]);
 }
 
@@ -479,7 +479,7 @@ function isMissingFileError(error) {
 function printHelp() {
   console.log(`Usage: pnpm update:core -- [options]
 
-Updates a copied ME3 Core repository from the upstream stable release tag.
+Updates a copied ME3 repository from the upstream stable release tag.
 
 Options:
   --tag vX.Y.Z                 Merge a specific release tag instead of latest stable

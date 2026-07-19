@@ -1092,7 +1092,7 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
   queuesAndCrons: [],
   notes: [
     "Bundled through @me3-core/plugin-agent-chat as a first-party Core package.",
-    "Enabled by default because chat is the baseline ME3 Core experience, while plugin packaging keeps future tools portable.",
+    "Enabled by default because chat is part of the baseline ME3 experience, while plugin packaging keeps future tools portable.",
     "Current runtime supports general chat through configured Core AI routes; richer tool actions should be added behind this package boundary.",
   ],
 };

@@ -59,7 +59,7 @@ definePage({
     requiresWorkspace: true,
     requiresPlugin: "me3.mission-control",
     title: "Mission Control Projects | ME3",
-    description: "ME3 Core Mission Control projects workspace.",
+    description: "ME3 Mission Control projects workspace.",
     robots: "noindex,follow",
   },
 });

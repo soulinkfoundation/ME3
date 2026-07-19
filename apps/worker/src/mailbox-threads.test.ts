@@ -310,6 +310,47 @@ describe("mailbox threads", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("groups managed replies by the provider-assigned Message-ID", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "me3-managed-mailbox-threads-"));
+    const database = join(directory, "mailbox.sqlite");
+    try {
+      sqliteExec(database, MAILBOX_SQLITE_SCHEMA);
+      sqliteExec(
+        database,
+        readFileSync(
+          new URL("../migrations/0020_mailbox_thread_index.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      sqliteExec(database, MANAGED_PROVIDER_THREAD_FIXTURE);
+      const env = { DB: sqliteD1(database) } as never;
+
+      const listed = await listMailboxThreads(env, "owner", { folder: "inbox" });
+      expect(listed).toEqual({
+        threads: [
+          expect.objectContaining({
+            id: "<provider-root@me3.app>",
+            latestMessageId: "managed-reply",
+            messageCount: 2,
+          }),
+        ],
+        nextCursor: null,
+      });
+
+      const detailed = await listMailboxThreadMessages(
+        env,
+        "owner",
+        "<provider-root@me3.app>",
+      );
+      expect("error" in detailed ? detailed : detailed.messages.map((message) => message.id)).toEqual([
+        "managed-root",
+        "managed-reply",
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 function summaryRow(threadId: string, lastActivity: string) {
@@ -595,5 +636,30 @@ const LEGACY_THREAD_FIXTURE = `
     '{"outbound_headers":{"message_id":"<other@example.com>","in_reply_to":null,"references":null}}',
     'sent', 'owner', NULL, '2026-07-16T12:00:00.000Z',
     '2026-07-16T12:00:00.000Z', '2026-07-16T12:00:00.000Z'
+  );
+`;
+
+const MANAGED_PROVIDER_THREAD_FIXTURE = `
+  INSERT INTO mailbox_messages (
+    id, mailbox_id, direction, message_kind, status, thread_key,
+    provider_id, provider_message_id, from_address, to_address, subject, text_body,
+    raw_headers_json, metadata_json, folder, created_by, received_at, sent_at,
+    created_at, updated_at
+  ) VALUES
+  (
+    'managed-root', 'mailbox-1', 'outbound', 'email', 'sent', '<requested-root@me3.local>',
+    'managed_gateway', '<provider-root@me3.app>', 'owner@me3.app', 'client@example.com',
+    'Managed project', 'Root message', NULL,
+    '{"outbound_headers":{"message_id":"<requested-root@me3.local>","in_reply_to":null,"references":null}}',
+    'sent', 'owner', NULL, '2026-07-16T09:00:00.000Z',
+    '2026-07-16T09:00:00.000Z', '2026-07-16T09:00:00.000Z'
+  ),
+  (
+    'managed-reply', 'mailbox-1', 'inbound', 'email', 'received', '<provider-root@me3.app>',
+    'managed_gateway', '<reply@example.com>', 'client@example.com', 'owner@me3.app',
+    'Re: Managed project', 'Reply body',
+    '{"message-id":"<reply@example.com>","in-reply-to":"<provider-root@me3.app>","references":"<provider-root@me3.app>"}',
+    NULL, 'inbox', 'managed_gateway', '2026-07-16T10:00:00.000Z', NULL,
+    '2026-07-16T10:00:00.000Z', '2026-07-16T10:00:00.000Z'
   );
 `;

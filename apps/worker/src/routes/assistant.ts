@@ -251,7 +251,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
     return c.json({
       ok: true,
-      reply: "ME3 Core assistant shell is booted. Model execution will be wired in the first bootable slice.",
+      reply: "The ME3 assistant is ready. Model execution will be wired in the first bootable slice.",
       setupRequired: await getSetupRequired(c.env, ownerId),
     });
   });
@@ -2071,7 +2071,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       version: "0.1",
       handle: site.username,
       name: owner?.name || owner?.username || site.username,
-      bio: owner?.bio || "Personal AI assistant powered by ME3 Core.",
+      bio: owner?.bio || "Personal AI assistant powered by ME3.",
     };
     if (owner?.avatar_url) fallbackProfile.avatar = owner.avatar_url;
 
@@ -3916,7 +3916,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
     const connection = await getActiveSoulinkConnectionForThread(c.env, streamChannelId);
     if (!connection) {
-      return c.json({ ok: false, error: "Soulink channel is not connected to this ME3 Core install" }, 404);
+      return c.json({ ok: false, error: "Soulink is not connected to this ME3 installation" }, 404);
     }
 
     const authResult = verifySoulinkDispatchAuth(connection, c.req.header("authorization"));

@@ -554,9 +554,9 @@ export async function serveMeJsonResponse(env: Env, request: Request): Promise<R
     buildPublicMe3Profile(
       {
         version: "0.1",
-        name: owner?.name ?? "ME3 Core Owner",
+        name: owner?.name ?? "ME3 Owner",
         handle: owner?.username ?? "owner",
-        bio: owner?.bio ?? "Personal AI assistant powered by ME3 Core.",
+        bio: owner?.bio ?? "Personal AI assistant powered by ME3.",
         ...(owner?.avatar_url ? { avatar: owner.avatar_url } : {}),
       },
       new URL(request.url).origin,

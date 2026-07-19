@@ -118,7 +118,7 @@ describe("assistant skills", () => {
     expect(created.skill.sourceKind).toBe("repo");
     expect(created.skill.scriptsAvailable).toBe(false);
     expect(listed.map((skill) => skill.name)).toEqual([
-      "ME3 Core Configuration",
+      "ME3 Configuration",
       "Cloudflare Platform",
       "Cloudflare skill",
     ]);
@@ -208,7 +208,7 @@ describe("assistant skills", () => {
 
     expect(created.skills).toHaveLength(2);
     expect(listed.map((skill) => skill.name)).toEqual([
-      "ME3 Core Configuration",
+      "ME3 Configuration",
       "Cloudflare Platform",
       "TDD",
       "Handoff",

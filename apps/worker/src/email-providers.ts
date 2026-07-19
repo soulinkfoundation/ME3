@@ -819,9 +819,9 @@ export async function sendEmailProviderTest(
       providerId,
       purpose: "test",
       toAddress,
-      subject: "ME3 Core test email",
-      textBody: "This is a test email from your ME3 Core outbound sender settings.",
-      htmlBody: "<p>This is a test email from your ME3 Core outbound sender settings.</p>",
+      subject: "ME3 test email",
+      textBody: "This is a test email from your ME3 outbound sender settings.",
+      htmlBody: "<p>This is a test email from your ME3 outbound sender settings.</p>",
       metadata: { test: true },
       approvedByUserId: ownerId,
     });
@@ -869,7 +869,11 @@ export async function sendEmailWithProvider(
   )
     .trim()
     .toLowerCase();
-  const fromName = (input.fromName || resolved.config.fromName || "ME3 Core").trim();
+  const fromName = (
+    input.fromName ||
+    (managedGateway ? await getManagedEmailFromName(env, ownerId) : resolved.config.fromName) ||
+    "ME3"
+  ).trim();
   const replyToAddress = (input.replyToAddress || resolved.config.replyToAddress || "")
     .trim()
     .toLowerCase();
@@ -1897,7 +1901,7 @@ function normalizeProviderConfigUpdate(
       next.smtpUsername = input.smtpUsername.trim().slice(0, 254);
     }
   }
-  if (!next.fromName) next.fromName = "ME3 Core";
+  if (!next.fromName) next.fromName = "ME3";
   if (providerId === "postmark" && !next.messageStream) next.messageStream = "outbound";
   if (providerId === "cloudflare-email") next.messageStream = "";
   if (providerId === "mailgun") {
@@ -1934,7 +1938,7 @@ function createDefaultConfig(
   return {
     transport,
     fromAddress: "",
-    fromName: "ME3 Core",
+    fromName: "ME3",
     replyToAddress: "",
     sendingDomain: "",
     accountId: "",
@@ -1991,6 +1995,20 @@ async function getManagedEmailFromAddress(env: Env, ownerId: string): Promise<st
     );
   }
   return address;
+}
+
+async function getManagedEmailFromName(env: Env, ownerId: string): Promise<string> {
+  const owner = await env.DB.prepare(
+    `SELECT name, username
+     FROM owner_profile
+     WHERE id = ?`,
+  )
+    .bind(ownerId)
+    .first<{ name: string | null; username: string | null }>();
+  const profileName = sanitizeHeaderValue(owner?.name || "").trim().slice(0, 120);
+  if (profileName && !/^ME3(?: Core)? Owner$/i.test(profileName)) return profileName;
+  const username = sanitizeHeaderValue(owner?.username || "").trim().slice(0, 120);
+  return username || "ME3";
 }
 
 function getProviderAdapter(providerId: EmailProviderId): EmailProviderAdapter {

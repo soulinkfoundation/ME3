@@ -205,7 +205,7 @@ export const AGENT_CHAT_RUNTIME = {
   routes: ["/api/assistant/chat/turn", "/api/agent/sandbox"],
   notes: [
     "Core bundles the owner chat runtime through a first-party plugin package.",
-    "The plugin is enabled by default because agent chat is part of the baseline ME3 Core experience.",
+    "The plugin is enabled by default because agent chat is part of the baseline ME3 experience.",
     "Tool surfaces should be added behind this package boundary so hosted ME3 and Core installs share one implementation contract.",
   ],
 } as const;
@@ -592,7 +592,7 @@ export type AgentMailboxOverview = {
   tier: "core";
   available: true;
   approvalRequired: true;
-  cloudflareManaged: false;
+  cloudflareManaged: boolean;
   suggestedAliasLocalPart: string;
   mailbox: AgentMailbox | null;
   sources: AgentMailboxSource[];
@@ -1416,12 +1416,13 @@ export async function convertAgentContactToClient(
 }
 
 export async function getAgentMailboxOverview(
-  env: Pick<CoreAgentChatEnv, "DB">,
+  env: Pick<CoreAgentChatEnv, "DB" | "ME3_DEPLOYMENT_MODE">,
   userId: string,
   ownerHint?: { username?: string | null; email?: string | null },
   options: { includeRecentActivity?: boolean } = {},
 ): Promise<AgentMailboxOverview> {
   const mailbox = await getAgentMailboxRow(env, userId);
+  const cloudflareManaged = normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) === "managed";
   const suggestedAliasLocalPart =
     mailbox?.alias_local_part ||
     suggestAgentMailboxAlias(ownerHint?.username || ownerHint?.email || "owner");
@@ -1430,10 +1431,10 @@ export async function getAgentMailboxOverview(
     tier: "core",
     available: true,
     approvalRequired: true,
-    cloudflareManaged: false,
+    cloudflareManaged,
     suggestedAliasLocalPart,
-    mailbox: mailbox ? serializeAgentMailbox(mailbox) : null,
-    sources: mailbox ? [serializeAgentMailboxDefaultSource(mailbox)] : [],
+    mailbox: mailbox ? serializeAgentMailbox(mailbox, cloudflareManaged) : null,
+    sources: mailbox ? [serializeAgentMailboxDefaultSource(mailbox, cloudflareManaged)] : [],
     recentActivity:
       mailbox && options.includeRecentActivity !== false
         ? await getAgentMailboxActivity(env, mailbox.id, 25, 0)
@@ -2496,7 +2497,7 @@ async function maybeHandleAssistantImageTurn(
         kind: "blocked",
         reason: "image_edit_not_enabled",
         replyText:
-          "Image editing is not enabled in ME3 Core yet. I can help draft edit instructions, but I won't send this to a text model as if it can edit images.",
+          "Image editing is not enabled in ME3 yet. I can help draft edit instructions, but I won't send this to a text model as if it can edit images.",
         route: null,
       }),
     };
@@ -3858,15 +3859,15 @@ function normalizeEmailText(value: unknown): string | null {
   return normalizeNullableText(value)?.toLowerCase() || null;
 }
 
-function getAgentMailboxAddress(localPart: string): string {
-  return `${localPart}@me3.local`;
+function getAgentMailboxAddress(localPart: string, cloudflareManaged = false): string {
+  return `${localPart}@${cloudflareManaged ? "me3.app" : "me3.local"}`;
 }
 
-function serializeAgentMailbox(row: DbMailboxAliasRow) {
+function serializeAgentMailbox(row: DbMailboxAliasRow, cloudflareManaged = false) {
   return {
     id: row.id,
     aliasLocalPart: row.alias_local_part,
-    aliasAddress: getAgentMailboxAddress(row.alias_local_part),
+    aliasAddress: getAgentMailboxAddress(row.alias_local_part, cloudflareManaged),
     forwardingEmail: row.forwarding_email,
     forwardingStatus: row.forwarding_status,
     forwardingEnabled: Boolean(row.forwarding_enabled),
@@ -3886,11 +3887,11 @@ function serializeAgentMailbox(row: DbMailboxAliasRow) {
   };
 }
 
-function serializeAgentMailboxDefaultSource(row: DbMailboxAliasRow) {
+function serializeAgentMailboxDefaultSource(row: DbMailboxAliasRow, cloudflareManaged = false) {
   return {
     id: row.id,
     type: "me3_alias",
-    address: getAgentMailboxAddress(row.alias_local_part),
+    address: getAgentMailboxAddress(row.alias_local_part, cloudflareManaged),
     status: row.status === "active" ? "active" : row.status === "paused" ? "paused" : "pending",
     inboundEnabled: row.status === "active",
     outboundEnabled: true,

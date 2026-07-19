@@ -56,7 +56,7 @@ try {
     );
   } else {
     console.error(
-      `Could not check for ME3 Core updates: ${error instanceof Error ? error.message : String(error)}`,
+      `Could not check for ME3 updates: ${error instanceof Error ? error.message : String(error)}`,
     );
     console.error(`Manifest: ${manifestUrl}`);
   }
@@ -130,8 +130,8 @@ async function fetchManifest(url) {
 }
 
 function printHumanResult(result) {
-  console.log(`ME3 Core installed: ${result.installedVersion}`);
-  console.log(`ME3 Core latest ${result.channel}: ${result.latestVersion || "unknown"}`);
+  console.log(`ME3 installed: ${result.installedVersion}`);
+  console.log(`ME3 latest ${result.channel}: ${result.latestVersion || "unknown"}`);
 
   if (!result.latestVersion) {
     console.log("Could not determine the latest stable version.");
@@ -139,7 +139,7 @@ function printHumanResult(result) {
   }
 
   if (!result.updateAvailable) {
-    console.log("ME3 Core is up to date.");
+    console.log("ME3 is up to date.");
     return;
   }
 

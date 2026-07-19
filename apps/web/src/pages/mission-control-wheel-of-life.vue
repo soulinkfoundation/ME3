@@ -10,7 +10,7 @@ definePage({
     requiresWorkspace: true,
     requiresPlugin: "me3.mission-control",
     title: "Wheel of Life | ME3",
-    description: "ME3 Core Mission Control Wheel of Life workspace.",
+    description: "ME3 Mission Control Wheel of Life workspace.",
     robots: "noindex,follow",
   },
 });

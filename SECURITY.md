@@ -1,6 +1,6 @@
 # Security Policy
 
-ME3 Core is an owner-controlled installable runtime. Security reports matter
+ME3 is an owner-controlled installable runtime. Security reports matter
 because a Core install can hold personal data, site content, mailbox data,
 calendar data, provider tokens, and local automation permissions.
 
@@ -15,7 +15,7 @@ install to a wider audience.
 ## Reporting a Vulnerability
 
 Report suspected vulnerabilities privately. Use GitHub private vulnerability
-reporting for this repository when available. If you received ME3 Core directly
+reporting for this repository when available. If you received ME3 directly
 from an installer, contact that installer privately.
 
 Please include:

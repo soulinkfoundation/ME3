@@ -10,7 +10,7 @@ const args = parseArgs(process.argv.slice(2));
 const configPath = args.config || DEFAULT_CONFIG;
 
 if (!existsSync(configPath)) {
-  fail(`Could not find ${configPath}. Run this from the copied ME3 Core install repo root.`);
+  fail(`Could not find ${configPath}. Run this from the copied ME3 install repo root.`);
 }
 
 const config = readFileSync(configPath, "utf8");
@@ -154,7 +154,7 @@ function parseArgs(values) {
 function printHelp() {
   console.log(`Usage: pnpm uninstall:cloudflare -- [options]
 
-Deletes the Cloudflare resources declared by a copied ME3 Core install's
+Deletes the Cloudflare resources declared by a copied ME3 install's
 wrangler.toml. This command is a dry run unless --execute is provided.
 
 Options:
@@ -329,7 +329,7 @@ function getUninstallSteps(resources, options) {
 }
 
 function printPlan(resources, steps, options) {
-  console.log("ME3 Core Cloudflare uninstall");
+  console.log("ME3 Cloudflare uninstall");
   console.log(`Wrangler config: ${configPath}`);
   console.log(`Mode: ${options.execute ? "execute" : "dry run"}`);
   console.log("");

@@ -19,7 +19,7 @@ definePage({
     requiresWorkspace: true,
     requiresPlugin: "me3.mission-control",
     title: "Mission Control | ME3",
-    description: "ME3 Core Mission Control dashboard.",
+    description: "ME3 Mission Control dashboard.",
     robots: "noindex,follow",
   },
 });
@@ -294,7 +294,7 @@ const dailyBriefing = computed(
 );
 const greetingName = computed(() => {
   const name = auth.user?.name?.trim() || "";
-  return /^ME3 Core Owner$/i.test(name) ? "" : name;
+  return /^ME3(?: Core)? Owner$/i.test(name) ? "" : name;
 });
 const greeting = computed(() =>
   greetingName.value ? `Good morning ${greetingName.value}` : "Good morning",

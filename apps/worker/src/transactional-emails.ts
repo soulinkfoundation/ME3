@@ -137,7 +137,7 @@ ${details.bookingTitle}
 ${startTime}
 Duration: ${details.durationMinutes} minutes${paymentLine ? `\n${paymentLine}` : ""}${details.notes ? `\n\nGuest notes:\n${details.notes}` : ""}
 
-- ME3 Core`;
+- ME3`;
   const htmlBody = bookingEmailHtml({
     title: "New booking",
     subtitle: "You have a new appointment",
@@ -158,7 +158,7 @@ Duration: ${details.durationMinutes} minutes${paymentLine ? `\n${paymentLine}` :
     subject,
     textBody,
     htmlBody,
-    fromName: "ME3 Core",
+    fromName: "ME3",
     replyToAddress: details.guestEmail,
     metadata: {
       booking_id: details.bookingId,

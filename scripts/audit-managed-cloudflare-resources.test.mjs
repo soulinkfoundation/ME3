@@ -202,6 +202,26 @@ test("an empty expected manifest array treats every managed resource as unexpect
   assert.equal(report.counts.identityMismatches, 0);
 });
 
+test("accepts Cloudflare zero-page pagination for an empty queue inventory", async () => {
+  const fake = inventoryFetch({
+    manifests: [FIRST],
+    raw: { queuePages: [[]] },
+    totalPageOverrides: { queues: [0] },
+  });
+  const report = await auditManagedCloudflareResources(
+    { accountId: ACCOUNT_ID, apiToken: API_TOKEN, expectedManifests: [FIRST] },
+    fake.request,
+  );
+
+  assert.equal(report.ok, false);
+  assert.deepEqual(
+    report.missing
+      .filter((item) => item.resourceType === "queue")
+      .map((item) => item.name),
+    FIRST.queueNames,
+  );
+});
+
 test("strictly validates manifest structure, names, ids, and global uniqueness", () => {
   const invalidValues = [
     {},
@@ -261,6 +281,24 @@ test("fails closed for API errors, incomplete numbered pagination, and cursor lo
       (error) =>
         error instanceof ManagedResourceAuditError &&
         error.code === "cloudflare_d1_pagination_invalid",
+    );
+  });
+
+  await t.test("zero pages cannot contain resources", async () => {
+    const fake = inventoryFetch({
+      manifests: [FIRST],
+      totalPageOverrides: { queues: [0] },
+    });
+    await assert.rejects(
+      auditManagedCloudflareResources(
+        { accountId: ACCOUNT_ID, apiToken: API_TOKEN, expectedManifests: [FIRST] },
+        fake.request,
+      ),
+      (error) =>
+        error instanceof ManagedResourceAuditError &&
+        error.code === "cloudflare_queues_pagination_invalid" &&
+        error.details?.requestedPage === 1 &&
+        error.details?.resultCount > 0,
     );
   });
 

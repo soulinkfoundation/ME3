@@ -3105,7 +3105,7 @@ async function bootstrap(env: Env) {
       body: JSON.stringify({
         bootstrapCode: "owner-code",
         email: "owner@example.com",
-        name: "ME3 Core Owner",
+        name: "ME3 Owner",
         username: "owner",
         password: "correct-horse-battery",
       }),
@@ -3565,7 +3565,7 @@ async function createPostmarkMailboxDraft(
   return body.draft.id;
 }
 
-describe("ME3 Core Worker auth", () => {
+describe("ME3 Worker auth", () => {
   it("normalizes only managed and self_hosted deployment modes", () => {
     expect(normalizeMe3DeploymentMode(" MANAGED ")).toBe("managed");
     expect(normalizeMe3DeploymentMode("self_hosted")).toBe("self_hosted");
@@ -3784,7 +3784,7 @@ describe("ME3 Core Worker auth", () => {
     env.owner = {
       id: "owner",
       email: "owner@example.com",
-      name: "ME3 Core Owner",
+      name: "ME3 Owner",
       username: "owner",
       bio: "Core identity",
       avatar_url: null,
@@ -3817,7 +3817,7 @@ describe("ME3 Core Worker auth", () => {
     expect(response.status).toBe(200);
     expect(body.version).toBe("0.2");
     expect(body.kind).toBe("person");
-    expect(body.name).toBe("ME3 Core Owner");
+    expect(body.name).toBe("ME3 Owner");
     expect(body.handle).toBe("owner");
   });
 
@@ -5156,7 +5156,7 @@ describe("ME3 Core Worker auth", () => {
         body: JSON.stringify({
           bootstrapCode,
           email: "owner@example.com",
-          name: "ME3 Core Owner",
+          name: "ME3 Owner",
           username: "owner",
           password: "correct-horse-battery",
         }),
@@ -5195,7 +5195,7 @@ describe("ME3 Core Worker auth", () => {
         body: JSON.stringify({
           bootstrapCode: "owner-code",
           email: "owner@example.com",
-          name: "ME3 Core Owner",
+          name: "ME3 Owner",
           username: "owner",
           password: "short",
         }),
@@ -11442,7 +11442,7 @@ describe("ME3 Core Worker auth", () => {
     expect(env.emailSends[0]).toMatchObject({
       from: { email: "owner@example.com", name: "ME3 Owner" },
       to: "owner@example.com",
-      subject: "ME3 Core test email",
+      subject: "ME3 test email",
     });
     expect(env.emailSendAudit).toEqual([
       expect.objectContaining({
@@ -11775,12 +11775,12 @@ describe("ME3 Core Worker auth", () => {
       const form = init.body as FormData;
       expect(form.get("from")).toBe("ME3 Owner <owner@example.com>");
       expect(form.get("to")).toBe("owner@example.com");
-      expect(form.get("subject")).toBe("ME3 Core test email");
+      expect(form.get("subject")).toBe("ME3 test email");
       expect(form.get("text")).toBe(
-        "This is a test email from your ME3 Core outbound sender settings.",
+        "This is a test email from your ME3 outbound sender settings.",
       );
       expect(form.get("html")).toBe(
-        "<p>This is a test email from your ME3 Core outbound sender settings.</p>",
+        "<p>This is a test email from your ME3 outbound sender settings.</p>",
       );
       expect(form.get("h:Reply-To")).toBe("reply@example.com");
       expect(form.get("h:X-ME3-Provider")).toBe("mailgun");
@@ -11870,7 +11870,7 @@ describe("ME3 Core Worker auth", () => {
         "QUIT",
       ]),
     );
-    expect(smtp.messages[0]).toContain("Subject: ME3 Core test email");
+    expect(smtp.messages[0]).toContain("Subject: ME3 test email");
     expect(smtp.messages[0]).toContain("X-ME3-Provider: smtp");
     expect(env.emailSendAudit).toEqual([
       expect.objectContaining({
@@ -12001,6 +12001,38 @@ describe("ME3 Core Worker auth", () => {
     );
     expect(activateResponse.status).toBe(200);
     expect(env.mailbox?.status).toBe("active");
+  });
+
+  it("exposes the public @me3.app address for managed mailboxes", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/mailbox", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ aliasLocalPart: "tester", forwardingEnabled: false }),
+      }),
+      env,
+    );
+    env.ME3_DEPLOYMENT_MODE = "managed";
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/mailbox", { headers: { Cookie: session } }),
+      env,
+    );
+    const body = (await response.json()) as {
+      cloudflareManaged: boolean;
+      mailbox: { aliasAddress: string };
+      sources: Array<{ address: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.cloudflareManaged).toBe(true);
+    expect(body.mailbox.aliasAddress).toBe("tester@me3.app");
+    expect(body.sources).toMatchObject([{ address: "tester@me3.app" }]);
   });
 
   it("stores inbound Cloudflare Email Routing messages in the active mailbox", async () => {
@@ -12185,7 +12217,7 @@ describe("ME3 Core Worker auth", () => {
     await emailWorker().email(inbound, env);
 
     expect(inbound.rejectedWith).toBe(
-      "ME3 Core mailbox is not active for this installation.",
+      "The ME3 mailbox is not active for this installation.",
     );
     expect(env.mailboxMessages).toEqual([]);
   });

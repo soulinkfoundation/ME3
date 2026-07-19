@@ -31,9 +31,9 @@
 
 Note: Cloudflare hosting is free to start; some features require a $5/month plan. AI costs are extra, depending on the models you configure. R2 storage can be activated later from Account settings for email attachments, assistant images, generated images, and larger site media.
 
-### 🔄 Update ME3 Core
+### 🔄 Update ME3
 
-In a Deploy-to-Cloudflare copied repository, run **Actions → Update ME3 Core → Run workflow**. The updater preserves that installation's `wrangler.toml`, including its Cloudflare resource IDs and bindings. With Cloudflare credentials configured as GitHub secrets, the workflow applies D1 migrations before it pushes or deploys the updated Worker and stops if migration fails. Without those secrets, keep the Cloudflare Workers Builds deploy command set to `pnpm deploy`; that command also applies migrations before `wrangler deploy` and stops on failure.
+In a Deploy-to-Cloudflare copied repository, run **Actions → Update ME3 → Run workflow**. The updater preserves that installation's `wrangler.toml`, including its Cloudflare resource IDs and bindings. With Cloudflare credentials configured as GitHub secrets, the workflow applies D1 migrations before it pushes or deploys the updated Worker and stops if migration fails. Without those secrets, keep the Cloudflare Workers Builds deploy command set to `pnpm deploy`; that command also applies migrations before `wrangler deploy` and stops on failure.
 
 ### 📜 Docs
 

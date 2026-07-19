@@ -298,7 +298,7 @@ export function registerChannelRoutes(app: AppHono, deps: ChannelRouteDeps) {
         issuer: getCoreApiOrigin(c.env, c.req.url),
         subject: owner.id,
         owner: {
-          displayName: owner.name || owner.username || "ME3 Core Owner",
+          displayName: owner.name || owner.username || "ME3 Owner",
           handle: owner.username || "owner",
           me3Url: await getOwnerMe3Url(c.env, ownerId, c.req.url),
           avatarUrl: owner.avatar_url || null,

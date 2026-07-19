@@ -1,4 +1,4 @@
-name: Update ME3 Core
+name: Update ME3
 
 on:
   workflow_dispatch:
@@ -50,7 +50,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Update ME3 Core
+      - name: Update ME3
         id: update
         env:
           DISPATCH_TAG: ${{ github.event.client_payload.tag }}
@@ -112,14 +112,14 @@ jobs:
 
           if [ -n "$(git status --porcelain)" ]; then
             git add -A
-            git commit -m "Update ME3 Core to v${{ steps.update.outputs.version }}"
+            git commit -m "Update ME3 to v${{ steps.update.outputs.version }}"
           fi
 
           git push origin HEAD:${{ github.ref_name }}
 
       - name: No update needed
         if: steps.changes.outputs.changed != 'true'
-        run: echo "ME3 Core is already up to date."
+        run: echo "ME3 is already up to date."
 
       - name: Deploy to Cloudflare
         if: steps.changes.outputs.changed == 'true' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''

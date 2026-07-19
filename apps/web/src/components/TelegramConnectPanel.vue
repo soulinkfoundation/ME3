@@ -335,7 +335,7 @@ async function setupTelegram() {
 async function disconnectTelegram() {
   if (disconnectLoading.value || connection.value?.status !== "active") return;
   const confirmed = window.confirm(
-    "Disconnect Telegram from this ME3 Core account?",
+    "Disconnect Telegram from this ME3 account?",
   );
   if (!confirmed) return;
 

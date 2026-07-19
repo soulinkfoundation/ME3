@@ -61,14 +61,14 @@ Commands:
   config show|init       Print or create the local runner config
   providers              Print OpenCode, Codex, and Claude presets
   render                 Render a provider command for inspection
-  pair                   Complete pairing with ME3 Core and store the daemon token
+  pair                   Complete pairing with ME3 and store the daemon token
   once                   Heartbeat, claim one approved run, execute it, and report completion
   run                    Keep polling for approved runs until stopped
 
 Options:
   config init --provider <opencode|codex|claude>
                           Create local config with a default provider
-  pair --api <url>       ME3 Core Local Executor API URL
+  pair --api <url>       ME3 Local Executor API URL
   pair --token-store <path>
                           Override where the pairing token is saved
   once --api <url>       Override the saved API URL
@@ -199,7 +199,7 @@ async function loadRuntime(argv) {
   const apiBase = normalizeApiBase(configuredApiBase);
   if (!apiBase) {
     throw new Error(
-      "No ME3 Core API URL is configured. Pair again from Account > Plugins > Local Executor, " +
+      "No ME3 API URL is configured. Pair again from Account > Plugins > Local Executor, " +
         "or run once with --api http://localhost:8787/api/local-executor.",
     );
   }

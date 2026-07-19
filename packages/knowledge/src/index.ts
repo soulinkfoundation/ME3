@@ -426,7 +426,7 @@ export const ME3_PRODUCT_KNOWLEDGE: readonly Me3KnowledgeFact[] = [
     id: "me3.portability.core_hosted",
     title: "Core and hosted portability",
     summary:
-      "ME3 Core is owner-controlled and installable. Hosted ME3 should reuse shared capability contracts while keeping billing and managed ops outside Core.",
+      "ME3 is owner-controlled and installable. Managed ME3 reuses shared capability contracts while keeping billing and managed operations outside the installable runtime.",
     agentSummary:
       "When comparing Core and hosted ME3, distinguish shared capabilities from hosted-only billing, ops, and managed infrastructure.",
     audiences: ["agent", "app", "docs"],
@@ -869,9 +869,9 @@ export function buildMe3LlmsText(
   );
 
   return [
-    "# ME3 Core",
+    "# ME3",
     "",
-    "> Installable ME3 Core personal/business AI assistant scaffold. ME3 Core is an owner-controlled assistant, identity layer, public site, private workspace, and plugin surface for a person or business.",
+    "> Installable ME3 personal/business AI assistant scaffold. ME3 is an owner-controlled assistant, identity layer, public site, private workspace, and plugin surface for a person or business.",
     "",
     `Repository: ${repositoryUrl}`,
     `Knowledge schema: ${snapshot.schemaVersion}`,

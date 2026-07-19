@@ -1,13 +1,13 @@
 # ME3 How-To Guide
 
-This is the public, agent-readable how-to source for ME3 Core installs. It is meant for ME3, Codex, and other AI agents to answer owner questions without guessing.
+This is the public, agent-readable how-to source for ME3 installs. It is meant for ME3, Codex, and other AI agents to answer owner questions without guessing.
 
 Keep this guide:
 
 - Operational: prefer commands, exact setting names, route names, and expected outcomes.
 - Safe: never include real secrets, production Cloudflare IDs, hosted billing config, or private owner data.
 - Sparse: add a major feature section only when there is useful instruction to put in it.
-- Core-aware: clearly separate installable ME3 Core behavior from plugin-owned or hosted-only ME3 Cloud behavior.
+- Runtime-aware: clearly separate installable ME3 behavior from plugin-owned or hosted-only ME3 Cloud behavior.
 
 When a user asks about something not covered here, say that this guide does not document it yet, then inspect the repo or current install before answering.
 
@@ -17,7 +17,7 @@ Use one top-level section per major feature. Do not keep empty placeholder secti
 
 ## Cloudflare Components
 
-ME3 Core is a Cloudflare Worker app. The web app is built into Worker assets and managed through the Cloudflare Workers & Pages dashboard; it is not a separate Pages project in this repo.
+ME3 is a Cloudflare Worker app. The web app is built into Worker assets and managed through the Cloudflare Workers & Pages dashboard; it is not a separate Pages project in this repo.
 
 | Component | ME3 use | Docs |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ ME3 Core is a Cloudflare Worker app. The web app is built into Worker assets and
 
 ## Owner Auth
 
-ME3 Core can protect the owner app with password auth, ME3.app auth, or both. This section covers password auth.
+ME3 can protect the owner app with password auth, ME3.app auth, or both. This section covers password auth.
 
 ### Short Answer
 
@@ -84,7 +84,7 @@ This creates ignored local values in `apps/worker/.dev.vars`.
 
 ### Bootstrap The First Owner
 
-1. Deploy or run ME3 Core.
+1. Deploy or run ME3.
 2. Open the owner login page. In local dev, this is usually `http://localhost:4000/login`.
 3. If the app says setup is required, confirm `SETUP_PASSWORD` exists in Cloudflare or `apps/worker/.dev.vars`.
 4. Enter the setup password as the setup code.

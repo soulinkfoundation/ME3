@@ -77,7 +77,7 @@ describe("calendar task feed", () => {
       allDay: true,
       dateSource: "scheduled_for",
       projectId: "project-1",
-      projectName: "ME3 Core",
+      projectName: "ME3",
       projectColor: "#26806f",
       projectIcon: "CircleCheck",
     });
@@ -220,7 +220,7 @@ function taskRow(overrides: Partial<TestTaskRow> = {}): TestTaskRow {
     updated_at: "2026-06-01T10:00:00.000Z",
     archived_at: null,
     project_id: "project-1",
-    project_name: "ME3 Core",
+    project_name: "ME3",
     project_color: "#26806f",
     project_icon: "CircleCheck",
     ...overrides,

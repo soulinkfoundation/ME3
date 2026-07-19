@@ -525,8 +525,8 @@ ${
 
 ## How to publish
 
-### Option 1: ME3 Core
-1. Open your ME3 Core app
+### Option 1: ME3
+1. Open your ME3 app
 2. Sign in and claim your username
 3. Upload this zip or the extracted folder
 

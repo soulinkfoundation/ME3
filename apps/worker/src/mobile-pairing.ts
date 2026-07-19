@@ -546,7 +546,7 @@ async function getMobileInstallDescriptor(env: Env, origins: MobileOriginOptions
 
 function mobileInstallLabel(ownerName: string | null): string {
   const name = ownerName?.trim();
-  if (!name || /^ME3 Core Owner$/i.test(name)) return "ME3";
+  if (!name || /^ME3(?: Core)? Owner$/i.test(name)) return "ME3";
   if (/ME3$/i.test(name)) return name;
   return `${name}'s ME3`;
 }

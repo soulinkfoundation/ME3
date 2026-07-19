@@ -156,7 +156,7 @@ export class Me3UserAgent {
     return Response.json(
       {
         ok: true,
-        message: "ME3 Core user agent is ready for the first extraction slice.",
+        message: "The ME3 user agent is ready for the first extraction slice.",
       },
       { status: 202 },
     );
