@@ -74,8 +74,15 @@ test("removes Worker producer bindings before queue deletion and retries safely 
     ({ method, path }, index) =>
       index >= runStart && method === "DELETE" && path.endsWith("/queues/dedicated-id"),
   );
+  const workerDeleteIndex = fake.calls.findIndex(
+    ({ method, path }, index) =>
+      index >= runStart &&
+      method === "DELETE" &&
+      path.endsWith(`/workers/scripts/${WORKER_NAME}`),
+  );
   assert.ok(r2DeleteIndex < tombstoneCallIndex);
-  assert.ok(tombstoneCallIndex < queueDeleteIndex);
+  assert.ok(tombstoneCallIndex < workerDeleteIndex);
+  assert.ok(workerDeleteIndex < queueDeleteIndex);
   assert.deepEqual(
     fake.state.queues.get(SHARED_QUEUE).consumers.map((consumer) => consumer.script_name),
     ["unrelated-worker"],
@@ -216,6 +223,7 @@ test("polls complete Queue binding evidence and fails closed when detachment nev
 
   const stuck = createCloudflareFixture();
   stuck.state.retainProducerBindingOnPatch = true;
+  stuck.state.retainProducerBindingOnWorkerDelete = true;
   await assert.rejects(
     decommissionManagedInstall(waivedContract(), {
       request: stuck.request,
@@ -228,7 +236,7 @@ test("polls complete Queue binding evidence and fails closed when detachment nev
     /queue bindings did not detach/,
   );
   assert.equal(stuck.state.queues.has(DEDICATED_QUEUE), true);
-  assert.equal(stuck.state.worker, true);
+  assert.equal(stuck.state.worker, false);
   assert.notEqual(stuck.state.d1, null);
   assert.equal(
     stuck.calls.some(
@@ -741,6 +749,7 @@ function createCloudflareFixture() {
     omitProducerArray: false,
     retainConsumerOnDelete: false,
     retainProducerBindingOnPatch: false,
+    retainProducerBindingOnWorkerDelete: false,
     lifecycle: {
       state: "suspended",
       credentials_revoked_at: "2026-07-18T12:00:00Z",
@@ -861,7 +870,9 @@ function createCloudflareFixture() {
     if (resource === `/workers/scripts/${WORKER_NAME}`) {
       if (method === "DELETE") {
         state.worker = false;
-        state.producerBindings.clear();
+        if (!state.retainProducerBindingOnWorkerDelete) {
+          state.producerBindings.clear();
+        }
       }
       return state.worker
         ? new Response("worker module", { status: 200, headers: { "Content-Type": "text/plain" } })

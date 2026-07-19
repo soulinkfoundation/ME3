@@ -119,21 +119,39 @@ export async function decommissionManagedInstall(
     contract.queueNames,
     contract.workerName,
   );
+
+  // Cloudflare can retain the Queue producer registry until the inert Worker
+  // itself is removed, even after its settings no longer contain a Queue
+  // binding. Enter the queue-teardown stage, normal-delete the proven inert
+  // Worker without force, and keep D1 as the retry anchor.
+  await reportStage("deleting_queues");
+  await deleteIfPresent(
+    api,
+    `/accounts/${input.accountId}/workers/scripts/${contract.workerName}`,
+  );
+  await assertMissing(
+    api,
+    `/accounts/${input.accountId}/workers/scripts/${contract.workerName}`,
+    "Worker",
+  );
   await waitForManagedQueueBindingsDetached(api, input.accountId, dedicatedQueueNames, {
     pause,
     maxAttempts: queueDetachMaxAttempts,
   });
 
-  await reportStage("deleting_queues");
   for (const queueName of dedicatedQueueNames) {
     const queue = await findQueue(api, input.accountId, queueName);
     if (queue) await deleteIfPresent(api, `/accounts/${input.accountId}/queues/${queue.queue_id}`);
   }
 
+  // Preserve the existing monotonic callback contract. At this milestone the
+  // Worker was already deleted and verified as part of detaching Queue
+  // producers; this callback records that proof before the D1-last boundary.
   await reportStage("deleting_worker");
-  await deleteIfPresent(
+  await assertMissing(
     api,
     `/accounts/${input.accountId}/workers/scripts/${contract.workerName}`,
+    "Worker",
   );
 
   // D1 contains the persisted revoke/purge proof needed to authorize a safe

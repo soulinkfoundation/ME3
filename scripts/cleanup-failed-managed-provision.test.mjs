@@ -56,8 +56,15 @@ test("cleans an authorized never-public provision and verifies exact absence", a
     ({ method, resource }, index) =>
       index >= runStart && method === "DELETE" && resource === "/queues/queue-id",
   );
+  const workerDeleteIndex = fake.calls.findIndex(
+    ({ method, resource }, index) =>
+      index >= runStart &&
+      method === "DELETE" &&
+      resource === `/workers/scripts/${WORKER_NAME}`,
+  );
   assert.ok(r2DeleteIndex < tombstoneCallIndex);
-  assert.ok(tombstoneCallIndex < queueDeleteIndex);
+  assert.ok(tombstoneCallIndex < workerDeleteIndex);
+  assert.ok(workerDeleteIndex < queueDeleteIndex);
 
   events.length = 0;
   const retried = await cleanupFailedManagedProvision(contract(), options);
