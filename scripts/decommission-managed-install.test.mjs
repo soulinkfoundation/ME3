@@ -496,7 +496,7 @@ test("stops before every later resource when REST rejects deletion of a non-empt
 
   await assert.rejects(
     decommissionManagedInstall(waivedContract(), { request }),
-    /Cloudflare resource operation failed with status 409/,
+    /Cloudflare resource operation failed with status 409 \(10008: Bucket is not empty\)/,
   );
   assert.equal(fake.state.worker, true);
   assert.notEqual(fake.state.d1, null);

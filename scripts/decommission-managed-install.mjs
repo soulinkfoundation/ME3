@@ -404,13 +404,36 @@ function createCloudflareApi({ accountId, apiToken }, request) {
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("json")) body = await response.json();
     if (!response.ok || (body && body.success === false)) {
-      throw new Error(`Cloudflare resource operation failed with status ${response.status}`);
+      const details = summarizeCloudflareApiErrors(body);
+      throw new Error(
+        `Cloudflare resource operation failed with status ${response.status}${details}`,
+      );
     }
     if (!body) return { present: true };
     return Object.hasOwn(body, "result") ? body.result : body;
   };
   api.accountId = accountId;
   return api;
+}
+
+function summarizeCloudflareApiErrors(body) {
+  const errors = Array.isArray(body?.errors) ? body.errors.slice(0, 3) : [];
+  const summaries = errors.map((error) => {
+    const code =
+      typeof error?.code === "number" || typeof error?.code === "string"
+        ? String(error.code)
+        : "unknown";
+    const message =
+      typeof error?.message === "string"
+        ? error.message
+            .replace(/[^\x20-\x7e]+/g, " ")
+            .replace(/(?:bearer\s+)?[A-Za-z0-9_-]{32,}/gi, "[redacted]")
+            .trim()
+            .slice(0, 300)
+        : "unknown";
+    return `${code}: ${message}`;
+  });
+  return summaries.length > 0 ? ` (${summaries.join("; ")})` : "";
 }
 
 async function deleteIfPresent(api, path) {
