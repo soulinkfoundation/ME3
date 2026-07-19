@@ -15,6 +15,17 @@ import {
 const gemmaConfig = FIXED_MODEL_EVALUATION_CANDIDATES[0];
 
 describe("fixed live model evaluation", () => {
+  it("registers the managed Kimi K3 model with vision-input capabilities", () => {
+    expect(modelCapabilitiesFor("workers-ai", "moonshotai/kimi-k3")).toEqual([
+      "text",
+      "image_input",
+      "long-context",
+      "reasoning",
+      "tool-use",
+    ]);
+    expect(modelSupportsImageInput("workers-ai", "moonshotai/kimi-k3")).toBe(true);
+  });
+
   it("registers Gemma 4 with its canonical runtime capabilities", () => {
     expect(gemmaConfig).toMatchObject({
       id: "workers-gemma-4-26b",

@@ -203,6 +203,15 @@ function createEnv(state: Partial<FakeDbState> = {}) {
             ) || null) as T;
           }
           if (sql.includes("FROM install_secrets")) return null;
+          if (sql.includes("FROM ai_usage_events") && sql.includes("SUM")) {
+            return {
+              total: dbState.aiUsageEvents.reduce(
+                (total, event) =>
+                  total + Number(event.estimated_cost_usd || 0),
+                0,
+              ),
+            } as T;
+          }
           if (sql.includes("FROM mailbox_aliases")) {
             return (dbState.mailboxAliases.find((alias) => alias.user_id === values[0]) || null) as T;
           }
@@ -1071,6 +1080,35 @@ describe("Core chat native context", () => {
     expect(response.model).toBe("@cf/example/managed-everyday-model");
     expect(aiRun).toHaveBeenCalledWith(
       "@cf/example/managed-everyday-model",
+      expect.any(Object),
+    );
+  });
+
+  it("switches managed Kimi K3 to the backup after the included allowance", async () => {
+    const aiRun = vi.fn(async () => ({ response: "Allowance fallback reply." }));
+    const env = createEnv({
+      aiUsageEvents: [{ estimated_cost_usd: 5 }],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_DEPLOYMENT_MODE: "managed",
+        ME3_AI_CHAT_PROVIDER: "workers-ai",
+        ME3_AI_CHAT_MODEL: "moonshotai/kimi-k3",
+        ME3_AI_CHAT_BACKUP_MODEL: "@cf/zai-org/glm-4.7-flash",
+      } as never,
+      createStorage(),
+      { ...dispatchInput("Use managed Everyday."), mode: "everyday" },
+    );
+
+    expect(response).toMatchObject({
+      model: "@cf/zai-org/glm-4.7-flash",
+      replyText: "Allowance fallback reply.",
+    });
+    expect(aiRun).toHaveBeenCalledWith(
+      "@cf/zai-org/glm-4.7-flash",
       expect.any(Object),
     );
   });

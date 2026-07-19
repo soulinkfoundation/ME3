@@ -3,6 +3,8 @@ import {
   toAnthropicToolRequest,
   toOpenAiToolRequest,
   toWorkersAiToolRequest,
+  parseAgentModelUsage,
+  type AgentModelUsage,
   type AgentToolCall,
   type AgentToolDefinition,
   type AgentToolMessage,
@@ -35,9 +37,21 @@ export async function runAgentToolModelStreamStep(
     if (!isReadableStream(result)) {
       const response = fromWorkersAiToolResponse(result);
       if (response.text) await onDelta(response.text);
+      if (response.usage) {
+        await route.recordUsage?.({ model: route.model, usage: response.usage });
+      }
       return response;
     }
-    return accumulateOpenAiCompatibleStream(result, onDelta, signal, "Workers AI");
+    const response = await accumulateOpenAiCompatibleStream(
+      result,
+      onDelta,
+      signal,
+      "Workers AI",
+    );
+    if (response.usage) {
+      await route.recordUsage?.({ model: route.model, usage: response.usage });
+    }
+    return response;
   }
 
   if (!route.apiKey) {
@@ -67,7 +81,14 @@ export async function runAgentToolModelStreamStep(
       if (!response.ok) throwProviderResponseError("OpenAI", response.status, payload);
       throw new Error("OpenAI returned no response stream.");
     }
-    return accumulateOpenAiCompatibleStream(response.body, onDelta, signal, "OpenAI");
+    const result = await accumulateOpenAiCompatibleStream(
+      response.body,
+      onDelta,
+      signal,
+      "OpenAI",
+    );
+    if (result.usage) await route.recordUsage?.({ model: route.model, usage: result.usage });
+    return result;
   }
 
   const gatewayUrl = externalProviderGatewayUrl(route, "anthropic", "v1/messages");
@@ -90,7 +111,9 @@ export async function runAgentToolModelStreamStep(
     if (!response.ok) throwProviderResponseError("Anthropic", response.status, payload);
     throw new Error("Anthropic returned no response stream.");
   }
-  return accumulateAnthropicStream(response.body, onDelta, signal);
+  const result = await accumulateAnthropicStream(response.body, onDelta, signal);
+  if (result.usage) await route.recordUsage?.({ model: route.model, usage: result.usage });
+  return result;
 }
 
 async function accumulateOpenAiCompatibleStream(
@@ -100,10 +123,13 @@ async function accumulateOpenAiCompatibleStream(
   provider: "OpenAI" | "Workers AI",
 ): Promise<AgentToolModelResponse> {
   let text = "";
+  let usage: AgentModelUsage | null = null;
   const calls = new Map<number, { id: string; name: string; arguments: string }>();
   await readSseJson(stream, signal, async (payload) => {
     const root = asRecord(payload);
     if (!root) return;
+    const resultRoot = asRecord(root.result) || root;
+    usage = parseAgentModelUsage(resultRoot) || usage;
     if (root.error) throw new Error(providerErrorMessage(root.error, provider));
     if (typeof root.response === "string" && root.response) {
       text += root.response;
@@ -138,6 +164,7 @@ async function accumulateOpenAiCompatibleStream(
         name: requiredString(call.name, `${provider} tool name`),
         arguments: parseArguments(call.arguments, provider, call.name),
       })),
+    ...(usage ? { usage } : {}),
   };
 }
 
@@ -147,10 +174,18 @@ async function accumulateAnthropicStream(
   signal?: AbortSignal,
 ): Promise<AgentToolModelResponse> {
   let text = "";
+  let usage: AgentModelUsage | null = null;
   const calls = new Map<number, { id: string; name: string; arguments: string }>();
   await readSseJson(stream, signal, async (payload) => {
     const event = asRecord(payload);
     if (!event) return;
+    if (event.type === "message_start") {
+      const message = asRecord(event.message);
+      usage = message ? parseAgentModelUsage(message) || usage : usage;
+    }
+    if (event.type === "message_delta") {
+      usage = parseAgentModelUsage(event) || usage;
+    }
     if (event.type === "error") {
       throw new Error(providerErrorMessage(event.error, "Anthropic"));
     }
@@ -186,6 +221,7 @@ async function accumulateAnthropicStream(
         name: requiredString(call.name, "Anthropic tool name"),
         arguments: parseArguments(call.arguments, "Anthropic", call.name),
       })),
+    ...(usage ? { usage } : {}),
   };
 }
 

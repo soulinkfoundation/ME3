@@ -24,6 +24,7 @@ import {
   ensureCoreRuntimeMigrationsForRequest,
 } from "./core-runtime-migrations";
 import { Me3UserAgent } from "./user-agent";
+import { syncManagedAiUsage } from "./managed-ai-billing";
 import {
   beginManagedRuntimeWriteLease,
   getManagedInstallationId,
@@ -96,6 +97,7 @@ const worker = {
       await dispatchDueBookingReminders(env);
       await dispatchDueSocialPublications(env);
       await dispatchDueCalendarSourceRefreshes(env);
+      await syncManagedAiUsage(env);
     } finally {
       await releaseManagedRuntimeWriteLease(env, lease);
     }

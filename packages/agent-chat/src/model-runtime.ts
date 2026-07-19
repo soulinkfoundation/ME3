@@ -2,6 +2,10 @@ import type {
   AgentChatModelAttemptTrace,
   AgentSandboxDispatchResponse,
 } from "./index";
+import {
+  parseAgentModelUsage,
+  type AgentModelUsage,
+} from "./tool-runtime";
 
 export type AgentChatTextMessage = {
   role: "system" | "user" | "assistant";
@@ -32,6 +36,10 @@ export type AgentChatAiRoute = {
     run(model: string, input: unknown, options?: unknown): Promise<unknown>;
   } | null;
   aiGateway: AgentChatAiGatewayRuntimeConfig | null;
+  recordUsage?: (input: {
+    model: string;
+    usage: AgentModelUsage;
+  }) => void | Promise<void>;
   configured: boolean;
 };
 
@@ -321,6 +329,10 @@ async function runWorkersAi(
   const result = requestOptions
     ? await route.ai.run(route.model, input, requestOptions)
     : await route.ai.run(route.model, input);
+  const root = asRecord(result);
+  const resultRoot = asRecord(root?.result) || root;
+  const usage = resultRoot ? parseAgentModelUsage(resultRoot) : null;
+  if (usage) await route.recordUsage?.({ model: route.model, usage });
   return extractModelText(result) || emptyModelReply(route);
 }
 
@@ -416,6 +428,12 @@ function extractModelText(value: unknown): string {
     extractModelText(record.result) ||
     extractModelText(record.output)
   );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 function emptyModelReply(route: AgentChatAiRoute): string {

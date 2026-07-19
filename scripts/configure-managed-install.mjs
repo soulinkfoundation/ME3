@@ -43,7 +43,7 @@ const routes = {
   ME3_MANAGED_INSTALLATION_ID: managedInstallationId,
   ME3_MANAGED_EMAIL_GATEWAY_ORIGIN: managedEmailGatewayUrl.origin,
   ME3_AI_CHAT_PROVIDER: "workers-ai",
-  ME3_AI_CHAT_MODEL: "@cf/google/gemma-4-26b-a4b-it",
+  ME3_AI_CHAT_MODEL: "moonshotai/kimi-k3",
   ME3_AI_CHAT_BACKUP_MODEL: "@cf/zai-org/glm-4.7-flash",
   ME3_AI_REASONING_PROVIDER: "workers-ai",
   ME3_AI_REASONING_MODEL: "@cf/zai-org/glm-5.2",

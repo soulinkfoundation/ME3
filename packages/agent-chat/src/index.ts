@@ -70,6 +70,7 @@ export {
 } from "@me3-core/plugin-mission-control";
 import { maybeHandleSiteBlogPostToolTurn } from "./site-blog";
 import { runCoreAgentToolTurn } from "./core-agent-runtime";
+import type { AgentModelUsage } from "./tool-runtime";
 import {
   listAgentMissionProjects as loadAgentMissionProjects,
   listAgentMissionTasks as loadAgentMissionTasks,
@@ -143,6 +144,7 @@ export {
   type AgentToolMessage,
   type AgentToolModel,
   type AgentToolModelResponse,
+  type AgentModelUsage,
 } from "./tool-runtime";
 
 export {
@@ -4816,17 +4818,159 @@ async function resolveAiRoute(
             : null)
         : null;
   const aiGateway = await getAiGatewayRuntimeConfig(env, ownerId).catch(() => null);
+  const managedBudgetExceeded = await isManagedEverydayBudgetExceeded(
+    env,
+    ownerId,
+    providerId,
+    model,
+  );
+  const routedModel = managedBudgetExceeded && backupModel ? backupModel : model;
 
   return {
     providerId,
-    model,
-    backupModel,
+    model: routedModel,
+    backupModel: managedBudgetExceeded ? null : backupModel,
     apiKey,
     ai: env.AI || null,
     aiGateway,
+    recordUsage:
+      normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) === "managed"
+        ? ({ model: usedModel, usage }) =>
+            recordManagedEverydayUsage(env.DB, ownerId, providerId, usedModel, usage)
+        : undefined,
     configured:
-      providerId === "workers-ai" ? Boolean(env.AI && model) : Boolean(apiKey && model),
+      providerId === "workers-ai"
+        ? Boolean(env.AI && routedModel)
+        : Boolean(apiKey && routedModel),
   };
+}
+
+const MANAGED_EVERYDAY_MODEL = "moonshotai/kimi-k3";
+const MANAGED_AI_INCLUDED_MONTHLY_CENTS = 500;
+const MANAGED_AI_POLICY_SECRET = "ME3_MANAGED_AI_BILLING_POLICY";
+
+async function isManagedEverydayBudgetExceeded(
+  env: CoreAgentChatEnv,
+  ownerId: string,
+  providerId: AiProviderId,
+  model: string,
+): Promise<boolean> {
+  if (
+    normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) !== "managed" ||
+    providerId !== "workers-ai" ||
+    normalizeManagedEverydayModel(model) !== MANAGED_EVERYDAY_MODEL
+  ) {
+    return false;
+  }
+
+  let maximumCents = MANAGED_AI_INCLUDED_MONTHLY_CENTS;
+  try {
+    const policy = await env.DB.prepare(
+      "SELECT value FROM install_secrets WHERE name = ?",
+    )
+      .bind(MANAGED_AI_POLICY_SECRET)
+      .first<{ value: string }>();
+    if (policy?.value) {
+      const parsed = JSON.parse(policy.value) as {
+        overagesEnabled?: unknown;
+        monthlyMaximumCents?: unknown;
+      };
+      if (
+        parsed.overagesEnabled === true &&
+        typeof parsed.monthlyMaximumCents === "number" &&
+        Number.isInteger(parsed.monthlyMaximumCents) &&
+        parsed.monthlyMaximumCents >= MANAGED_AI_INCLUDED_MONTHLY_CENTS
+      ) {
+        maximumCents = parsed.monthlyMaximumCents;
+      }
+    }
+  } catch {
+    // The included allowance remains the safe default when no policy is cached.
+  }
+
+  try {
+    const usage = await env.DB.prepare(
+      `SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total
+       FROM ai_usage_events
+       WHERE user_id = ?
+         AND kind = 'text'
+         AND lower(replace(model, '@cf/', '')) = ?
+         AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')`,
+    )
+      .bind(ownerId, MANAGED_EVERYDAY_MODEL)
+      .first<{ total: number }>();
+    return Number(usage?.total || 0) >= maximumCents / 100;
+  } catch {
+    return false;
+  }
+}
+
+async function recordManagedEverydayUsage(
+  db: D1Like,
+  ownerId: string,
+  providerId: AiProviderId,
+  model: string,
+  usage: AgentModelUsage,
+): Promise<void> {
+  if (
+    providerId !== "workers-ai" ||
+    normalizeManagedEverydayModel(model) !== MANAGED_EVERYDAY_MODEL
+  ) {
+    return;
+  }
+  const estimate = estimateManagedKimiK3Usage(usage);
+  try {
+    await db.prepare(
+      `INSERT INTO ai_usage_events (
+         id, user_id, source, kind, provider, model, request_count,
+         successful_request_count, failed_request_count, tokens_in, tokens_out,
+         estimated_cost_usd, metadata_json, created_at
+       ) VALUES (?, ?, 'local', 'text', ?, ?, 1, 1, 0, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        crypto.randomUUID(),
+        ownerId,
+        providerId,
+        model,
+        usage.inputTokens,
+        usage.outputTokens,
+        estimate.costUsd,
+        JSON.stringify({
+          estimated: true,
+          pricing: estimate.pricing,
+          cachedInputTokens: usage.cachedInputTokens,
+          cloudflareUnifiedBillingFeeRate: 0.05,
+        }),
+        new Date().toISOString(),
+      )
+      .run();
+  } catch (error) {
+    console.error("Managed Everyday AI usage recording failed", error);
+  }
+}
+
+export function estimateManagedKimiK3Usage(usage: AgentModelUsage): {
+  costUsd: number;
+  pricing: string;
+} {
+  const inputTokens = Math.max(0, Math.trunc(usage.inputTokens));
+  const cachedInputTokens = Math.min(
+    inputTokens,
+    Math.max(0, Math.trunc(usage.cachedInputTokens)),
+  );
+  const outputTokens = Math.max(0, Math.trunc(usage.outputTokens));
+  const uncachedInputTokens = inputTokens - cachedInputTokens;
+  const providerCost =
+    (uncachedInputTokens * 3 + cachedInputTokens * 0.3 + outputTokens * 15) /
+    1_000_000;
+  return {
+    costUsd: providerCost * 1.05,
+    pricing: "cloudflare-unified-kimi-k3-2026-07",
+  };
+}
+
+function normalizeManagedEverydayModel(model: string): string {
+  return model.trim().toLowerCase().replace(/^@cf\//, "");
 }
 
 async function resolveOwnerAiRoute(

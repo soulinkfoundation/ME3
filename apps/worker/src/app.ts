@@ -100,6 +100,11 @@ import { registerFilesRoutes } from "./routes/files";
 import { registerJournalRoutes } from "./routes/journal";
 import { registerLocalExecutorRoutes } from "./routes/local-executor";
 import { registerManagedRuntimeRoutes } from "./routes/managed-runtime";
+import {
+  getManagedAiBillingSettings,
+  ManagedAiBillingInputError,
+  updateManagedAiBillingSettings,
+} from "./managed-ai-billing";
 import { registerMobileRoutes } from "./routes/mobile";
 import { registerPushNotificationRoutes } from "./routes/push-notifications";
 import {
@@ -1152,6 +1157,41 @@ app.put("/api/ai-settings", async (c) => {
     return c.json(await updateAiSettings(c.env, ownerId, body));
   } catch (error) {
     if (error instanceof AiSettingsInputError) {
+      return c.json({ error: error.message }, error.status as any);
+    }
+    throw error;
+  }
+});
+
+app.get("/api/managed-ai-billing-settings", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  return c.json(await getManagedAiBillingSettings(c.env));
+});
+
+app.put("/api/managed-ai-billing-settings", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const body = await c.req.json<unknown>().catch((): unknown => ({}));
+  const input = body && typeof body === "object" && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : {};
+  if (
+    typeof input.overagesEnabled !== "boolean" ||
+    typeof input.monthlyMaximumCents !== "number" ||
+    !Number.isInteger(input.monthlyMaximumCents)
+  ) {
+    return c.json({ error: "Invalid managed AI billing settings" }, 400);
+  }
+  try {
+    return c.json(
+      await updateManagedAiBillingSettings(c.env, {
+        overagesEnabled: input.overagesEnabled,
+        monthlyMaximumCents: input.monthlyMaximumCents,
+      }),
+    );
+  } catch (error) {
+    if (error instanceof ManagedAiBillingInputError) {
       return c.json({ error: error.message }, error.status as any);
     }
     throw error;

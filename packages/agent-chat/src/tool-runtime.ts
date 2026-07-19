@@ -330,7 +330,7 @@ export function fromWorkersAiToolResponse(
   };
 }
 
-function parseAgentModelUsage(root: Record<string, unknown>): AgentModelUsage | null {
+export function parseAgentModelUsage(root: Record<string, unknown>): AgentModelUsage | null {
   const usage = asRecord(root.usage);
   if (!usage) return null;
   const inputTokens = nonNegativeNumber(usage.input_tokens ?? usage.prompt_tokens);

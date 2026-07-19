@@ -29,7 +29,11 @@ export async function runAgentToolModelStep(
     const result = options
       ? await route.ai.run(route.model, request, options)
       : await route.ai.run(route.model, request);
-    return fromWorkersAiToolResponse(result);
+    const response = fromWorkersAiToolResponse(result);
+    if (response.usage) {
+      await route.recordUsage?.({ model: route.model, usage: response.usage });
+    }
+    return response;
   }
 
   if (!route.apiKey) {
@@ -57,7 +61,9 @@ export async function runAgentToolModelStep(
     );
     const payload = await response.json().catch(() => null);
     if (!response.ok) throwProviderResponseError("OpenAI", response.status, payload);
-    return fromOpenAiToolResponse(payload);
+    const result = fromOpenAiToolResponse(payload);
+    if (result.usage) await route.recordUsage?.({ model: route.model, usage: result.usage });
+    return result;
   }
 
   const gatewayUrl = externalProviderGatewayUrl(
@@ -79,7 +85,9 @@ export async function runAgentToolModelStep(
   );
   const payload = await response.json().catch(() => null);
   if (!response.ok) throwProviderResponseError("Anthropic", response.status, payload);
-  return fromAnthropicToolResponse(payload);
+  const result = fromAnthropicToolResponse(payload);
+  if (result.usage) await route.recordUsage?.({ model: route.model, usage: result.usage });
+  return result;
 }
 
 function providerHeaders(

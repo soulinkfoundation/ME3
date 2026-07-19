@@ -37,7 +37,7 @@ test("configures a private managed Worker without raw model selection", () => {
     assert.match(output, /^ME3_MANAGED_INSTALLATION_ID = "mi-1234567890abcdef"$/m);
     assert.match(output, /^ME3_MANAGED_EMAIL_GATEWAY_ORIGIN = "https:\/\/api\.me3\.app"$/m);
     assert.match(output, /^ME3_AI_CHAT_PROVIDER = "workers-ai"$/m);
-    assert.match(output, /^ME3_AI_CHAT_MODEL = "@cf\/google\/gemma-4-26b-a4b-it"$/m);
+    assert.match(output, /^ME3_AI_CHAT_MODEL = "moonshotai\/kimi-k3"$/m);
     assert.doesNotMatch(output, /ME3_AI_RAW_MODEL_SELECTION_ENABLED/);
   } finally {
     rmSync(directory, { recursive: true, force: true });

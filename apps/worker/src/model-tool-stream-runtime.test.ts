@@ -71,6 +71,40 @@ describe("streaming agent tool model adapters", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(run).not.toHaveBeenCalled();
   });
+
+  it("captures Workers AI stream usage and reports it to the route", async () => {
+    const recordUsage = vi.fn();
+    const aiRoute = route("workers-ai", [
+      event({ choices: [{ delta: { content: "Done" } }] }),
+      event({
+        choices: [],
+        usage: {
+          prompt_tokens: 120,
+          completion_tokens: 30,
+          prompt_tokens_details: { cached_tokens: 20 },
+        },
+      }),
+      "data: [DONE]\n\n",
+    ]);
+    aiRoute.recordUsage = recordUsage;
+
+    const result = await runAgentToolModelStreamStep(
+      aiRoute,
+      [{ role: "user", content: "Finish" }],
+      TOOLS,
+      () => undefined,
+    );
+
+    expect(result.usage).toEqual({
+      inputTokens: 120,
+      outputTokens: 30,
+      cachedInputTokens: 20,
+    });
+    expect(recordUsage).toHaveBeenCalledWith({
+      model: "workers-stream-model",
+      usage: result.usage,
+    });
+  });
 });
 
 function route(
