@@ -705,6 +705,7 @@ export async function deleteManagedWorkerService(
     workerName,
     operationId,
     deleteDurableObject: false,
+    allowApiUpdatedWorker: true,
   });
   await clearManagedWorkerBindings(api, accountId, workerName);
   const pinnedTombstone = await readManagedTombstoneIdentity(
@@ -911,32 +912,46 @@ async function assertGuardedWorkerForceDeleteSafe(
   const referenceKeys = references && typeof references === "object"
     ? Object.keys(references)
     : [];
+  const servicesPresent = Object.hasOwn(references || {}, "services");
+  const durableObjectsPresent = Object.hasOwn(
+    references || {},
+    "durable_objects",
+  );
+  const dispatchOutboundsPresent = Object.hasOwn(
+    references || {},
+    "dispatch_outbounds",
+  );
   const serviceKeys = references?.services && typeof references.services === "object"
     ? Object.keys(references.services)
     : [];
-  const incomingServices = references?.services?.incoming;
-  const outgoingServices = references?.services?.outgoing;
-  const durableObjectReferences = references?.durable_objects;
-  const dispatchOutbounds = references?.dispatch_outbounds;
+  const incomingServices = references?.services?.incoming ?? [];
+  const outgoingServices = references?.services?.outgoing ?? [];
+  const durableObjectReferences = references?.durable_objects ?? [];
+  const dispatchOutbounds = references?.dispatch_outbounds ?? [];
   if (
     !references ||
+    typeof references !== "object" ||
+    Array.isArray(references) ||
     referenceKeys.some(
       (key) => !["services", "durable_objects", "dispatch_outbounds"].includes(key),
     ) ||
-    !referenceKeys.includes("services") ||
-    !referenceKeys.includes("durable_objects") ||
-    !referenceKeys.includes("dispatch_outbounds") ||
+    (servicesPresent &&
+      (!references.services || typeof references.services !== "object")) ||
     serviceKeys.some(
       (key) => !["incoming", "outgoing", "pages_function"].includes(key),
     ) ||
-    !serviceKeys.includes("incoming") ||
-    !serviceKeys.includes("outgoing") ||
-    !serviceKeys.includes("pages_function") ||
+    (serviceKeys.includes("incoming") &&
+      !Array.isArray(references.services.incoming)) ||
+    (serviceKeys.includes("outgoing") &&
+      !Array.isArray(references.services.outgoing)) ||
+    (durableObjectsPresent && !Array.isArray(references.durable_objects)) ||
+    (dispatchOutboundsPresent && !Array.isArray(references.dispatch_outbounds)) ||
     !Array.isArray(incomingServices) ||
     !Array.isArray(outgoingServices) ||
     !Array.isArray(durableObjectReferences) ||
     !Array.isArray(dispatchOutbounds) ||
-    references.services.pages_function !== false ||
+    (references.services?.pages_function !== undefined &&
+      typeof references.services.pages_function !== "boolean") ||
     durableObjectReferences.some(
       (reference) => typeof reference?.service !== "string",
     )
@@ -946,6 +961,7 @@ async function assertGuardedWorkerForceDeleteSafe(
   if (
     incomingServices.length > 0 ||
     outgoingServices.length > 0 ||
+    references.services?.pages_function === true ||
     durableObjectReferences.some((reference) => reference?.service !== workerName) ||
     dispatchOutbounds.length > 0
   ) {
@@ -1135,6 +1151,7 @@ export function deployDurableObjectTombstone({
   workerName,
   operationId,
   deleteDurableObject = true,
+  allowApiUpdatedWorker = false,
 }) {
   const root = mkdtempSync(join(tmpdir(), "me3-managed-do-delete-"));
   const configPath = join(root, "wrangler.toml");
@@ -1161,7 +1178,9 @@ export function deployDurableObjectTombstone({
     writeFileSync(configPath, config.join("\n"), { mode: 0o600 });
     const result = spawnSync(
       "pnpm",
-      managedDecommissionTombstoneDeployArgs(configPath, operationId),
+      managedDecommissionTombstoneDeployArgs(configPath, operationId, {
+        strict: !allowApiUpdatedWorker,
+      }),
       {
         encoding: "utf8",
         cwd: process.env.ME3_MANAGED_SOURCE_DIR || process.cwd(),
@@ -1177,14 +1196,18 @@ export function deployDurableObjectTombstone({
   }
 }
 
-export function managedDecommissionTombstoneDeployArgs(configPath, operationId) {
+export function managedDecommissionTombstoneDeployArgs(
+  configPath,
+  operationId,
+  { strict = true } = {},
+) {
   return [
     "exec",
     "wrangler",
     "deploy",
     "--config",
     configPath,
-    "--strict",
+    ...(strict ? ["--strict"] : []),
     "--no-bundle",
     "--tag",
     managedDecommissionTombstoneTag(operationId),

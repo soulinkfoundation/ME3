@@ -45,6 +45,14 @@ test("the transitional tombstone retries rather than acknowledges late Queue bat
       managedDecommissionTombstoneMessage(OPERATION_ID),
     ],
   );
+  assert.equal(
+    managedDecommissionTombstoneDeployArgs(
+      "/tmp/wrangler.toml",
+      OPERATION_ID,
+      { strict: false },
+    ).includes("--strict"),
+    false,
+  );
 });
 
 test("removes Worker producer bindings before queue deletion and retries safely after Cloudflare 400", async () => {
@@ -189,10 +197,13 @@ test("uses guarded force only for a stale Queue-consumer delete conflict", async
   const fake = createCloudflareFixture();
   fake.state.rejectNonForceWorkerDelete = true;
   fake.state.retainProducerBindingOnPatch = true;
+  fake.state.namespaces = [];
+  fake.state.workerBindings = [{ name: "JWT_SECRET", type: "secret_text" }];
 
   const result = await decommissionManagedInstall(waivedContract(), {
     request: fake.request,
-    deployTombstone: async () => {
+    deployTombstone: async ({ allowApiUpdatedWorker }) => {
+      assert.equal(allowApiUpdatedWorker, true);
       fake.state.namespaces = [];
     },
   });
@@ -277,10 +288,27 @@ test("refuses guarded force when the pinned tombstone identity changes during pr
   assert.equal(workerForceDeletes(fake).length, 0);
 });
 
-test("refuses guarded force when dependency evidence omits a known category", async () => {
+test("accepts omitted optional dependency categories as empty", async () => {
   const fake = createCloudflareFixture();
   fake.state.rejectNonForceWorkerDelete = true;
-  delete fake.state.references.services;
+  fake.state.references = {};
+
+  const result = await decommissionManagedInstall(waivedContract(), {
+    request: fake.request,
+    deployTombstone: async () => {
+      fake.state.producerBindings.clear();
+      fake.state.namespaces = [];
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(fake.state.worker, false);
+  assert.equal(workerForceDeletes(fake).length, 1);
+});
+
+test("refuses malformed present dependency categories", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.rejectNonForceWorkerDelete = true;
+  fake.state.references.services.incoming = null;
 
   await assert.rejects(
     decommissionManagedInstall(waivedContract(), {
