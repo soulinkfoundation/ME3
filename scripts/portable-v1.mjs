@@ -38,6 +38,7 @@ export const RUNTIME_MIGRATIONS = [
   ["0014_mobile_pairing", "2026-07-06-mobile-pairing-v1"],
   ["0015_agent_runtime_idempotency", "2026-07-09-agent-runtime-idempotency-v2"],
   ["0016_social_content_packages", "2026-07-10-social-content-packages-v1"],
+  ["0017_site_pages_and_commerce", "2026-07-19-site-pages-and-commerce-v1"],
   ["0018_social_publication_idempotency", "2026-07-10-social-publication-idempotency-v1"],
   ["0019_owner_content_search", "2026-07-15-owner-content-search-v1"],
   ["0020_mailbox_thread_index", "2026-07-16-mailbox-thread-index-v1"],

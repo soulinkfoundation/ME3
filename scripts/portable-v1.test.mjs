@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
 import {
   PortableError,
+  RUNTIME_MIGRATIONS,
   buildManifestForTest,
   comparePortableArchives,
   exportPortableV1,
@@ -53,6 +54,34 @@ let source;
 let sourceR2;
 let cleanTarget;
 let archive;
+
+test("portable migration allowlist exactly matches Core runtime migrations", () => {
+  const source = readFileSync(
+    new URL("../apps/worker/src/core-runtime-migrations.ts", import.meta.url),
+    "utf8",
+  );
+  const declarationStart = source.indexOf(
+    "const runtimeMigrations: RuntimeMigration[] = [",
+  );
+  assert.notEqual(declarationStart, -1, "Core runtime migration list declaration is missing");
+
+  const declarationEnd = source.indexOf("\n];", declarationStart);
+  assert.notEqual(declarationEnd, -1, "Core runtime migration list terminator is missing");
+
+  const declaration = source.slice(declarationStart, declarationEnd);
+  const runtimeMigrations = [
+    ...declaration.matchAll(
+      /\{\s*id:\s*"([^"]+)",\s*checksum:\s*"([^"]+)",\s*apply:/gs,
+    ),
+  ].map((match) => [match[1], match[2]]);
+
+  assert.equal(
+    runtimeMigrations.length,
+    [...declaration.matchAll(/\bapply:\s*/g)].length,
+    "Every Core runtime migration must have a literal id and checksum",
+  );
+  assert.deepEqual(RUNTIME_MIGRATIONS, runtimeMigrations);
+});
 
 before(async () => {
   root = mkdtempSync(join(tmpdir(), "me3-portable-tests-"));
