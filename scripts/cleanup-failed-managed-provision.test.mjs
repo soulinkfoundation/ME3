@@ -13,6 +13,14 @@ const QUEUE_NAME = `${WORKER_NAME}-assistant-job-events`;
 test("cleans an authorized never-public provision and verifies exact absence", async () => {
   const fake = createFixture();
   const events = [];
+  let tombstoneCallIndex = -1;
+  const blockedQueueDelete = await fake.request(
+    `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/queues/queue-id`,
+    { method: "DELETE" },
+  );
+  assert.equal(blockedQueueDelete.status, 400);
+  assert.equal(fake.state.queues.has(QUEUE_NAME), true);
+  const runStart = fake.calls.length;
   const options = {
     request: fake.request,
     reportStage: async (stage) => events.push(`stage:${stage}`),
@@ -20,10 +28,13 @@ test("cleans an authorized never-public provision and verifies exact absence", a
       events.push("delete:r2-objects");
       fake.state.r2Objects = [];
     },
-    deployTombstone: async ({ workerName, operationId }) => {
+    deployTombstone: async ({ workerName, operationId, deleteDurableObject }) => {
       assert.equal(workerName, WORKER_NAME);
       assert.equal(operationId, OPERATION_ID);
+      assert.equal(deleteDurableObject, true);
       events.push("delete:do-namespace");
+      tombstoneCallIndex = fake.calls.length;
+      fake.state.producerBindings.clear();
       fake.state.namespaces = [];
     },
   };
@@ -37,6 +48,16 @@ test("cleans an authorized never-public provision and verifies exact absence", a
   assert.equal(fake.state.r2, null);
   assert.equal(fake.state.queues.size, 0);
   assert.equal(fake.state.namespaces.length, 0);
+  const r2DeleteIndex = fake.calls.findIndex(
+    ({ method, resource }, index) =>
+      index >= runStart && method === "DELETE" && resource.includes("/r2/buckets/"),
+  );
+  const queueDeleteIndex = fake.calls.findIndex(
+    ({ method, resource }, index) =>
+      index >= runStart && method === "DELETE" && resource === "/queues/queue-id",
+  );
+  assert.ok(r2DeleteIndex < tombstoneCallIndex);
+  assert.ok(tombstoneCallIndex < queueDeleteIndex);
 
   events.length = 0;
   const retried = await cleanupFailedManagedProvision(contract(), options);
@@ -206,10 +227,32 @@ test("retries after R2 objects were emptied but the first attempt was interrupte
       fake.state.r2Objects = [];
     },
     deployTombstone: async () => {
+      fake.state.producerBindings.clear();
       fake.state.namespaces = [];
     },
   });
   assert.equal(result.ok, true);
+});
+
+test("detaches producer bindings when a failed provision Worker outlives its DO namespace", async () => {
+  const fake = createFixture();
+  fake.state.namespaces = [];
+  let tombstones = 0;
+  const result = await cleanupFailedManagedProvision(contract(), {
+    request: fake.request,
+    emptyR2: async () => {
+      fake.state.r2Objects = [];
+    },
+    deployTombstone: async ({ deleteDurableObject }) => {
+      tombstones += 1;
+      assert.equal(deleteDurableObject, false);
+      fake.state.producerBindings.clear();
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(tombstones, 1);
+  assert.equal(fake.state.queues.has(QUEUE_NAME), false);
 });
 
 function contract() {
@@ -238,6 +281,7 @@ function createFixture() {
     r2: { name: `${WORKER_NAME}-r2` },
     r2Objects: ["bootstrap.txt"],
     namespaces: [{ id: DO_ID, script: WORKER_NAME, class: "Me3UserAgent" }],
+    producerBindings: new Set([QUEUE_NAME]),
     queues: new Map([
       [
         QUEUE_NAME,
@@ -282,7 +326,10 @@ function createFixture() {
       );
     }
     if (resource === `/workers/scripts/${WORKER_NAME}`) {
-      if (method === "DELETE") state.worker = false;
+      if (method === "DELETE") {
+        state.worker = false;
+        state.producerBindings.clear();
+      }
       return state.worker
         ? new Response("worker module", { status: 200 })
         : missing();
@@ -309,7 +356,12 @@ function createFixture() {
               {
                 queue_id: queue.queue_id,
                 queue_name: queue.queue_name,
+                consumers: structuredClone(queue.consumers),
                 consumers_total_count: queue.consumers.length,
+                producers: state.producerBindings.has(queue.queue_name)
+                  ? [{ type: "worker", script: WORKER_NAME }]
+                  : [],
+                producers_total_count: state.producerBindings.has(queue.queue_name) ? 1 : 0,
               },
             ]
           : [],
@@ -333,6 +385,15 @@ function createFixture() {
     if (queueDelete && method === "DELETE") {
       const queue = queueById(state, queueDelete[1]);
       if (!queue) return missing();
+      if (state.producerBindings.has(queue.queue_name)) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            errors: [{ code: 11007, message: "Queue is referenced by a producer binding" }],
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        );
+      }
       state.queues.delete(queue.queue_name);
       return success(null);
     }

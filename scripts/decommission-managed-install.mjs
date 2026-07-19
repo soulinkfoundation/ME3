@@ -16,6 +16,8 @@ const LEGACY_SHARED_QUEUES = new Set([
   "me3-social-publish",
   "me3-social-publish-dlq",
 ]);
+const QUEUE_DETACH_MAX_ATTEMPTS = 30;
+const QUEUE_DETACH_DELAY_MS = 1_000;
 
 export async function decommissionManagedInstall(
   input,
@@ -23,6 +25,8 @@ export async function decommissionManagedInstall(
     request = globalThis.fetch,
     deployTombstone = deployDurableObjectTombstone,
     reportStage = async () => {},
+    pause = delay,
+    queueDetachMaxAttempts = QUEUE_DETACH_MAX_ATTEMPTS,
   } = {},
 ) {
   const contract = validateContract(input);
@@ -63,23 +67,25 @@ export async function decommissionManagedInstall(
       }
     }
   }
-  await reportStage("deleting_queues");
-  for (const queueName of contract.queueNames) {
-    if (!queueName.startsWith(`${contract.workerName}-`)) continue;
-    const queue = await findQueue(api, input.accountId, queueName);
-    if (queue) await deleteIfPresent(api, `/accounts/${input.accountId}/queues/${queue.queue_id}`);
-  }
 
-  await reportStage("deleting_worker");
+  // Queue producer bindings belong to the Worker deployment, not the Queue
+  // consumer records above. Deploy the exact binding-free tombstone before
+  // deleting dedicated queues so Cloudflare no longer rejects their deletion.
+  // Keep this inside the already-authorized removing_consumers stage so the
+  // externally reported lifecycle stages remain strictly monotonic.
   let namespaces = await listDurableObjectNamespaces(api, input.accountId);
   const namespace = namespaces.find((item) => namespaceId(item) === contract.durableObjectNamespaceId);
-  if (namespace) {
-    if (namespace.script !== contract.workerName || namespace.class !== "Me3UserAgent") {
+  if (presence.worker || namespace) {
+    if (
+      namespace &&
+      (namespace.script !== contract.workerName || namespace.class !== "Me3UserAgent")
+    ) {
       throw new Error("Durable Object namespace identity does not match the managed install");
     }
     await deployTombstone({
       workerName: contract.workerName,
       operationId: contract.operationId,
+      deleteDurableObject: Boolean(namespace),
     });
     namespaces = await listDurableObjectNamespaces(api, input.accountId);
     if (namespaces.some((item) => namespaceId(item) === contract.durableObjectNamespaceId)) {
@@ -87,10 +93,32 @@ export async function decommissionManagedInstall(
     }
   }
 
+  const dedicatedQueueNames = orderedDedicatedQueueNames(
+    contract.queueNames,
+    contract.workerName,
+  );
+  await waitForManagedQueueBindingsDetached(api, input.accountId, dedicatedQueueNames, {
+    pause,
+    maxAttempts: queueDetachMaxAttempts,
+  });
+
+  await reportStage("deleting_queues");
+  for (const queueName of dedicatedQueueNames) {
+    const queue = await findQueue(api, input.accountId, queueName);
+    if (queue) await deleteIfPresent(api, `/accounts/${input.accountId}/queues/${queue.queue_id}`);
+  }
+
+  await reportStage("deleting_worker");
   await deleteIfPresent(
     api,
-    `/accounts/${input.accountId}/workers/scripts/${contract.workerName}?force=true`,
+    `/accounts/${input.accountId}/workers/scripts/${contract.workerName}`,
   );
+
+  // D1 contains the persisted revoke/purge proof needed to authorize a safe
+  // retry. Keep it until every other provider resource has been re-read as
+  // absent, rather than trusting successful DELETE responses alone.
+  await assertManagedProviderResourcesAbsent(api, input.accountId, contract);
+
   await reportStage("deleting_d1");
   await deleteIfPresent(
     api,
@@ -98,34 +126,12 @@ export async function decommissionManagedInstall(
   );
 
   await reportStage("verifying_absence");
-  await assertMissing(
-    api,
-    `/accounts/${input.accountId}/workers/scripts/${contract.workerName}`,
-    "Worker",
-  );
+  await assertManagedProviderResourcesAbsent(api, input.accountId, contract);
   await assertMissing(
     api,
     `/accounts/${input.accountId}/d1/database/${contract.d1Id}`,
     "D1 database",
   );
-  for (const queueName of contract.queueNames) {
-    const queue = await findQueue(api, input.accountId, queueName);
-    if (queueName.startsWith(`${contract.workerName}-`) && queue) {
-      throw new Error(`managed queue deletion was not verified: ${queueName}`);
-    }
-    if (
-      queue &&
-      (await listQueueConsumers(api, input.accountId, queue)).some((consumer) =>
-        isWorkerConsumer(consumer, contract.workerName),
-      )
-    ) {
-      throw new Error(`managed queue consumer removal was not verified: ${queueName}`);
-    }
-  }
-  namespaces = await listDurableObjectNamespaces(api, input.accountId);
-  if (namespaces.some((item) => namespaceId(item) === contract.durableObjectNamespaceId)) {
-    throw new Error("Durable Object namespace absence was not verified");
-  }
 
   return {
     ok: true,
@@ -137,7 +143,7 @@ export async function decommissionManagedInstall(
       d1: true,
       r2: true,
       durableObjectNamespace: true,
-      dedicatedQueues: contract.queueNames.filter((name) => name.startsWith(`${contract.workerName}-`)),
+      dedicatedQueues: dedicatedQueueNames,
       legacySharedQueueConsumers: contract.queueNames.filter((name) => LEGACY_SHARED_QUEUES.has(name)),
     },
   };
@@ -376,6 +382,37 @@ async function assertMissing(api, path, label) {
   if (result !== null) throw new Error(`${label} absence was not verified`);
 }
 
+async function assertManagedProviderResourcesAbsent(api, accountId, contract) {
+  await assertMissing(
+    api,
+    `/accounts/${accountId}/r2/buckets/${contract.r2Name}`,
+    "R2 bucket",
+  );
+  await assertMissing(
+    api,
+    `/accounts/${accountId}/workers/scripts/${contract.workerName}`,
+    "Worker",
+  );
+  for (const queueName of contract.queueNames) {
+    const queue = await findQueue(api, accountId, queueName);
+    if (queueName.startsWith(`${contract.workerName}-`) && queue) {
+      throw new Error(`managed queue deletion was not verified: ${queueName}`);
+    }
+    if (
+      queue &&
+      (await listQueueConsumers(api, accountId, queue)).some((consumer) =>
+        isWorkerConsumer(consumer, contract.workerName),
+      )
+    ) {
+      throw new Error(`managed queue consumer removal was not verified: ${queueName}`);
+    }
+  }
+  const namespaces = await listDurableObjectNamespaces(api, accountId);
+  if (namespaces.some((item) => namespaceId(item) === contract.durableObjectNamespaceId)) {
+    throw new Error("Durable Object namespace absence was not verified");
+  }
+}
+
 async function findQueue(api, accountId, name) {
   const query = new URLSearchParams({ name, page: "1", per_page: "100" });
   const queues = await api(`/accounts/${accountId}/queues?${query}`);
@@ -383,6 +420,70 @@ async function findQueue(api, accountId, name) {
   const matches = queues.filter((queue) => queue?.queue_name === name);
   if (matches.length > 1) throw new Error(`Cloudflare queue identity is ambiguous: ${name}`);
   return matches[0] || null;
+}
+
+export async function waitForManagedQueueBindingsDetached(
+  api,
+  accountId,
+  queueNames,
+  {
+    pause = delay,
+    maxAttempts = QUEUE_DETACH_MAX_ATTEMPTS,
+  } = {},
+) {
+  if (
+    typeof api !== "function" ||
+    !/^[0-9a-f]{32}$/.test(accountId || "") ||
+    !Array.isArray(queueNames) ||
+    typeof pause !== "function" ||
+    !Number.isSafeInteger(maxAttempts) ||
+    maxAttempts < 1 ||
+    maxAttempts > QUEUE_DETACH_MAX_ATTEMPTS
+  ) {
+    throw new Error("managed queue detachment proof configuration is invalid");
+  }
+  for (const queueName of queueNames) {
+    let detached = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const queue = await findQueue(api, accountId, queueName);
+      if (!queue) {
+        detached = true;
+        break;
+      }
+      const consumerCount = Number(queue.consumers_total_count);
+      const producerCount = Number(queue.producers_total_count);
+      if (
+        !Array.isArray(queue.consumers) ||
+        !Array.isArray(queue.producers) ||
+        !Number.isSafeInteger(consumerCount) ||
+        consumerCount < 0 ||
+        queue.consumers.length !== consumerCount ||
+        !Number.isSafeInteger(producerCount) ||
+        producerCount < 0 ||
+        queue.producers.length !== producerCount
+      ) {
+        throw new Error(`Cloudflare queue binding counts are invalid: ${queueName}`);
+      }
+      if (consumerCount === 0 && producerCount === 0) {
+        detached = true;
+        break;
+      }
+      if (attempt < maxAttempts) await pause(QUEUE_DETACH_DELAY_MS);
+    }
+    if (!detached) {
+      throw new Error(`managed queue bindings did not detach: ${queueName}`);
+    }
+  }
+}
+
+export function orderedDedicatedQueueNames(queueNames, workerName) {
+  return queueNames
+    .filter((name) => name.startsWith(`${workerName}-`))
+    .sort(
+      (left, right) =>
+        Number(left.endsWith("-dlq")) - Number(right.endsWith("-dlq")) ||
+        left.localeCompare(right),
+    );
 }
 
 async function listQueueConsumers(api, accountId, queue) {
@@ -427,7 +528,11 @@ function namespaceId(namespace) {
   return String(namespace?.id || namespace?.namespace_id || "").toLowerCase();
 }
 
-export function deployDurableObjectTombstone({ workerName, operationId }) {
+export function deployDurableObjectTombstone({
+  workerName,
+  operationId,
+  deleteDurableObject = true,
+}) {
   const root = mkdtempSync(join(tmpdir(), "me3-managed-do-delete-"));
   const configPath = join(root, "wrangler.toml");
   try {
@@ -436,20 +541,21 @@ export function deployDurableObjectTombstone({ workerName, operationId }) {
       "export default { fetch() { return new Response('Managed ME3 is decommissioning', { status: 410 }); } };\n",
       { mode: 0o600 },
     );
-    writeFileSync(
-      configPath,
-      [
-        `name = "${workerName}"`,
-        'main = "tombstone.mjs"',
-        'compatibility_date = "2026-06-24"',
-        "workers_dev = false",
-        "[[migrations]]",
-        `tag = "managed-delete-${operationId}"`,
-        'deleted_classes = ["Me3UserAgent"]',
-        "",
-      ].join("\n"),
-      { mode: 0o600 },
-    );
+    const config = [
+      `name = "${workerName}"`,
+      'main = "tombstone.mjs"',
+      'compatibility_date = "2026-06-24"',
+      "workers_dev = false",
+      ...(deleteDurableObject
+        ? [
+            "[[migrations]]",
+            `tag = "managed-delete-${operationId}"`,
+            'deleted_classes = ["Me3UserAgent"]',
+          ]
+        : []),
+      "",
+    ];
+    writeFileSync(configPath, config.join("\n"), { mode: 0o600 });
     const result = spawnSync(
       "pnpm",
       ["exec", "wrangler", "deploy", "--config", configPath, "--strict"],
@@ -462,6 +568,10 @@ export function deployDurableObjectTombstone({ workerName, operationId }) {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function parseArgs(values) {

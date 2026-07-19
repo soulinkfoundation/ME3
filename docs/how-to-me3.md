@@ -305,9 +305,13 @@ revocation and storage deletion are irreversible and the cancellation path is cl
 
 The later decommission operation re-downloads and re-verifies the same retained artifact and key
 version before any destructive control. It then suspends and drains again, revokes credentials,
-purges runtime-owned D1/R2/Durable Object data, proves the source R2 bucket empty, removes only Queue
-consumers whose exact `script_name` matches the managed Worker, deletes dedicated Queues, applies the
-Durable Object `deleted_classes` migration, and deletes the exact Worker, D1, and R2 resources.
+purges runtime-owned D1/R2/Durable Object data, and proves the source R2 bucket empty before deleting
+it. It removes only Queue consumers whose exact `script_name` matches the managed Worker, deploys an
+inert binding-free tombstone with the Durable Object `deleted_classes` migration, and waits for
+complete Queue producer/consumer evidence to reach zero. It then deletes source Queues before their
+dead-letter Queues, deletes the tombstone Worker without forcing binding cleanup, re-reads every
+non-D1 resource as absent, and deletes D1 last so its persisted termination proof remains available
+through every retryable partial failure.
 
 The strict-waiver path skips retained-export capture and S3 credential derivation, but it does not
 weaken resource-deletion proof. The runtime must first persist that it is suspended and drained, its

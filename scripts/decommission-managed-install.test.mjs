@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decommissionManagedInstall } from "./decommission-managed-install.mjs";
+import {
+  decommissionManagedInstall,
+  orderedDedicatedQueueNames,
+} from "./decommission-managed-install.mjs";
 
 const ACCOUNT_ID = "a".repeat(32);
 const INSTALLATION_ID = "mi-1234567890abcdef";
@@ -14,17 +17,28 @@ const SHA256 = "c".repeat(64);
 const DEDICATED_QUEUE = `${WORKER_NAME}-assistant-job-events`;
 const SHARED_QUEUE = "me3-booking-reminders";
 
-test("deletes the exact manifest, matches queue script_name, verifies absence, and retries safely", async () => {
+test("removes Worker producer bindings before queue deletion and retries safely after Cloudflare 400", async () => {
   const fake = createCloudflareFixture();
   const stages = [];
   let tombstones = 0;
+  let tombstoneCallIndex = -1;
+  const blockedQueueDelete = await fake.request(
+    `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/queues/dedicated-id`,
+    { method: "DELETE" },
+  );
+  assert.equal(blockedQueueDelete.status, 400);
+  assert.equal(fake.state.queues.has(DEDICATED_QUEUE), true);
+  const runStart = fake.calls.length;
   const options = {
     request: fake.request,
     reportStage: async (stage) => stages.push(stage),
-    deployTombstone: async ({ workerName, operationId }) => {
+    deployTombstone: async ({ workerName, operationId, deleteDurableObject }) => {
       tombstones += 1;
       assert.equal(workerName, WORKER_NAME);
       assert.equal(operationId, OPERATION_ID);
+      assert.equal(deleteDurableObject, true);
+      tombstoneCallIndex = fake.calls.length;
+      fake.state.producerBindings.clear();
       fake.state.namespaces = [];
     },
   };
@@ -45,6 +59,16 @@ test("deletes the exact manifest, matches queue script_name, verifies absence, a
   assert.equal(fake.state.d1, null);
   assert.equal(fake.state.r2, null);
   assert.equal(fake.state.queues.has(DEDICATED_QUEUE), false);
+  const r2DeleteIndex = fake.calls.findIndex(
+    ({ method, path }, index) =>
+      index >= runStart && method === "DELETE" && path.includes("/r2/buckets/"),
+  );
+  const queueDeleteIndex = fake.calls.findIndex(
+    ({ method, path }, index) =>
+      index >= runStart && method === "DELETE" && path.endsWith("/queues/dedicated-id"),
+  );
+  assert.ok(r2DeleteIndex < tombstoneCallIndex);
+  assert.ok(tombstoneCallIndex < queueDeleteIndex);
   assert.deepEqual(
     fake.state.queues.get(SHARED_QUEUE).consumers.map((consumer) => consumer.script_name),
     ["unrelated-worker"],
@@ -77,9 +101,11 @@ test("decommissions without S3 evidence only after persisted purge proof and ver
   const result = await decommissionManagedInstall(waivedContract(), {
     request: fake.request,
     reportStage: async (stage) => stages.push(stage),
-    deployTombstone: async ({ workerName, operationId }) => {
+    deployTombstone: async ({ workerName, operationId, deleteDurableObject }) => {
       assert.equal(workerName, WORKER_NAME);
       assert.equal(operationId, OPERATION_ID);
+      assert.equal(deleteDurableObject, true);
+      fake.state.producerBindings.clear();
       fake.state.namespaces = [];
     },
   });
@@ -120,6 +146,102 @@ test("decommissions without S3 evidence only after persisted purge proof and ver
   assert.ok(runtimeProofIndex < r2DeleteIndex);
   assert.ok(r2DeleteIndex < r2AbsenceIndex);
   assert.ok(r2AbsenceIndex < firstLaterDeleteIndex);
+});
+
+test("redeploys a binding-free tombstone when the Worker remains after its DO namespace is absent", async () => {
+  const fake = createCloudflareFixture();
+  fake.state.namespaces = [];
+  let tombstones = 0;
+  const result = await decommissionManagedInstall(waivedContract(), {
+    request: fake.request,
+    deployTombstone: async ({ workerName, operationId, deleteDurableObject }) => {
+      tombstones += 1;
+      assert.equal(workerName, WORKER_NAME);
+      assert.equal(operationId, OPERATION_ID);
+      assert.equal(deleteDurableObject, false);
+      fake.state.producerBindings.clear();
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(tombstones, 1);
+  assert.equal(fake.state.queues.has(DEDICATED_QUEUE), false);
+});
+
+test("polls complete Queue binding evidence and fails closed when detachment never converges", async () => {
+  const delayed = createCloudflareFixture();
+  delayed.state.producerDetachPollsRemaining = 2;
+  let pauses = 0;
+  const delayedResult = await decommissionManagedInstall(waivedContract(), {
+    request: delayed.request,
+    pause: async (milliseconds) => {
+      assert.equal(milliseconds, 1_000);
+      pauses += 1;
+    },
+    deployTombstone: async () => {
+      delayed.state.producerBindings.clear();
+      delayed.state.namespaces = [];
+    },
+  });
+  assert.equal(delayedResult.ok, true);
+  assert.equal(pauses, 2);
+
+  const stuck = createCloudflareFixture();
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), {
+      request: stuck.request,
+      pause: async () => {},
+      queueDetachMaxAttempts: 2,
+      deployTombstone: async () => {
+        stuck.state.namespaces = [];
+      },
+    }),
+    /queue bindings did not detach/,
+  );
+  assert.equal(stuck.state.queues.has(DEDICATED_QUEUE), true);
+  assert.equal(stuck.state.worker, true);
+  assert.notEqual(stuck.state.d1, null);
+  assert.equal(
+    stuck.calls.some(
+      ({ method, path }) => method === "DELETE" && path.endsWith("/queues/dedicated-id"),
+    ),
+    false,
+  );
+
+  const incomplete = createCloudflareFixture();
+  incomplete.state.omitProducerArray = true;
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), {
+      request: incomplete.request,
+      deployTombstone: async () => {
+        incomplete.state.producerBindings.clear();
+        incomplete.state.namespaces = [];
+      },
+    }),
+    /queue binding counts are invalid/,
+  );
+  assert.equal(incomplete.state.queues.has(DEDICATED_QUEUE), true);
+});
+
+test("orders source queues before dead-letter queues independently of manifest order", () => {
+  assert.deepEqual(
+    orderedDedicatedQueueNames(
+      [
+        `${WORKER_NAME}-events-dlq`,
+        SHARED_QUEUE,
+        `${WORKER_NAME}-social-dlq`,
+        `${WORKER_NAME}-events`,
+        `${WORKER_NAME}-social`,
+      ],
+      WORKER_NAME,
+    ),
+    [
+      `${WORKER_NAME}-events`,
+      `${WORKER_NAME}-social`,
+      `${WORKER_NAME}-events-dlq`,
+      `${WORKER_NAME}-social-dlq`,
+    ],
+  );
 });
 
 test("requires an explicit strict export waiver value before any provider request", async (t) => {
@@ -322,6 +444,39 @@ test("stops before every later resource when REST rejects deletion of a non-empt
   assert.equal(fake.state.queues.has(DEDICATED_QUEUE), true);
 });
 
+test("retains D1 proof when an acknowledged Worker deletion is not observed as absent", async () => {
+  const fake = createCloudflareFixture();
+  const request = async (url, init = {}) => {
+    const parsed = new URL(url);
+    if (
+      (init.method || "GET") === "DELETE" &&
+      parsed.pathname.endsWith(`/workers/scripts/${WORKER_NAME}`)
+    ) {
+      return success(null);
+    }
+    return fake.request(url, init);
+  };
+
+  await assert.rejects(
+    decommissionManagedInstall(waivedContract(), {
+      request,
+      deployTombstone: async () => {
+        fake.state.producerBindings.clear();
+        fake.state.namespaces = [];
+      },
+    }),
+    /Worker absence was not verified/,
+  );
+  assert.notEqual(fake.state.d1, null);
+  assert.equal(
+    fake.calls.some(
+      ({ method, path }) =>
+        method === "DELETE" && path.includes(`/d1/database/${D1_ID}`),
+    ),
+    false,
+  );
+});
+
 test("refuses a mismatched exact manifest before waived decommission deletes anything", async () => {
   const fake = createCloudflareFixture();
   fake.state.namespaces[0].script = "unrelated-worker";
@@ -382,6 +537,7 @@ test("retries safely after every destructive stage has already taken effect", as
       const fake = createCloudflareFixture();
       let injected = false;
       const deployTombstone = async () => {
+        fake.state.producerBindings.clear();
         fake.state.namespaces = [];
         if (interruptedAfter === "tombstone" && !injected) {
           injected = true;
@@ -416,6 +572,7 @@ test("retries safely after every destructive stage has already taken effect", as
       const retried = await decommissionManagedInstall(contract(), {
         request: fake.request,
         deployTombstone: async () => {
+          fake.state.producerBindings.clear();
           fake.state.namespaces = [];
         },
       });
@@ -497,6 +654,9 @@ function createCloudflareFixture() {
     d1: { uuid: D1_ID, name: `${WORKER_NAME}-d1` },
     r2: { name: `${WORKER_NAME}-r2` },
     namespaces: [{ id: DO_ID, script: WORKER_NAME, class: "Me3UserAgent" }],
+    producerBindings: new Set([DEDICATED_QUEUE]),
+    producerDetachPollsRemaining: 0,
+    omitProducerArray: false,
     lifecycle: {
       state: "suspended",
       credentials_revoked_at: "2026-07-18T12:00:00Z",
@@ -565,7 +725,7 @@ function createCloudflareFixture() {
     }
     if (resource === "/queues" && method === "GET") {
       const queue = state.queues.get(parsed.searchParams.get("name"));
-      return success(queue ? [publicQueue(queue)] : []);
+      return success(queue ? [publicQueue(queue, state)] : []);
     }
     const consumerList = /^\/queues\/([^/]+)\/consumers$/.exec(resource);
     if (consumerList && method === "GET") {
@@ -585,6 +745,15 @@ function createCloudflareFixture() {
     if (queueDelete && method === "DELETE") {
       const queue = queueById(state, queueDelete[1]);
       if (!queue) return missing();
+      if (state.producerBindings.has(queue.queue_name)) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            errors: [{ code: 11007, message: "Queue is referenced by a producer binding" }],
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        );
+      }
       state.queues.delete(queue.queue_name);
       return success(null);
     }
@@ -592,7 +761,10 @@ function createCloudflareFixture() {
       return success(state.namespaces);
     }
     if (resource === `/workers/scripts/${WORKER_NAME}`) {
-      if (method === "DELETE") state.worker = false;
+      if (method === "DELETE") {
+        state.worker = false;
+        state.producerBindings.clear();
+      }
       return state.worker
         ? new Response("worker module", { status: 200, headers: { "Content-Type": "text/plain" } })
         : missing();
@@ -606,12 +778,31 @@ function queueById(state, id) {
   return [...state.queues.values()].find((queue) => queue.queue_id === id) || null;
 }
 
-function publicQueue(queue) {
-  return {
+function publicQueue(queue, state) {
+  let producerVisible = state.producerBindings.has(queue.queue_name);
+  if (
+    queue.queue_name === DEDICATED_QUEUE &&
+    !producerVisible &&
+    state.producerDetachPollsRemaining > 0
+  ) {
+    state.producerDetachPollsRemaining -= 1;
+    producerVisible = true;
+  }
+  const producers = producerVisible
+    ? [{ type: "worker", script: WORKER_NAME }]
+    : [];
+  const result = {
     queue_id: queue.queue_id,
     queue_name: queue.queue_name,
+    consumers: structuredClone(queue.consumers),
     consumers_total_count: queue.consumers.length,
+    producers,
+    producers_total_count: producers.length,
   };
+  if (state.omitProducerArray && queue.queue_name === DEDICATED_QUEUE) {
+    delete result.producers;
+  }
+  return result;
 }
 
 function success(result) {

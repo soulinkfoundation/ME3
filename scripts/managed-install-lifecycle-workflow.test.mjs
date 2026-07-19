@@ -78,19 +78,19 @@ test("derives source R2 credentials from the existing Cloudflare token inside th
   const derive = getStep("Derive job-scoped source R2 S3 credentials");
   const verify = getStep("Verify job-scoped source R2 S3 access");
   assert.match(derive, /ME3_MANAGED_CLOUDFLARE_API_TOKEN/);
-  assert.match(
-    derive,
-    /if: inputs\.operation == 'export' \|\| \(inputs\.operation == 'decommission' && inputs\.export_waived == false\)/,
-  );
+  for (const step of [derive, verify]) {
+    assert.match(step, /inputs\.operation == 'export'/);
+    assert.match(step, /inputs\.operation == 'cleanup_failed_provision'/);
+    assert.match(
+      step,
+      /inputs\.operation == 'decommission' && inputs\.export_waived == false/,
+    );
+  }
   assert.match(derive, /derive-managed-r2-s3-credentials\.mjs/);
   assert.match(derive, /sha256sum --check/);
   assert.match(verify, /aws s3api head-bucket/);
   assert.match(verify, /ME3_MANAGED_SOURCE_R2_PRESENT/);
   assert.match(verify, /ME3_MANAGED_R2_PRESENT/);
-  assert.match(
-    verify,
-    /if: inputs\.operation == 'export' \|\| \(inputs\.operation == 'decommission' && inputs\.export_waived == false\)/,
-  );
   assert.doesNotMatch(lifecycle, /secrets\.ME3_MANAGED_R2_ACCESS_KEY_ID/);
   assert.doesNotMatch(lifecycle, /secrets\.ME3_MANAGED_R2_SECRET_ACCESS_KEY/);
   assert.ok(lifecycle.indexOf(derive) < lifecycle.indexOf("Materialize a stable R2 snapshot"));
@@ -243,8 +243,9 @@ test("cleans a never-public failed provision through a distinct authorized opera
   assert.match(cleanup, /ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET/);
   assert.doesNotMatch(cleanup, /managed-runtime-control|managed-retained-export/);
   for (const s3Step of [derive, verify]) {
-    assert.match(s3Step, /if: inputs\.operation == 'export' \|\| \(inputs\.operation == 'decommission'/);
-    assert.doesNotMatch(s3Step, /cleanup_failed_provision/);
+    assert.match(s3Step, /inputs\.operation == 'export'/);
+    assert.match(s3Step, /inputs\.operation == 'cleanup_failed_provision'/);
+    assert.match(s3Step, /inputs\.operation == 'decommission'/);
   }
   assert.match(success, /ME3_MANAGED_STAGE: verified_absent/);
   assert.ok(lifecycle.indexOf(validation) < lifecycle.indexOf(cleanup));

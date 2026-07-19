@@ -3,7 +3,11 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { deployDurableObjectTombstone } from "./decommission-managed-install.mjs";
+import {
+  deployDurableObjectTombstone,
+  orderedDedicatedQueueNames,
+  waitForManagedQueueBindingsDetached,
+} from "./decommission-managed-install.mjs";
 import { listR2Objects } from "./list-r2-s3.mjs";
 import { sendManagedLifecycleWorkflowCallback } from "./managed-lifecycle-workflow-callback.mjs";
 
@@ -16,6 +20,8 @@ export async function cleanupFailedManagedProvision(
     emptyR2 = emptyManagedR2,
     deployTombstone = deployDurableObjectTombstone,
     reportStage = async () => {},
+    pause,
+    queueDetachMaxAttempts,
   } = {},
 ) {
   const contract = validateContract(input);
@@ -57,31 +63,54 @@ export async function cleanupFailedManagedProvision(
     }
   }
 
-  await reportStage("deleting_queues");
-  for (const queueName of contract.queueNames) {
-    const queue = await findQueue(api, input.accountId, queueName);
-    if (queue) await deleteIfPresent(api, `/accounts/${input.accountId}/queues/${queue.queue_id}`);
-  }
-
-  await reportStage("deleting_worker");
+  // Producer bindings are part of the Worker deployment and survive Queue
+  // consumer deletion. Replace the never-public Worker with the exact
+  // binding-free tombstone before deleting its dedicated queues. This remains
+  // within the forward-only removing_consumers callback stage.
   let namespaces = await listDurableObjectNamespaces(api, input.accountId);
   const namespace = namespaces.find(
     (item) => namespaceId(item) === contract.durableObjectNamespaceId,
   );
-  if (namespace) {
-    assertNamespaceIdentity(namespace, contract);
+  if (before.worker || namespace) {
+    if (namespace) assertNamespaceIdentity(namespace, contract);
     await deployTombstone({
       workerName: contract.workerName,
       operationId: contract.operationId,
+      deleteDurableObject: Boolean(namespace),
     });
     namespaces = await listDurableObjectNamespaces(api, input.accountId);
     if (namespaces.some((item) => namespaceId(item) === contract.durableObjectNamespaceId)) {
       throw new Error("failed provision Durable Object namespace deletion was not verified");
     }
   }
+
+  const dedicatedQueueNames = orderedDedicatedQueueNames(
+    contract.queueNames,
+    contract.workerName,
+  );
+  await waitForManagedQueueBindingsDetached(api, input.accountId, dedicatedQueueNames, {
+    ...(pause ? { pause } : {}),
+    ...(queueDetachMaxAttempts ? { maxAttempts: queueDetachMaxAttempts } : {}),
+  });
+
+  await reportStage("deleting_queues");
+  for (const queueName of dedicatedQueueNames) {
+    const queue = await findQueue(api, input.accountId, queueName);
+    if (queue) await deleteIfPresent(api, `/accounts/${input.accountId}/queues/${queue.queue_id}`);
+  }
+
+  await reportStage("deleting_worker");
   await deleteIfPresent(
     api,
-    `/accounts/${input.accountId}/workers/scripts/${contract.workerName}?force=true`,
+    `/accounts/${input.accountId}/workers/scripts/${contract.workerName}`,
+  );
+
+  // Retain D1 until every other exact resource has been re-read as absent so
+  // an acknowledged-but-incomplete provider deletion remains retryable.
+  await assertFailedProvisionProviderResourcesAbsent(
+    api,
+    input.accountId,
+    contract,
   );
 
   await reportStage("deleting_d1");
@@ -91,25 +120,16 @@ export async function cleanupFailedManagedProvision(
   );
 
   await reportStage("verifying_absence");
-  await assertMissing(
+  await assertFailedProvisionProviderResourcesAbsent(
     api,
-    `/accounts/${input.accountId}/workers/scripts/${contract.workerName}`,
-    "Worker",
+    input.accountId,
+    contract,
   );
   await assertMissing(
     api,
     `/accounts/${input.accountId}/d1/database/${contract.d1Id}`,
     "D1 database",
   );
-  for (const queueName of contract.queueNames) {
-    if (await findQueue(api, input.accountId, queueName)) {
-      throw new Error(`failed provision queue deletion was not verified: ${queueName}`);
-    }
-  }
-  namespaces = await listDurableObjectNamespaces(api, input.accountId);
-  if (namespaces.some((item) => namespaceId(item) === contract.durableObjectNamespaceId)) {
-    throw new Error("failed provision Durable Object namespace absence was not verified");
-  }
 
   return {
     ok: true,
@@ -383,6 +403,28 @@ async function deleteIfPresent(api, path) {
 async function assertMissing(api, path, label) {
   const result = await api(path, {}, { missingOk: true });
   if (result !== null) throw new Error(`${label} absence was not verified`);
+}
+
+async function assertFailedProvisionProviderResourcesAbsent(api, accountId, contract) {
+  await assertMissing(
+    api,
+    `/accounts/${accountId}/r2/buckets/${contract.r2Name}`,
+    "R2 bucket",
+  );
+  await assertMissing(
+    api,
+    `/accounts/${accountId}/workers/scripts/${contract.workerName}`,
+    "Worker",
+  );
+  for (const queueName of contract.queueNames) {
+    if (await findQueue(api, accountId, queueName)) {
+      throw new Error(`failed provision queue deletion was not verified: ${queueName}`);
+    }
+  }
+  const namespaces = await listDurableObjectNamespaces(api, accountId);
+  if (namespaces.some((item) => namespaceId(item) === contract.durableObjectNamespaceId)) {
+    throw new Error("failed provision Durable Object namespace absence was not verified");
+  }
 }
 
 function emptyManagedR2({ accountId, r2Name }) {
