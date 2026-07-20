@@ -606,13 +606,6 @@ function currentQueryParam(name: string): string | null {
             <UiIcon name="SlidersHorizontal" :size="17" aria-hidden="true" />
           </Button>
         </form>
-        <WorkspaceTabs
-          :tabs="modeTabs"
-          :model-value="activeMode"
-          aria-label="Social publishing views"
-          semantics="navigation"
-          @update:model-value="setActiveMode"
-        />
         <div class="toolbar-actions">
           <Button
             color="ghost"
@@ -647,8 +640,19 @@ function currentQueryParam(name: string): string | null {
         <RouterLink to="/onboarding">Continue setup</RouterLink>
       </div>
 
-      <div v-else class="social-workspace" :aria-busy="loading">
-        <section class="post-list" aria-label="Social posts">
+      <div v-else class="social-workspace-shell">
+        <nav class="social-tabs-rail" aria-label="Social publishing views">
+          <WorkspaceTabs
+            :tabs="modeTabs"
+            :model-value="activeMode"
+            aria-label="Social publishing views"
+            semantics="navigation"
+            @update:model-value="setActiveMode"
+          />
+        </nav>
+
+        <div class="social-workspace" :aria-busy="loading">
+          <section class="post-list" aria-label="Social posts">
           <p v-if="libraryResults !== null" class="library-result-count" role="status">
             {{ libraryResults.length }} matching Version{{ libraryResults.length === 1 ? '' : 's' }}<template v-if="libraryResultBreakdown"> · {{ libraryResultBreakdown }}</template>
           </p>
@@ -693,9 +697,9 @@ function currentQueryParam(name: string): string | null {
               </span>
             </button>
           </template>
-        </section>
+          </section>
 
-        <section v-if="selectedPost" class="post-detail" aria-live="polite">
+          <section v-if="selectedPost" class="post-detail" aria-live="polite">
           <header class="detail-header">
             <div>
               <h2>{{ selectedPost.post.ideaText }}</h2>
@@ -835,12 +839,13 @@ function currentQueryParam(name: string): string | null {
             </aside>
           </div>
 
-        </section>
+          </section>
 
-        <section v-else class="detail-empty" aria-label="No social Post selected">
-          <UiIcon name="SquarePen" :size="24" aria-hidden="true" />
-          <p>Select a Post to review it, or write a new one.</p>
-        </section>
+          <section v-else class="detail-empty" aria-label="No social Post selected">
+            <UiIcon name="SquarePen" :size="24" aria-hidden="true" />
+            <p>Select a Post to review it, or write a new one.</p>
+          </section>
+        </div>
       </div>
     </main>
 
@@ -1003,7 +1008,7 @@ function currentQueryParam(name: string): string | null {
   top: 0;
   z-index: 3;
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) auto minmax(190px, 1fr);
+  grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr);
   margin-left: calc(var(--app-shell-mobile-nav-leading-padding) - 16px);
   padding: var(--workspace-topbar-padding-block) 0 0;
   background: var(--ui-bg);
@@ -1053,6 +1058,20 @@ function currentQueryParam(name: string): string | null {
 
 .toolbar-actions {
   justify-content: flex-end;
+}
+
+.social-workspace-shell {
+  display: grid;
+}
+
+.social-tabs-rail {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-height: 40px;
+  padding: 4px 8px 0;
+  box-sizing: border-box;
+  background: var(--ui-bg);
 }
 
 .toolbar-actions :deep(button) {
@@ -1979,12 +1998,6 @@ input:focus {
     margin-left: calc(var(--app-shell-mobile-nav-leading-padding) - 10px);
     padding-top: var(--workspace-topbar-padding-block);
     padding-bottom: 0;
-  }
-
-  .social-toolbar > .workspace-tabs {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-self: center;
   }
 
   .social-workspace,
