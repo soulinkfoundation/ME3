@@ -1,0 +1,370 @@
+name: Upgrade managed ME3
+
+on:
+  workflow_dispatch:
+    inputs:
+      attempt_id:
+        description: Exact control-plane upgrade attempt UUID
+        required: true
+        type: string
+      installation_id:
+        description: Exact managed installation ID
+        required: true
+        type: string
+      current_release_tag:
+        description: Release currently attested by the live installation
+        required: true
+        type: string
+      target_release_tag:
+        description: Exact stable ME3 release tag to deploy
+        required: true
+        type: string
+      target_release_sha:
+        description: Immutable 40-character commit SHA for the target tag
+        required: true
+        type: string
+      worker_name:
+        description: Frozen dedicated Worker name
+        required: true
+        type: string
+      d1_name:
+        description: Frozen dedicated D1 name
+        required: true
+        type: string
+      d1_id:
+        description: Frozen dedicated D1 UUID
+        required: true
+        type: string
+      r2_name:
+        description: Frozen dedicated R2 bucket name
+        required: true
+        type: string
+      queue_names:
+        description: Frozen JSON array of dedicated queue names
+        required: true
+        type: string
+      durable_object_namespace_id:
+        description: Frozen Me3UserAgent Durable Object namespace ID
+        required: true
+        type: string
+      public_origin:
+        description: Frozen owner-facing HTTPS origin
+        required: true
+        type: string
+      canonical_hostname:
+        description: Frozen owner-facing managed hostname
+        required: true
+        type: string
+      zone_id:
+        description: Frozen Cloudflare zone containing the managed hostname
+        required: true
+        type: string
+      callback_url:
+        description: Fixed ME3 Cloud upgrade callback
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: managed-install-${{ inputs.installation_id }}
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ME3_MANAGED_CALLBACK_URL: ${{ inputs.callback_url }}
+      ME3_MANAGED_ATTEMPT_ID: ${{ inputs.attempt_id }}
+      ME3_MANAGED_INSTALLATION_ID: ${{ inputs.installation_id }}
+      ME3_MANAGED_CURRENT_RELEASE_TAG: ${{ inputs.current_release_tag }}
+      ME3_MANAGED_TARGET_RELEASE_TAG: ${{ inputs.target_release_tag }}
+      ME3_MANAGED_TARGET_RELEASE_SHA: ${{ inputs.target_release_sha }}
+      ME3_MANAGED_CANONICAL_HOSTNAME: ${{ inputs.canonical_hostname }}
+      ME3_MANAGED_ZONE_ID: ${{ inputs.zone_id }}
+      ME3_MANAGED_FAILURE_STAGE: validating
+      ME3_MANAGED_EMAIL_GATEWAY_ORIGIN: https://api.me3.app
+      WORKER_NAME: ${{ inputs.worker_name }}
+      D1_NAME: ${{ inputs.d1_name }}
+      D1_ID: ${{ inputs.d1_id }}
+      R2_NAME: ${{ inputs.r2_name }}
+      QUEUE_NAMES: ${{ inputs.queue_names }}
+      DO_NAMESPACE_ID: ${{ inputs.durable_object_namespace_id }}
+      PUBLIC_ORIGIN: ${{ inputs.public_origin }}
+
+    steps:
+      - name: Check out trusted upgrade controls
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+
+      - name: Seal trusted upgrade controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          find control/scripts -type f -name '*.mjs' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > "$RUNNER_TEMP/managed-upgrade-control.sha256"
+
+      - name: Validate the complete upgrade contract
+        env:
+          ME3_MANAGED_UPGRADE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_UPGRADE_CALLBACK_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          test -n "$ME3_MANAGED_UPGRADE_CALLBACK_SECRET"
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/managed-upgrade-contract.mjs
+
+      - name: Report upgrade validation
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: validating
+          ME3_MANAGED_UPGRADE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_UPGRADE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=validating\n' >> "$GITHUB_ENV"
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/managed-upgrade-workflow-callback.mjs
+
+      - name: Report current installation verification
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: checking_current
+          ME3_MANAGED_UPGRADE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_UPGRADE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=checking_current\n' >> "$GITHUB_ENV"
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/managed-upgrade-workflow-callback.mjs
+
+      - name: Verify every current Cloudflare resource identity
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node control/scripts/verify-managed-upgrade-resources.mjs \
+            --attempt-id "$ME3_MANAGED_ATTEMPT_ID" \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --worker-name "$WORKER_NAME" \
+            --d1-name "$D1_NAME" \
+            --d1-id "$D1_ID" \
+            --r2-name "$R2_NAME" \
+            --queue-names "$QUEUE_NAMES" \
+            --durable-object-namespace-id "$DO_NAMESPACE_ID" \
+            --public-origin "$PUBLIC_ORIGIN" \
+            --canonical-hostname "$ME3_MANAGED_CANONICAL_HOSTNAME" \
+            --zone-id "$ME3_MANAGED_ZONE_ID"
+
+      - name: Verify the attested current release at the live origin
+        run: |
+          node control/scripts/verify-managed-upgrade-runtime.mjs \
+            --public-origin "$PUBLIC_ORIGIN" \
+            --canonical-hostname "$ME3_MANAGED_CANONICAL_HOSTNAME" \
+            --expected-release-tag "$ME3_MANAGED_CURRENT_RELEASE_TAG"
+
+      - name: Report target preparation
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: preparing
+          ME3_MANAGED_UPGRADE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_UPGRADE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=preparing\n' >> "$GITHUB_ENV"
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/managed-upgrade-workflow-callback.mjs
+
+      - name: Check out the exact target release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_release_tag }}
+          path: source
+          persist-credentials: false
+
+      - name: Verify the immutable target release
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_release_sha="$(git -C source rev-parse HEAD)"
+          node control/scripts/verify-managed-upgrade-release.mjs \
+            --metadata source/me3-core.json \
+            --target-release-tag "$ME3_MANAGED_TARGET_RELEASE_TAG" \
+            --target-release-sha "$ME3_MANAGED_TARGET_RELEASE_SHA" \
+            --actual-release-sha "$actual_release_sha"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
+
+      - name: Install the pinned target release
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+
+      - name: Bind only the frozen managed resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/configure-managed-install.mjs \
+            source/wrangler.toml \
+            "$WORKER_NAME" \
+            false \
+            "$ME3_MANAGED_INSTALLATION_ID" \
+            "$ME3_MANAGED_EMAIL_GATEWAY_ORIGIN" \
+            "$PUBLIC_ORIGIN"
+          node control/scripts/configure-managed-upgrade-origin.mjs \
+            --config source/wrangler.toml \
+            --worker-name "$WORKER_NAME" \
+            --public-origin "$PUBLIC_ORIGIN" \
+            --canonical-hostname "$ME3_MANAGED_CANONICAL_HOSTNAME"
+          node control/scripts/prepare-cloudflare-deploy.mjs \
+            --config source/wrangler.toml \
+            --db-name "$D1_NAME" \
+            --bucket "$R2_NAME" \
+            --with-r2 \
+            --skip-create
+          node control/scripts/bind-managed-resource-manifest.mjs \
+            --config source/wrangler.toml \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --worker-name "$WORKER_NAME" \
+            --d1-name "$D1_NAME" \
+            --d1-id "$D1_ID" \
+            --r2-name "$R2_NAME" \
+            --queue-names "$QUEUE_NAMES"
+          node control/scripts/verify-managed-upgrade-config.mjs \
+            --config source/wrangler.toml \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --worker-name "$WORKER_NAME" \
+            --d1-name "$D1_NAME" \
+            --d1-id "$D1_ID" \
+            --r2-name "$R2_NAME" \
+            --queue-names "$QUEUE_NAMES" \
+            --durable-object-namespace-id "$DO_NAMESPACE_ID" \
+            --public-origin "$PUBLIC_ORIGIN"
+
+      - name: Report target build
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: building
+          ME3_MANAGED_UPGRADE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_UPGRADE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=building\n' >> "$GITHUB_ENV"
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/managed-upgrade-workflow-callback.mjs
+
+      - name: Build the pinned target release
+        working-directory: source
+        run: pnpm build
+
+      - name: Report database migration
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: migrating
+          ME3_MANAGED_UPGRADE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_UPGRADE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=migrating\n' >> "$GITHUB_ENV"
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/managed-upgrade-workflow-callback.mjs
+
+      - name: Apply migrations to the frozen D1 database
+        working-directory: source
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          pnpm exec wrangler d1 migrations apply DB --remote --config wrangler.toml
+          pnpm exec wrangler d1 migrations list DB --remote --config wrangler.toml
+
+      - name: Report Worker deployment
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: deploying
+          ME3_MANAGED_UPGRADE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_UPGRADE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=deploying\n' >> "$GITHUB_ENV"
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/managed-upgrade-workflow-callback.mjs
+
+      - name: Deploy the target to the existing Worker
+        working-directory: source
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          pnpm exec wrangler deploy \
+            --config wrangler.toml \
+            --strict \
+            --tag "$ME3_MANAGED_TARGET_RELEASE_TAG" \
+            --message "Managed ME3 upgrade $ME3_MANAGED_ATTEMPT_ID to $ME3_MANAGED_TARGET_RELEASE_TAG"
+
+      - name: Report live target verification
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: verifying
+          ME3_MANAGED_UPGRADE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_UPGRADE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=verifying\n' >> "$GITHUB_ENV"
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/managed-upgrade-workflow-callback.mjs
+
+      - name: Re-verify every frozen Cloudflare resource identity
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node control/scripts/verify-managed-upgrade-resources.mjs \
+            --attempt-id "$ME3_MANAGED_ATTEMPT_ID" \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --worker-name "$WORKER_NAME" \
+            --d1-name "$D1_NAME" \
+            --d1-id "$D1_ID" \
+            --r2-name "$R2_NAME" \
+            --queue-names "$QUEUE_NAMES" \
+            --durable-object-namespace-id "$DO_NAMESPACE_ID" \
+            --public-origin "$PUBLIC_ORIGIN" \
+            --canonical-hostname "$ME3_MANAGED_CANONICAL_HOSTNAME" \
+            --zone-id "$ME3_MANAGED_ZONE_ID"
+
+      - name: Verify health and mobile at the live target origin
+        run: |
+          node control/scripts/verify-managed-upgrade-runtime.mjs \
+            --public-origin "$PUBLIC_ORIGIN" \
+            --canonical-hostname "$ME3_MANAGED_CANONICAL_HOSTNAME" \
+            --expected-release-tag "$ME3_MANAGED_TARGET_RELEASE_TAG"
+
+      - name: Complete the exact upgrade attempt
+        env:
+          ME3_MANAGED_STATUS: succeeded
+          ME3_MANAGED_STAGE: completed
+          ME3_MANAGED_UPGRADE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_UPGRADE_CALLBACK_SECRET }}
+        run: |
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/managed-upgrade-workflow-callback.mjs
+
+      - name: Report a safe upgrade failure
+        if: failure()
+        env:
+          ME3_MANAGED_STATUS: failed
+          ME3_MANAGED_STAGE: ${{ env.ME3_MANAGED_FAILURE_STAGE }}
+          ME3_MANAGED_ERROR_CODE: workflow_failed
+          ME3_MANAGED_UPGRADE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_UPGRADE_CALLBACK_SECRET }}
+        run: |
+          sha256sum --check "$RUNNER_TEMP/managed-upgrade-control.sha256"
+          node control/scripts/managed-upgrade-workflow-callback.mjs

@@ -1,3 +1,25 @@
+import {
+  LANDING_PAGE_DESIGN_PACK_IDS,
+  getDefaultLandingPageDesignPackId,
+  getLandingPageDesignPack,
+  landingPageDesignPackSupportsPurpose,
+  normalizeLandingPageDesignPackId,
+  type LandingPageDesignPackId,
+} from "./design-packs";
+
+export {
+  LANDING_PAGE_DESIGN_PACK_IDS,
+  LANDING_PAGE_DESIGN_PACKS,
+  getDefaultLandingPageDesignPackId,
+  getLandingPageDesignPack,
+  getSelectableLandingPageDesignPacks,
+  isLandingPageDesignPackId,
+  landingPageDesignPackSupportsPurpose,
+  normalizeLandingPageDesignPackId,
+  type LandingPageDesignPackDefinition,
+  type LandingPageDesignPackId,
+} from "./design-packs";
+
 export const LANDING_PAGES_PLUGIN_ID = "me3.landing-pages";
 
 export const LANDING_PAGE_TEMPLATE_IDS = ["event", "service", "waitlist"] as const;
@@ -23,6 +45,7 @@ export const LANDING_PAGES_RUNTIME = {
   documentVersions: [1, 2, 3],
   templateIds: LANDING_PAGE_TEMPLATE_IDS,
   recipeIds: LANDING_PAGE_RECIPE_IDS,
+  designPackIds: LANDING_PAGE_DESIGN_PACK_IDS,
   routes: [
     "/api/sites/:username/landing-page",
     "/api/sites/:username/pages",
@@ -294,7 +317,11 @@ export interface LandingPageDocumentV3 {
     sections: LandingPageV3Section[];
   };
   actions: LandingPageAction[];
-  design: LandingPageDocumentV2["design"];
+  design: LandingPageDocumentV2["design"] & {
+    /** Missing on older v3 documents, which intentionally retain the legacy renderer. */
+    packId?: LandingPageDesignPackId;
+    packVersion?: 1;
+  };
   assets: LandingPageDocumentV2["assets"];
   updatedAt?: string;
 }
@@ -350,6 +377,7 @@ export interface LandingPageBuildInput {
   username: string;
   brief: string;
   template: LandingPageTemplateId;
+  designPackId?: LandingPageDesignPackId | null;
   heroImage?: string | null;
   sectionImage?: string | null;
   feedback?: string | null;
@@ -561,6 +589,9 @@ export function normalizeLandingPageDocument(
 
   if (raw.version === 3) {
     const page = raw as Partial<LandingPageDocumentV3>;
+    const designPackId = normalizeLandingPageDesignPackId(page.design?.packId);
+    const hasDesignPackId = page.design?.packId !== undefined;
+    const hasDesignPackVersion = page.design?.packVersion !== undefined;
     if (
       !page.intent ||
       !page.recipe ||
@@ -575,6 +606,18 @@ export function normalizeLandingPageDocument(
       !Array.isArray(page.actions) ||
       !page.design ||
       !page.assets
+    ) {
+      return null;
+    }
+    if (
+      hasDesignPackId !== hasDesignPackVersion ||
+      (page.design.packId !== undefined && !designPackId) ||
+      (page.design.packVersion !== undefined && page.design.packVersion !== 1) ||
+      (designPackId &&
+        !landingPageDesignPackSupportsPurpose(
+          designPackId,
+          page.recipe.template,
+        ))
     ) {
       return null;
     }
@@ -636,6 +679,33 @@ export function getLandingPageTemplateId(
   page: LandingPageDocument,
 ): LandingPageTemplateId {
   return page.version === 1 ? page.template : page.recipe.template;
+}
+
+export function getLandingPageDesignPackId(
+  page: LandingPageDocument,
+): LandingPageDesignPackId {
+  if (page.version !== 3) return "legacy-standard";
+  return normalizeLandingPageDesignPackId(page.design.packId) || "legacy-standard";
+}
+
+export function setLandingPageDesignPack(
+  page: LandingPageDocumentV3,
+  designPackId: LandingPageDesignPackId,
+): LandingPageDocumentV3 {
+  if (!landingPageDesignPackSupportsPurpose(designPackId, page.intent.type)) {
+    throw new Error(
+      `${getLandingPageDesignPack(designPackId).name} does not support ${page.intent.type} pages.`,
+    );
+  }
+  return {
+    ...page,
+    design: {
+      ...page.design,
+      packId: designPackId,
+      packVersion: getLandingPageDesignPack(designPackId).version,
+    },
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export function getLandingPageBrief(page: LandingPageDocument): string {
@@ -942,6 +1012,14 @@ function buildLandingPageDocumentV3(
   const ctaLabel = extractCta(input.feedback) || recipe.defaultCta;
   const items = deriveLandingItems(combined);
   const profileName = input.profile.name || input.username;
+  const requestedDesignPackId = normalizeLandingPageDesignPackId(
+    input.designPackId,
+  );
+  const designPackId =
+    requestedDesignPackId &&
+    landingPageDesignPackSupportsPurpose(requestedDesignPackId, recipe.intent)
+      ? requestedDesignPackId
+      : getDefaultLandingPageDesignPackId(recipe.intent);
   const primaryAction: LandingPageAction = {
     id: "primary-action",
     kind: recipe.defaultAction,
@@ -1101,6 +1179,8 @@ function buildLandingPageDocumentV3(
     actions: [primaryAction],
     design: {
       theme: recipe.theme,
+      packId: designPackId,
+      packVersion: getLandingPageDesignPack(designPackId).version,
       accentColor:
         recipe.intent === "waitlist"
           ? "#49de80"
@@ -1383,7 +1463,18 @@ export function renderLandingPageHtml(
   username: string,
   context: LandingPageRenderContext = {},
 ): string {
-  if (page.version === 3) return renderLandingPageHtmlV3(page, username, context);
+  if (page.version === 3) {
+    const designPackId = getLandingPageDesignPackId(page);
+    if (designPackId !== "legacy-standard") {
+      return renderStarterLandingPageHtml(
+        page,
+        username,
+        context,
+        designPackId,
+      );
+    }
+    return renderLegacyLandingPageHtmlV3(page, username, context);
+  }
   if (page.version === 2) return renderLandingPageHtmlV2(page, username);
   return renderLandingPageHtmlV1(page, username);
 }
@@ -1395,7 +1486,7 @@ export type LandingPageRenderContext = {
   actionUsername?: string;
 };
 
-function renderLandingPageHtmlV3(
+function renderLegacyLandingPageHtmlV3(
   page: LandingPageDocumentV3,
   username: string,
   context: LandingPageRenderContext,
@@ -1438,6 +1529,173 @@ function renderLandingPageHtmlV3(
     : "";
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.seo.title)}</title><meta name="description" content="${escapeHtml(page.seo.description)}"><meta property="og:title" content="${escapeHtml(page.seo.title)}"><meta property="og:description" content="${escapeHtml(page.seo.description)}">${socialImage}<style>${renderLandingPageCssV2(theme)}${renderActionCss()}</style></head><body data-theme="${escapeHtml(page.design.theme)}"><a href="#main" class="skip-link">Skip to content</a><header class="site-top"><div class="shell site-top-inner"><strong>${escapeHtml(username)}</strong>${primaryAction ? `<a class="top-action" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}</div></header><main id="main"><section class="hero"><div class="shell hero-grid"><div class="hero-copy">${metadata ? `<div class="meta-grid">${metadata}</div>` : ""}<h1>${escapeHtml(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p><div class="hero-actions">${primaryAction ? `<a class="button primary" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}${secondaryAction ? `<a class="button secondary" href="${escapeHtml(actionHref(secondaryAction))}">${escapeHtml(secondaryAction.label)}</a>` : ""}</div></div><div class="hero-visual">${heroVisual}</div></div></section>${sections}</main><script>${landingActionScript()}</script></body></html>`;
+}
+
+function renderStarterLandingPageHtml(
+  page: LandingPageDocumentV3,
+  username: string,
+  context: LandingPageRenderContext,
+  designPackId: LandingPageDesignPackId,
+): string {
+  const actionUsername = context.actionUsername || username;
+  const actions = new Map(page.actions.map((action) => [action.id, action]));
+  const primaryAction =
+    actions.get(page.hero.primaryActionId) || page.actions[0] || null;
+  const secondaryAction = page.hero.secondaryActionId
+    ? actions.get(page.hero.secondaryActionId) || null
+    : null;
+  const actionHref = (action: LandingPageAction | null) =>
+    action?.kind === "link"
+      ? action.href || "#"
+      : action
+        ? `#action-${action.id}`
+        : "#main";
+  const firstSection = page.content.sections[0]?.id || "main";
+  const metadata = (page.hero.metadata || [])
+    .map(
+      (item) =>
+        `<div><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></div>`,
+    )
+    .join("");
+  const sections = page.content.sections
+    .map((section, index) =>
+      renderStarterLandingPageSection(
+        section,
+        index,
+        actions,
+        actionUsername,
+        context,
+      ),
+    )
+    .join("");
+  const socialImage = page.seo.socialImage
+    ? `<meta property="og:image" content="${escapeHtml(page.seo.socialImage)}">`
+    : "";
+  const pack = getLandingPageDesignPack(designPackId);
+  const announcement =
+    designPackId === "starter-service-01"
+      ? `<div class="pack-announcement" aria-hidden="true"><span>Clear offer · useful work · decisive next step · </span><span>Clear offer · useful work · decisive next step · </span></div>`
+      : "";
+
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.seo.title)}</title><meta name="description" content="${escapeHtml(page.seo.description)}"><meta property="og:title" content="${escapeHtml(page.seo.title)}"><meta property="og:description" content="${escapeHtml(page.seo.description)}">${socialImage}${starterLandingPageFontLinks(designPackId)}<style>${renderStarterLandingPageCss(page, designPackId)}${renderActionCss()}</style></head><body data-theme="${escapeHtml(page.design.theme)}" data-design-pack="${escapeHtml(designPackId)}" data-design-pack-version="${pack.version}"><a href="#main" class="skip-link">Skip to content</a>${announcement}<header class="pack-header shell"><a class="pack-brand" href="#">${escapeHtml(username)}</a><nav aria-label="Page navigation"><a href="#${escapeHtml(firstSection)}">Explore</a>${primaryAction ? `<a class="pack-nav-action" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}</nav></header><main id="main"><header class="pack-hero"><div class="shell pack-hero-grid"><div class="pack-hero-copy"><span class="pack-kicker">${escapeHtml(page.intent.audience)}</span><h1>${renderStarterHeadline(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p><div class="pack-hero-actions">${primaryAction ? `<a class="button primary" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}${secondaryAction ? `<a class="button secondary" href="${escapeHtml(actionHref(secondaryAction))}">${escapeHtml(secondaryAction.label)}</a>` : ""}</div></div><aside class="pack-hero-aside" aria-label="Page highlights">${renderStarterLandingPageVisual(page, designPackId)}${metadata ? `<div class="pack-meta">${metadata}</div>` : ""}</aside></div></header>${sections}</main><footer class="pack-footer"><div class="shell"><span>${escapeHtml(username)}</span><span>Built with ME3</span></div></footer><script>${landingActionScript()}</script></body></html>`;
+}
+
+function renderStarterHeadline(headline: string): string {
+  const words = headline.trim().split(/\s+/).filter(Boolean);
+  const finalWord = words.pop();
+  if (!finalWord) return "";
+  return `${words.length ? `${escapeHtml(words.join(" "))} ` : ""}<em>${escapeHtml(finalWord)}</em>`;
+}
+
+function renderStarterLandingPageVisual(
+  page: LandingPageDocumentV3,
+  designPackId: LandingPageDesignPackId,
+): string {
+  const image = page.hero.image || page.assets.heroImage || page.assets.sectionImage;
+  if (image) {
+    return `<figure class="pack-hero-image"><img src="${escapeHtml(image)}" alt="" loading="eager" decoding="async"></figure>`;
+  }
+  if (designPackId === "starter-event-01") {
+    return `<div class="event-landscape" aria-hidden="true"><span class="event-sun"></span><span class="event-hill event-hill-one"></span><span class="event-hill event-hill-two"></span></div>`;
+  }
+  if (designPackId === "starter-service-01") {
+    return `<div class="service-poster" aria-hidden="true"><span class="service-poster-word">MAKE</span><span class="service-poster-orbit"></span><span class="service-poster-word">IT CLEAR</span><span class="service-poster-note">Useful beats impressive.</span></div>`;
+  }
+  return `<div class="waitlist-orbit" aria-hidden="true"><span class="orbit-ring orbit-ring-one"></span><span class="orbit-ring orbit-ring-two"></span><span class="orbit-ring orbit-ring-three"></span><article><span class="pack-kicker">Signal detected</span><strong>${escapeHtml(page.intent.offerName)}</strong><p>${escapeHtml(page.intent.goal)}</p><div><span>Ready</span><span>Focused</span><span>Early</span></div></article></div>`;
+}
+
+function renderStarterLandingPageSection(
+  section: LandingPageV3Section,
+  index: number,
+  actions: Map<string, LandingPageAction>,
+  username: string,
+  context: LandingPageRenderContext,
+): string {
+  const sectionNumber = String(index + 1).padStart(2, "0");
+  const heading = escapeHtml(section.heading);
+  const label = `<span class="pack-section-number">${sectionNumber}</span>`;
+  if (section.type === "story") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-story"><div class="shell pack-split">${label}<div><h2>${heading}</h2><p class="pack-lead">${escapeHtml(section.body)}</p></div></div></section>`;
+  }
+  if (section.type === "feature-list") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-features"><div class="shell"><header class="pack-section-head">${label}<div><h2>${heading}</h2>${section.body ? `<p>${escapeHtml(section.body)}</p>` : ""}</div></header><div class="pack-card-grid">${section.items.map((item, itemIndex) => `<article><span class="pack-card-number">${String(itemIndex + 1).padStart(2, "0")}</span><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.body)}</p></article>`).join("")}</div></div></section>`;
+  }
+  if (section.type === "details") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-details"><div class="shell"><header class="pack-section-head">${label}<h2>${heading}</h2></header><dl>${section.items.map((item) => `<div><dt>${escapeHtml(item.label)}</dt><dd>${escapeHtml(item.value)}</dd>${item.note ? `<p>${escapeHtml(item.note)}</p>` : ""}</div>`).join("")}</dl></div></section>`;
+  }
+  if (section.type === "steps") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-steps"><div class="shell"><header class="pack-section-head">${label}<h2>${heading}</h2></header><ol>${section.items.map((item, itemIndex) => `<li><span>${String(itemIndex + 1).padStart(2, "0")}</span><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p></li>`).join("")}</ol></div></section>`;
+  }
+  if (section.type === "profile") {
+    const profileVisual = section.profileImage
+      ? `<img src="${escapeHtml(section.profileImage)}" alt="" loading="lazy" decoding="async">`
+      : `<span class="pack-profile-shape" aria-hidden="true"></span>`;
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-profile"><div class="shell pack-profile-grid"><div class="pack-profile-visual">${profileVisual}</div><div>${label}<h2>${heading}</h2><p class="pack-lead">${escapeHtml(section.body)}</p>${section.profileName ? `<strong class="pack-profile-name">${escapeHtml(section.profileName)}${section.profileRole ? ` · ${escapeHtml(section.profileRole)}` : ""}</strong>` : ""}${section.profileLink ? `<a class="pack-text-link" href="${escapeHtml(section.profileLink)}">Visit profile</a>` : ""}</div></div></section>`;
+  }
+  if (section.type === "faq") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-faq"><div class="shell pack-split">${label}<div><h2>${heading}</h2><div class="pack-faq-list">${section.items.map((item) => `<details><summary>${escapeHtml(item.question)}</summary><p>${escapeHtml(item.answer)}</p></details>`).join("")}</div></div></div></section>`;
+  }
+  const action = actions.get(section.actionId);
+  const widget = action
+    ? renderLandingAction(action, username, context)
+    : `<p class="action-error" role="alert">This action is no longer available.</p>`;
+  return `<section id="action-${escapeHtml(section.actionId)}" class="pack-section pack-action"><div class="shell pack-action-grid"><div>${label}<h2>${heading}</h2><p>${escapeHtml(section.body)}</p></div><div class="pack-action-widget">${widget}</div></div></section>`;
+}
+
+function starterLandingPageFontLinks(
+  designPackId: LandingPageDesignPackId,
+): string {
+  const href =
+    designPackId === "starter-event-01"
+      ? "https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Newsreader:opsz,wght@6..72,300;6..72,400;6..72,500&display=swap"
+      : designPackId === "starter-service-01"
+        ? "https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap"
+        : "https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Geologica:opsz,wdth,wght@12..72,75..100,300..800&display=swap";
+  return `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="${href}" rel="stylesheet">`;
+}
+
+function renderStarterLandingPageCss(
+  page: LandingPageDocumentV3,
+  designPackId: LandingPageDesignPackId,
+): string {
+  const accent = safeCssColor(
+    page.design.accentColor,
+    designPackId === "starter-event-01"
+      ? "#b05235"
+      : designPackId === "starter-service-01"
+        ? "#1847e8"
+        : "#d9ff43",
+  );
+  return `${starterLandingPageBaseCss()}${
+    designPackId === "starter-event-01"
+      ? starterEventCss(accent)
+      : designPackId === "starter-service-01"
+        ? starterServiceCss(accent)
+        : starterWaitlistCss(accent)
+  }`;
+}
+
+function starterLandingPageBaseCss(): string {
+  return `*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body-font);font-size:18px}a{color:inherit}button,input,textarea{font:inherit}.shell{width:min(var(--shell,1240px),calc(100% - 48px));margin:0 auto}.skip-link{position:fixed;left:16px;top:-80px;z-index:100;padding:12px 18px;background:var(--accent);color:var(--accent-contrast)}.skip-link:focus{top:16px}.pack-header{display:flex;align-items:center;justify-content:space-between;min-height:82px;border-bottom:1px solid var(--line)}.pack-brand{font-family:var(--display-font);font-weight:700;text-decoration:none}.pack-header nav{display:flex;align-items:center;gap:24px;font-family:var(--meta-font);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}.pack-header nav a{text-decoration:none}.pack-nav-action{display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border:1px solid currentColor}.pack-hero{overflow:hidden;border-bottom:1px solid var(--line)}.pack-hero-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.72fr);min-height:min(780px,calc(100vh - 82px))}.pack-hero-copy{display:flex;flex-direction:column;justify-content:center;padding:70px 64px 70px 0;border-right:1px solid var(--line)}.pack-kicker,.pack-section-number,.pack-card-number,.pack-meta span,.pack-footer,.pack-details dt,.pack-steps li>span{font-family:var(--meta-font);font-size:.7rem;line-height:1.4;letter-spacing:.1em;text-transform:uppercase}.pack-hero h1{max-width:10ch;margin:30px 0;font-family:var(--display-font);font-size:clamp(4.6rem,10vw,10rem);font-weight:400;line-height:.82;letter-spacing:-.07em}.pack-hero h1 em{font-family:var(--accent-font);font-weight:400}.pack-hero-copy>p{max-width:650px;margin:0;color:var(--muted);font-size:clamp(1.15rem,2vw,1.45rem);line-height:1.5}.pack-hero-actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:36px}.button{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 20px;border:1px solid var(--line);text-decoration:none;font-family:var(--meta-font);font-size:.76rem;font-weight:700;letter-spacing:.04em}.button.primary{border-color:var(--accent);background:var(--accent);color:var(--accent-contrast)}.button.secondary{background:transparent;color:var(--text)}.pack-hero-aside{display:grid;grid-template-rows:minmax(320px,1fr) auto;padding:38px 0 42px 38px}.pack-hero-image{min-height:420px;margin:0;overflow:hidden}.pack-hero-image img{width:100%;height:100%;object-fit:cover;display:block}.pack-meta{display:grid;gap:0;margin-top:24px}.pack-meta div{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-top:1px solid var(--line)}.pack-meta strong{font-weight:600}.pack-section{padding:110px 0;border-bottom:1px solid var(--line)}.pack-split,.pack-section-head{display:grid;grid-template-columns:minmax(100px,.35fr) minmax(0,1.65fr);gap:50px}.pack-section h2{max-width:980px;margin:0 0 34px;font-family:var(--display-font);font-size:clamp(3.2rem,7vw,7rem);font-weight:400;line-height:.9;letter-spacing:-.055em}.pack-lead{max-width:980px;margin:0;color:var(--muted);font-size:clamp(1.7rem,3.6vw,3.7rem);line-height:1.1;letter-spacing:-.025em}.pack-section-head{align-items:start;margin-bottom:54px}.pack-section-head p{max-width:600px;color:var(--muted);line-height:1.55}.pack-card-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--line);border-left:1px solid var(--line)}.pack-card-grid article{min-height:310px;padding:28px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.pack-card-grid h3{margin:80px 0 16px;font-family:var(--display-font);font-size:clamp(1.6rem,3vw,2.8rem);line-height:1}.pack-card-grid p,.pack-steps p,.pack-faq p,.pack-action p{color:var(--muted);line-height:1.55}.pack-details dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:0;border-top:1px solid var(--line);border-left:1px solid var(--line)}.pack-details dl>div{min-height:190px;padding:28px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.pack-details dd{margin:32px 0 0;font-family:var(--display-font);font-size:clamp(1.6rem,3vw,3rem);line-height:1}.pack-details dl p{color:var(--muted)}.pack-steps ol{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}.pack-steps li{display:grid;grid-template-columns:90px .8fr 1.2fr;gap:36px;align-items:start;padding:30px 0;border-bottom:1px solid var(--line)}.pack-steps li strong{font-family:var(--display-font);font-size:1.6rem}.pack-steps li p{margin:0}.pack-profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:90px;align-items:center}.pack-profile-visual{position:relative;min-height:590px;overflow:hidden;background:var(--surface)}.pack-profile-visual img{width:100%;height:100%;position:absolute;inset:0;object-fit:cover}.pack-profile-shape{position:absolute;width:54%;height:75%;left:23%;bottom:-5%;border-radius:48% 48% 12% 12%;background:var(--accent)}.pack-profile-shape:after{content:"";position:absolute;width:62%;aspect-ratio:1;left:19%;top:-20%;border-radius:48%;background:var(--profile-face,#c18564);box-shadow:-24px -20px 0 5px var(--text)}.pack-profile-name{display:block;margin-top:34px;font-family:var(--meta-font);font-size:.78rem;text-transform:uppercase}.pack-text-link{display:inline-flex;margin-top:28px;padding-bottom:6px;border-bottom:1px solid currentColor;text-decoration:none}.pack-faq-list{border-top:1px solid var(--line)}.pack-faq details{border-bottom:1px solid var(--line);padding:24px 0}.pack-faq summary{cursor:pointer;font-family:var(--display-font);font-size:1.45rem}.pack-faq details p{max-width:720px}.pack-action-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:80px;align-items:start}.pack-action h2{margin-top:24px}.pack-action-widget{padding-top:34px}.pack-footer{padding:28px 0;background:var(--footer-bg,var(--text));color:var(--footer-text,var(--bg))}.pack-footer .shell{display:flex;justify-content:space-between;gap:24px}.pack-announcement{display:flex;overflow:hidden;border-bottom:1px solid #12120f;background:#dfff39;color:#12120f;font-family:"IBM Plex Mono",monospace;font-size:.68rem;letter-spacing:.1em;text-transform:uppercase}.pack-announcement span{flex:none;padding:9px 18px;white-space:nowrap;animation:packTicker 18s linear infinite}@keyframes packTicker{to{transform:translateX(-100%)}}:focus-visible{outline:3px solid var(--focus,var(--accent));outline-offset:4px}@media(max-width:900px){.pack-hero-grid,.pack-profile-grid,.pack-action-grid{grid-template-columns:1fr}.pack-hero-copy{padding-right:0;border-right:0;border-bottom:1px solid var(--line)}.pack-hero-aside{padding-left:0}.pack-split,.pack-section-head{grid-template-columns:1fr;gap:20px}.pack-card-grid,.pack-details dl{grid-template-columns:1fr 1fr}.pack-steps li{grid-template-columns:60px 1fr}.pack-steps li p{grid-column:2}.pack-profile-grid{gap:48px}}@media(max-width:620px){.shell{width:min(100% - 28px,var(--shell,1240px))}.pack-header nav>a:first-child{display:none}.pack-hero-grid{min-height:auto}.pack-hero-copy{padding:54px 0}.pack-hero h1{font-size:clamp(4rem,22vw,6.8rem)}.pack-hero-aside{min-width:0}.pack-section{padding:76px 0}.pack-card-grid,.pack-details dl{grid-template-columns:1fr}.pack-card-grid article{min-height:240px}.pack-card-grid h3{margin-top:48px}.pack-steps li{grid-template-columns:1fr;gap:10px}.pack-steps li p{grid-column:auto}.pack-profile-visual{min-height:430px}.pack-action-grid{gap:30px}.pack-footer .shell{display:grid}.page-action-form .button{width:100%}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.pack-announcement span,.orbit-ring{animation:none!important}}`;
+}
+
+function starterEventCss(accent: string): string {
+  return `:root{--bg:#f2ead8;--surface:#dfd2ba;--text:#22251e;--muted:#596052;--line:rgba(34,37,30,.24);--accent:${accent};--accent-contrast:#fff5e4;--focus:#e6b85c;--display-font:"Newsreader",Georgia,serif;--accent-font:"Newsreader",Georgia,serif;--body-font:"Newsreader",Georgia,serif;--meta-font:"DM Mono",monospace;--shell:1240px;--footer-bg:#22251e;--footer-text:#f2ead8}body{background:linear-gradient(rgba(34,37,30,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(34,37,30,.035) 1px,transparent 1px),var(--bg);background-size:28px 28px}.pack-brand{font-weight:400}.pack-hero h1{font-weight:300}.pack-hero h1 em{color:var(--accent);font-style:italic}.event-landscape{position:relative;min-height:440px;overflow:hidden}.event-sun{position:absolute;top:14%;left:43%;width:138px;aspect-ratio:1;border-radius:50%;background:#e6b85c}.event-hill{position:absolute;left:-20%;width:145%;border-radius:50% 50% 0 0}.event-hill-one{bottom:0;height:58%;background:#566148;transform:rotate(-6deg)}.event-hill-two{bottom:-18%;height:58%;background:#31382c;transform:rotate(11deg)}.pack-story .pack-lead em{color:var(--accent)}.pack-features,.pack-steps{background:#22251e;color:#f2ead8;--text:#f2ead8;--muted:rgba(242,234,216,.68);--line:rgba(242,234,216,.22);--surface:#31382c}.pack-features .pack-card-grid article:nth-child(2){background:#31382c}.pack-details dd,.pack-steps li strong{font-weight:400}.pack-action{background:var(--accent);color:#fff5e4;--text:#fff5e4;--muted:rgba(255,245,228,.78);--line:rgba(255,255,255,.36);--surface:#fff5e4;--accent:#fff5e4;--accent-contrast:${accent}}.pack-action h2{font-weight:300}.pack-profile h2{font-weight:300}.pack-profile-visual{background:#dfd2ba}@media(max-width:620px){.event-landscape{min-height:330px}.event-sun{width:108px}}`;
+}
+
+function starterServiceCss(accent: string): string {
+  return `:root{--bg:#f4f0e8;--surface:#dfff39;--text:#12120f;--muted:#4d4b43;--line:#12120f;--accent:${accent};--accent-contrast:#fff;--focus:#dfff39;--display-font:"Archivo Black",sans-serif;--accent-font:"Instrument Serif",Georgia,serif;--body-font:"Instrument Serif",Georgia,serif;--meta-font:"IBM Plex Mono",monospace;--shell:1380px;--footer-bg:#12120f;--footer-text:#f4f0e8}body{font-size:19px}.pack-header{border-left:1px solid var(--line);border-right:1px solid var(--line);padding:0 24px}.pack-brand{text-transform:uppercase}.pack-hero-grid{border-left:1px solid var(--line);border-right:1px solid var(--line)}.pack-hero h1{max-width:9ch;text-transform:uppercase;font-size:clamp(4.4rem,9vw,9rem);line-height:.84}.pack-hero h1 em{color:var(--accent);text-transform:none}.button,.pack-nav-action{box-shadow:5px 5px 0 #12120f}.button:hover,.pack-nav-action:hover{transform:translate(2px,2px);box-shadow:3px 3px 0 #12120f}.service-poster{position:relative;display:flex;min-height:520px;flex-direction:column;justify-content:space-between;padding:34px;overflow:hidden;background:#12120f;color:#f4f0e8}.service-poster-word{position:relative;z-index:2;font-family:"Archivo Black",sans-serif;font-size:clamp(3rem,6vw,6.4rem);line-height:.8}.service-poster-word:nth-of-type(2){align-self:flex-end;color:#dfff39}.service-poster-orbit{position:absolute;width:68%;aspect-ratio:1;left:16%;top:15%;border:2px solid #f0563d;border-radius:50%}.service-poster-orbit:before,.service-poster-orbit:after{content:"";position:absolute;inset:18%;border:2px solid ${accent};border-radius:50%}.service-poster-orbit:after{inset:38%;background:#dfff39}.service-poster-note{position:relative;z-index:2;align-self:flex-end;font-family:"IBM Plex Mono",monospace;font-size:.7rem;text-transform:uppercase}.pack-story{background:#12120f;color:#f4f0e8;--text:#f4f0e8;--muted:#d2cfc7;--line:#f4f0e8}.pack-story h2{color:#dfff39;text-transform:uppercase}.pack-features{background:${accent};color:#fff;--text:#fff;--muted:rgba(255,255,255,.78);--line:rgba(255,255,255,.55)}.pack-card-grid article:nth-child(2){background:#dfff39;color:#12120f;--muted:#4d4b43}.pack-steps{background:#dfff39}.pack-profile-visual{border:1px solid #12120f}.pack-action{background:#f0563d;color:#12120f;--text:#12120f;--muted:#36221d;--surface:#f4f0e8;--accent:#12120f;--accent-contrast:#f4f0e8}.pack-action h2{text-transform:uppercase}.page-action-form input,.page-action-form textarea,.booking-action input{border-color:#12120f;border-radius:0}.pack-faq summary{font-family:"Archivo Black",sans-serif;text-transform:uppercase}@media(max-width:620px){.pack-header,.pack-hero-grid{border-left:0;border-right:0}.service-poster{min-height:390px}}`;
+}
+
+function starterWaitlistCss(accent: string): string {
+  return `:root{color-scheme:dark;--bg:#070a12;--surface:#141b2b;--text:#eef2eb;--muted:#8b95a8;--line:rgba(238,242,235,.16);--accent:${accent};--accent-contrast:#070a12;--focus:#ff6e3d;--display-font:"Geologica",sans-serif;--accent-font:"Geologica",sans-serif;--body-font:"Geologica",sans-serif;--meta-font:"Fira Code",monospace;--shell:1280px;--footer-bg:#070a12;--footer-text:#8b95a8}body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.23;background-image:radial-gradient(rgba(255,255,255,.18) .7px,transparent .7px);background-size:9px 9px;mask-image:linear-gradient(to bottom,black,transparent 70%)}.pack-header{position:relative;z-index:2}.pack-brand:before{content:"";display:inline-block;width:12px;height:12px;margin-right:12px;border:1px solid var(--accent);border-radius:50%;box-shadow:0 0 16px color-mix(in srgb,var(--accent) 60%,transparent)}.pack-hero{position:relative}.pack-hero:before{content:"";position:absolute;width:900px;height:600px;left:55%;top:-22%;border-radius:50%;background:radial-gradient(circle,rgba(94,130,255,.22),transparent 66%);filter:blur(12px)}.pack-hero-grid{position:relative;z-index:1}.pack-hero h1{font-weight:410;font-stretch:80%}.pack-hero h1 em{color:var(--accent);font-style:normal}.waitlist-orbit{position:relative;min-height:580px;display:grid;place-items:center}.orbit-ring{position:absolute;border:1px solid var(--line);border-radius:50%;animation:packSpin 28s linear infinite}.orbit-ring:after{content:"";position:absolute;width:11px;height:11px;left:50%;top:-6px;border-radius:50%;background:var(--accent);box-shadow:0 0 20px color-mix(in srgb,var(--accent) 70%,transparent)}.orbit-ring-one{width:500px;height:500px}.orbit-ring-two{width:370px;height:370px;animation-direction:reverse;animation-duration:21s}.orbit-ring-two:after{background:#ff6e3d}.orbit-ring-three{width:230px;height:230px;animation-duration:16s}.orbit-ring-three:after{background:#5e82ff}.waitlist-orbit article{position:relative;z-index:3;width:min(380px,76%);padding:26px;border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);background:rgba(13,18,32,.94);box-shadow:0 40px 100px rgba(0,0,0,.45);backdrop-filter:blur(18px)}.waitlist-orbit article strong{display:block;margin:24px 0 12px;font-size:1.8rem}.waitlist-orbit article p{color:var(--muted);line-height:1.5}.waitlist-orbit article div{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:24px}.waitlist-orbit article div span{padding:10px 4px;border:1px solid var(--line);text-align:center;font-family:var(--meta-font);font-size:.62rem;text-transform:uppercase}@keyframes packSpin{to{transform:rotate(360deg)}}.pack-story h2 em{color:#ff6e3d}.pack-features{background:#0d1220}.pack-card-grid article{background:#070a12}.pack-card-grid article:nth-child(2){background:linear-gradient(145deg,rgba(94,130,255,.18),#070a12)}.pack-card-grid h3{font-weight:430}.pack-details{background:#0d1220}.pack-steps li strong{font-weight:430}.pack-profile-visual{background:#141b2b}.pack-profile-shape{background:#5e82ff}.pack-action{position:relative;overflow:hidden;background:var(--accent);color:#070a12;--text:#070a12;--muted:#30351d;--line:rgba(7,10,18,.35);--surface:#eef2eb;--accent:#070a12;--accent-contrast:#eef2eb}.pack-action:after{content:"N";position:absolute;right:-4vw;bottom:-18vw;font-family:var(--display-font);font-size:43vw;font-weight:800;line-height:1;color:rgba(7,10,18,.06);pointer-events:none}.pack-action-grid{position:relative;z-index:1}.pack-action h2{font-weight:450}.page-action-form input,.page-action-form textarea,.booking-action input{border-color:#070a12;background:transparent}.pack-faq details{background:#0d1220;padding:24px;margin-bottom:10px;border:1px solid var(--line)}@media(max-width:620px){.waitlist-orbit{min-height:440px;margin-inline:-30px}.orbit-ring-one{width:370px;height:370px}.orbit-ring-two{width:285px;height:285px}.orbit-ring-three{width:180px;height:180px}}`;
+}
+
+function safeCssColor(value: string | null | undefined, fallback: string): string {
+  const normalized = value?.trim();
+  return normalized && /^#[0-9a-f]{3,8}$/i.test(normalized)
+    ? normalized
+    : fallback;
 }
 
 function renderLandingActionSection(

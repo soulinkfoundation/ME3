@@ -64,7 +64,9 @@ const visibleSitesError = computed(() => {
 
 const createLandingPagePath = computed(() =>
   profileSite.value
-    ? `/sites/${encodeURIComponent(profileSite.value.username)}/landing-pages/new`
+    ? `/assistant?prompt=${encodeURIComponent(
+        `Help me create a landing page for @${profileSite.value.username}. Ask what the page is for, show me the available starter designs, and then build a draft with me.`,
+      )}`
     : "/start",
 );
 

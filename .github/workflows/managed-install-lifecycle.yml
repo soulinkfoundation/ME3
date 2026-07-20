@@ -52,6 +52,10 @@ on:
         description: Fixed ME3 Cloud lifecycle callback
         required: true
         type: string
+      public_origin:
+        description: Frozen managed runtime HTTPS origin
+        required: false
+        type: string
       export_operation_id:
         description: Export operation UUID; equal to operation_id for export
         required: false
@@ -108,6 +112,7 @@ jobs:
       ME3_MANAGED_ATTEMPT_ID: ${{ inputs.attempt_id }}
       ME3_MANAGED_OPERATION: ${{ inputs.operation }}
       ME3_MANAGED_RELEASE_TAG: ${{ inputs.release_tag }}
+      PUBLIC_ORIGIN: ${{ inputs.public_origin }}
       ME3_MANAGED_FAILURE_STAGE: validating
       WORKER_NAME: ${{ inputs.worker_name }}
       D1_NAME: ${{ inputs.d1_name }}
@@ -151,6 +156,15 @@ jobs:
           test "$D1_NAME" = "${WORKER_NAME}-d1"
           test "$R2_NAME" = "${WORKER_NAME}-r2"
           [[ "$ME3_MANAGED_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ "$ME3_MANAGED_OPERATION" != cleanup_failed_provision ]]; then
+            PUBLIC_ORIGIN="$PUBLIC_ORIGIN" WORKER_NAME="$WORKER_NAME" node <<'NODE'
+          const url = new URL(process.env.PUBLIC_ORIGIN);
+          const host = url.hostname;
+          const valid = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\.me3\.app$/.test(host) ||
+            (host.startsWith(`${process.env.WORKER_NAME}.`) && host.endsWith(".workers.dev"));
+          if (url.protocol !== "https:" || url.origin !== process.env.PUBLIC_ORIGIN || !valid) process.exit(1);
+          NODE
+          fi
           test "$ME3_MANAGED_CALLBACK_URL" = "https://api.me3.app/api/managed-install/lifecycle/callback"
           [[ "$EXPORT_WAIVED" = true || "$EXPORT_WAIVED" = false ]]
           WORKER_NAME="$WORKER_NAME" QUEUE_NAMES="$QUEUE_NAMES" node <<'NODE'
@@ -293,7 +307,7 @@ jobs:
         run: |
           set -euo pipefail
           set +x
-          node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" false "$ME3_MANAGED_INSTALLATION_ID" https://api.me3.app
+          node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" false "$ME3_MANAGED_INSTALLATION_ID" https://api.me3.app "$PUBLIC_ORIGIN"
           node control/scripts/prepare-cloudflare-deploy.mjs \
             --config source/wrangler.toml \
             --db-name "$D1_NAME" \
@@ -743,6 +757,7 @@ jobs:
             --r2-name "$R2_NAME"
             --queue-names "$QUEUE_NAMES"
             --durable-object-namespace-id "$DO_NAMESPACE_ID"
+            --public-origin "$PUBLIC_ORIGIN"
           )
           if [[ "$EXPORT_WAIVED" = false ]]; then
             args+=(

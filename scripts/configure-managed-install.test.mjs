@@ -29,6 +29,7 @@ test("configures a private managed Worker without raw model selection", () => {
       "false",
       "mi-1234567890abcdef",
       "https://api.me3.app",
+      "https://owner.me3.app",
     ]);
     const output = readFileSync(configPath, "utf8");
     assert.match(output, /^name = "me3-mi-1234567890abcdef"$/m);
@@ -37,6 +38,8 @@ test("configures a private managed Worker without raw model selection", () => {
     assert.match(output, /^ME3_MANAGED_INSTALLATION_ID = "mi-1234567890abcdef"$/m);
     assert.match(output, /^ME3_MANAGED_EMAIL_GATEWAY_ORIGIN = "https:\/\/api\.me3\.app"$/m);
     assert.match(output, /^ME3_SOCIAL_OAUTH_ORIGIN = "https:\/\/api\.me3\.app"$/m);
+    assert.match(output, /^CORE_WEB_ORIGIN = "https:\/\/owner\.me3\.app"$/m);
+    assert.match(output, /^CORE_API_ORIGIN = "https:\/\/owner\.me3\.app"$/m);
     assert.match(output, /^ME3_AI_CHAT_PROVIDER = "workers-ai"$/m);
     assert.match(output, /^ME3_AI_CHAT_MODEL = "moonshotai\/kimi-k3"$/m);
     assert.match(output, /^ME3_AI_IMAGE_GENERATION_PROVIDER = "workers-ai"$/m);
@@ -68,6 +71,7 @@ test("refuses raw model selection in a managed config", () => {
         "true",
         "mi-1234567890abcdef",
         "https://api.me3.app",
+        "https://owner.me3.app",
       ],
       { encoding: "utf8" },
     );
@@ -112,6 +116,7 @@ test("refuses Worker routes and custom domains in a managed config", async (t) =
             "false",
             "mi-1234567890abcdef",
             "https://api.me3.app",
+            "https://owner.me3.app",
           ],
           { encoding: "utf8" },
         );
@@ -142,6 +147,7 @@ test("refuses a non-HTTPS managed email gateway origin", () => {
         "true",
         "mi-1234567890abcdef",
         "http://api.me3.app",
+        "https://owner.me3.app",
       ],
       { encoding: "utf8" },
     );
@@ -181,6 +187,7 @@ test("isolates every managed queue and dead-letter queue by Worker", () => {
       "true",
       "mi-1234567890abcdef",
       "https://api.me3.app",
+      "https://owner.me3.app",
     ]);
     const output = readFileSync(configPath, "utf8");
     const queueAssignments = output.match(/^\s*(?:queue|dead_letter_queue)\s*=\s*"[^"]+"$/gm) || [];

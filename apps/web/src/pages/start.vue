@@ -10,8 +10,6 @@ import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useWizardStore } from "../stores/wizard";
 import {
-  RECOMMENDED_START_PLUGIN_ID_SET,
-  RECOMMENDED_START_PLUGIN_IDS,
   isFixedCorePlugin,
   isPluginComingSoon,
   isPluginHiddenFromList,
@@ -122,9 +120,7 @@ const pluginsLoading = ref(false);
 const pluginsSaving = ref(false);
 const plugins = ref<PluginRecord[]>([]);
 const pluginsError = ref("");
-const selectedPluginIds = ref<Set<string>>(
-  new Set(RECOMMENDED_START_PLUGIN_IDS),
-);
+const selectedPluginIds = ref<Set<string>>(new Set());
 const wheelSegments = ref<StartWheelSegment[]>(cloneStartWheelSegments());
 const wheelFocusNote = ref("");
 const wheelSaving = ref(false);
@@ -299,17 +295,14 @@ async function publishProfile() {
   advanceTo(2);
 }
 
-function applyDefaultPluginSelection(nextPlugins: PluginRecord[]) {
-  const nextSelection = new Set<string>();
-  for (const plugin of nextPlugins) {
-    if (
-      !isPluginComingSoon(plugin) &&
-      RECOMMENDED_START_PLUGIN_ID_SET.has(plugin.id)
-    ) {
-      nextSelection.add(plugin.id);
-    }
-  }
-  selectedPluginIds.value = nextSelection;
+function syncPluginSelectionFromState(nextPlugins: PluginRecord[]) {
+  selectedPluginIds.value = new Set(
+    nextPlugins
+      .filter(
+        (plugin) => !isPluginComingSoon(plugin) && isPluginEnabled(plugin),
+      )
+      .map((plugin) => plugin.id),
+  );
 }
 
 async function loadPlugins() {
@@ -320,7 +313,7 @@ async function loadPlugins() {
     const response = await api.get<PluginsResponse>("/plugins");
     const nextPlugins = response.plugins || [];
     plugins.value = nextPlugins;
-    applyDefaultPluginSelection(nextPlugins);
+    syncPluginSelectionFromState(nextPlugins);
   } catch (error) {
     pluginsError.value =
       error instanceof Error ? error.message : "Could not load plugins.";
@@ -683,7 +676,7 @@ onBeforeUnmount(clearUsernameCheck);
           </p>
         </div>
 
-        <div class="plugins-panel-wrap">
+        <div>
           <div v-if="pluginsLoading" class="status-row">
             Loading plugins...
           </div>
@@ -693,7 +686,6 @@ onBeforeUnmount(clearUsernameCheck);
             :plugins="startPlugins"
             :busy-plugin-ids="pluginBusyIds"
             :selected-plugin-ids="selectedPluginIdList"
-            :recommended-plugin-ids="RECOMMENDED_START_PLUGIN_IDS"
             @toggle="updatePluginSelection"
           />
           <p v-else class="field-hint">
@@ -1077,13 +1069,6 @@ onBeforeUnmount(clearUsernameCheck);
 .nav-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-}
-
-.plugins-panel-wrap {
-  padding: 18px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 10px);
-  background: var(--ui-surface, var(--color-bg));
 }
 
 .wheel-start-panel {

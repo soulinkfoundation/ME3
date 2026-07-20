@@ -13,6 +13,7 @@ export async function sendManagedInstallWorkflowCallback(
   const status = env.ME3_MANAGED_STATUS?.trim();
   const stage = env.ME3_MANAGED_STAGE?.trim();
   const origin = env.ME3_MANAGED_ORIGIN?.trim();
+  const canonicalHostname = env.ME3_MANAGED_CANONICAL_HOSTNAME?.trim().toLowerCase();
   const errorCode = env.ME3_MANAGED_ERROR_CODE?.trim();
   const d1Id = env.ME3_MANAGED_D1_ID?.trim().toLowerCase();
   const durableObjectNamespaceId = env.ME3_MANAGED_DO_NAMESPACE_ID?.trim().toLowerCase();
@@ -37,7 +38,7 @@ export async function sendManagedInstallWorkflowCallback(
     throw new Error("managed callback configuration is invalid");
   }
   if (
-    (origin && !isManagedOrigin(origin, installationId)) ||
+    (origin && !isManagedOrigin(origin, installationId, canonicalHostname)) ||
     (d1Id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(d1Id)) ||
     (durableObjectNamespaceId && !/^[0-9a-f]{32}$/.test(durableObjectNamespaceId)) ||
     ((workerPresent === undefined) !== (workerPublic === undefined)) ||
@@ -58,7 +59,10 @@ export async function sendManagedInstallWorkflowCallback(
   }
   if (
     status === "ready" &&
-    (!d1Id || !queueNames || !durableObjectNamespaceId || !isManagedOrigin(origin, installationId))
+    (!d1Id ||
+      !queueNames ||
+      !durableObjectNamespaceId ||
+      !isManagedOrigin(origin, installationId, canonicalHostname))
   ) {
     throw new Error("managed ready callback requires a complete resource manifest");
   }
@@ -97,9 +101,15 @@ function parseOptionalBoolean(value) {
   throw new Error("managed callback Worker deployment proof is invalid");
 }
 
-function isManagedOrigin(value, installationId) {
+function isManagedOrigin(value, installationId, canonicalHostname) {
   try {
     const url = new URL(value || "");
+    if (
+      canonicalHostname &&
+      /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\.me3\.app$/.test(canonicalHostname)
+    ) {
+      return url.origin === value && url.hostname === canonicalHostname && !url.port;
+    }
     return (
       url.protocol === "https:" &&
       url.origin === value &&

@@ -18,14 +18,12 @@ const props = withDefaults(
     plugins: PluginRecord[];
     busyPluginIds?: readonly string[];
     selectedPluginIds?: readonly string[];
-    recommendedPluginIds?: readonly string[];
     showLocalExecutorConfig?: boolean;
     showComingSoon?: boolean;
   }>(),
   {
     busyPluginIds: () => [],
     selectedPluginIds: undefined,
-    recommendedPluginIds: () => [],
     showLocalExecutorConfig: false,
     showComingSoon: false,
   },
@@ -49,9 +47,6 @@ const visiblePlugins = computed(() =>
 const busyPluginIdSet = computed(() => new Set(props.busyPluginIds));
 const selectedPluginIdSet = computed(() =>
   props.selectedPluginIds ? new Set(props.selectedPluginIds) : null,
-);
-const recommendedPluginIdSet = computed(
-  () => new Set(props.recommendedPluginIds),
 );
 
 function isPluginBusy(plugin: PluginRecord) {
@@ -99,12 +94,6 @@ function isPluginToggleDisabled(plugin: PluginRecord) {
               class="plugin-row__badge"
             >
               Built in
-            </span>
-            <span
-              v-else-if="recommendedPluginIdSet.has(plugin.id)"
-              class="plugin-row__badge"
-            >
-              Recommended
             </span>
           </div>
           <p>{{ pluginInfoText(plugin) }}</p>

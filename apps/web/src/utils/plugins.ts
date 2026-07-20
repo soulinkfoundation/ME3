@@ -56,17 +56,6 @@ export type PluginsResponse = {
   plugins: PluginRecord[];
 };
 
-export const RECOMMENDED_START_PLUGIN_IDS = [
-  "me3.agent-chat",
-  "me3.mission-control",
-  "me3.calendar",
-  "me3.accounts",
-] as const;
-
-export const RECOMMENDED_START_PLUGIN_ID_SET = new Set<string>(
-  RECOMMENDED_START_PLUGIN_IDS,
-);
-
 const pluginDisplayOrder = [
   "me3.agent-chat",
   "me3.mission-control",

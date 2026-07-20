@@ -334,6 +334,187 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.sites.landing_page.designs",
+    owner: "plugin",
+    pluginId: "me3.landing-pages",
+    ownerFacingLabel: "List landing-page designs",
+    summary: "List the replaceable starter design packs available for ME3 landing pages.",
+    category: "sites",
+    handler: {
+      surface: "chat",
+      route: "core.sites.landing_page.designs",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["landing-pages"],
+    auditEventKind: "landing_page_designs_listed",
+    examples: {
+      positive: ["What landing-page designs can I choose from?"],
+      negative: ["Show my blog posts."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.sites.landing_page.list",
+    owner: "plugin",
+    pluginId: "me3.landing-pages",
+    ownerFacingLabel: "List landing-page drafts",
+    summary: "List landing pages for an owner profile site with stable page and design IDs.",
+    category: "sites",
+    handler: {
+      surface: "chat",
+      route: "core.sites.landing_page.list",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["landing-pages"],
+    inputSchema: {
+      type: "object",
+      properties: {
+        site: {
+          type: "string",
+          description: "Optional profile-site username or custom domain.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "landing_pages_listed",
+    examples: {
+      positive: ["Show the landing pages on my site."],
+      negative: ["Create a new event landing page."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.sites.landing_page.create",
+    owner: "plugin",
+    pluginId: "me3.landing-pages",
+    ownerFacingLabel: "Create landing-page draft",
+    summary: "Create a reviewable landing-page draft from an owner brief using a versioned starter design.",
+    category: "sites",
+    handler: {
+      surface: "chat",
+      route: "core.sites.landing_page.create",
+    },
+    sideEffect: "write_internal_draft",
+    approvalMode: "none",
+    requiresSetup: ["landing-pages"],
+    inputSchema: {
+      type: "object",
+      required: ["purpose", "brief"],
+      properties: {
+        site: {
+          type: "string",
+          description: "Optional profile-site username or custom domain.",
+        },
+        slug: {
+          type: "string",
+          description: "Optional short URL path. ME3 derives one when omitted.",
+        },
+        purpose: {
+          type: "string",
+          description: "The page's functional purpose.",
+          enum: ["event", "service", "waitlist"],
+        },
+        designPackId: {
+          type: "string",
+          description: "Optional compatible starter design-pack ID. Omit for the recommended design.",
+          enum: ["starter-event-01", "starter-service-01", "starter-waitlist-01"],
+        },
+        brief: {
+          type: "string",
+          description: "The factual offer, event, or launch brief supplied by the owner.",
+        },
+        headline: {
+          type: "string",
+          description: "Optional polished page headline grounded in the brief.",
+        },
+        subheadline: {
+          type: "string",
+          description: "Optional concise introduction grounded in the brief.",
+        },
+        highlights: {
+          type: "string",
+          description: "Optional newline-separated highlights as Title: explanation.",
+        },
+        ctaLabel: {
+          type: "string",
+          description: "Optional primary button label.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "landing_page_draft_created",
+    examples: {
+      positive: [
+        "Create a landing page for my Saturday breathwork workshop in Dublin.",
+        "Build a waitlist page for my new coaching product.",
+      ],
+      negative: ["Brainstorm landing-page ideas with me."],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.sites.landing_page.update",
+    owner: "plugin",
+    pluginId: "me3.landing-pages",
+    ownerFacingLabel: "Update landing-page draft",
+    summary: "Revise the content or replaceable design pack of an existing landing-page draft.",
+    category: "sites",
+    handler: {
+      surface: "chat",
+      route: "core.sites.landing_page.update",
+    },
+    sideEffect: "write_internal_draft",
+    approvalMode: "none",
+    requiresSetup: ["landing-pages"],
+    inputSchema: {
+      type: "object",
+      required: ["pageId"],
+      properties: {
+        site: {
+          type: "string",
+          description: "Optional profile-site username or custom domain.",
+        },
+        pageId: {
+          type: "string",
+          description: "Stable page ID returned by the landing-page list or create tool.",
+        },
+        designPackId: {
+          type: "string",
+          description: "Optional compatible replacement design-pack ID.",
+          enum: ["starter-event-01", "starter-service-01", "starter-waitlist-01"],
+        },
+        headline: { type: "string", description: "Optional replacement headline." },
+        subheadline: { type: "string", description: "Optional replacement introduction." },
+        highlights: {
+          type: "string",
+          description: "Optional newline-separated replacement highlights as Title: explanation.",
+        },
+        ctaLabel: { type: "string", description: "Optional replacement primary button label." },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "landing_page_draft_updated",
+    examples: {
+      positive: ["Change that landing-page headline and make the call to action Book a place."],
+      negative: ["Publish the landing page now."],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.sites.blog_post.list",
     owner: "core",
     pluginId: "me3.landing-pages",

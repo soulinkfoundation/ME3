@@ -48,6 +48,10 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
 
 app.use(router)
 
-registerServiceWorker()
-
-app.mount('#app')
+void router.isReady().finally(() => {
+  // Keep the static, branded launch state in place until the initial route has
+  // resolved. Mounting immediately replaces it with an empty RouterView while
+  // the auth guard is still checking the owner session.
+  app.mount('#app')
+  registerServiceWorker()
+})

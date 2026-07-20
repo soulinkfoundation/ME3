@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   buildLandingPageDocument,
+  getLandingPageDesignPackId,
   getLandingPageRecipe,
   getLandingPageSectionImage,
   getLandingPageTemplateId,
+  getSelectableLandingPageDesignPacks,
   normalizeLandingPageDocument,
   normalizeLandingRecipe,
   normalizeLandingTemplate,
   renderLandingPageHtml,
+  setLandingPageDesignPack,
   upgradeLandingPageDocument,
 } from "./index";
 
@@ -29,6 +32,7 @@ describe("landing pages package", () => {
     expect(page.version).toBe(3);
     if (page.version !== 3) throw new Error("Expected v3 service page");
     expect(page.recipe.id).toBe("service-offer");
+    expect(getLandingPageDesignPackId(page)).toBe("starter-service-01");
     expect(page.actions[0]).toMatchObject({
       id: "primary-action",
       kind: "booking",
@@ -65,6 +69,37 @@ describe("landing pages package", () => {
     expect(getLandingPageRecipe("event-invite").sectionOrder).toContain("details");
     expect(getLandingPageSectionImage(page)).toBe("/files/table.jpg");
     expect(normalizeLandingPageDocument(page)).toEqual(page);
+    expect(getLandingPageDesignPackId(page)).toBe("starter-event-01");
+  });
+
+  it("keeps selectable starter designs separate and purpose-specific", () => {
+    const packs = getSelectableLandingPageDesignPacks();
+    expect(packs.map((pack) => pack.id)).toEqual([
+      "starter-event-01",
+      "starter-service-01",
+      "starter-waitlist-01",
+    ]);
+    expect(packs.every((pack) => pack.version === 1)).toBe(true);
+    expect(packs.every((pack) => pack.selectable)).toBe(true);
+  });
+
+  it("requires a complete design-pack identity while accepting pre-pack v3 pages", () => {
+    const page = buildLandingPageDocument({
+      username: "owner",
+      brief: "A private launch list.",
+      template: "waitlist",
+      profile: { name: "Owner", bio: null, avatar: null, profileUrl: null },
+    });
+    if (page.version !== 3) throw new Error("Expected v3 waitlist page");
+
+    const prePack = structuredClone(page);
+    delete prePack.design.packId;
+    delete prePack.design.packVersion;
+    expect(normalizeLandingPageDocument(prePack)).toEqual(prePack);
+
+    const missingVersion = structuredClone(page);
+    delete missingVersion.design.packVersion;
+    expect(normalizeLandingPageDocument(missingVersion)).toBeNull();
   });
 
   it("renders escaped HTML for persisted previews", () => {
@@ -85,7 +120,30 @@ describe("landing pages package", () => {
     expect(html).toContain("&lt;Launch&gt;");
     expect(html).toContain("Join &lt;now&gt;");
     expect(html).toContain("data-theme=\"signal-waitlist\"");
+    expect(html).toContain('data-design-pack="starter-waitlist-01"');
+    expect(html).toContain('data-design-pack-version="1"');
     expect(html).not.toContain("<Launch>");
+  });
+
+  it("can switch to a compatible versioned design without changing page content", () => {
+    const page = buildLandingPageDocument({
+      username: "owner",
+      brief: "A focused advisory offer.",
+      template: "service",
+      profile: { name: "Owner", bio: null, avatar: null, profileUrl: null },
+    });
+    if (page.version !== 3) throw new Error("Expected v3 service page");
+    const switched = setLandingPageDesignPack(page, "legacy-standard");
+
+    expect(switched.hero).toEqual(page.hero);
+    expect(switched.content).toEqual(page.content);
+    expect(getLandingPageDesignPackId(switched)).toBe("legacy-standard");
+    expect(renderLandingPageHtml(switched, "owner")).not.toContain(
+      "data-design-pack=",
+    );
+    expect(() =>
+      setLandingPageDesignPack(page, "starter-event-01"),
+    ).toThrow(/does not support service pages/);
   });
 
   it("renders functional subscribe and booking widgets without embedding credentials", () => {
@@ -139,5 +197,9 @@ describe("landing pages package", () => {
     expect(upgraded.version).toBe(3);
     expect(upgraded.actions[0].kind).toBe("subscribe");
     expect(upgraded.content.sections[0]).toMatchObject({ type: "action" });
+    expect(getLandingPageDesignPackId(upgraded)).toBe("legacy-standard");
+    expect(renderLandingPageHtml(upgraded, "owner")).not.toContain(
+      "data-design-pack=",
+    );
   });
 });

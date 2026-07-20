@@ -322,6 +322,10 @@ type DailyBriefingRenderContext = {
   sections: DailyBriefingSection[];
 };
 
+type DailyBriefingTask = Me3AgentContextTask & {
+  description: string;
+};
+
 type DailyBriefingSection = {
   kind: "calendar" | "reminders" | "tasks";
   title: string;
@@ -4021,7 +4025,7 @@ async function buildDailyBriefingRenderContext(
 function buildDailyBriefingSections(
   events: CalendarEventContextRow[],
   reminders: DailyBriefingReminderRow[],
-  tasks: Me3AgentContextTask[],
+  tasks: DailyBriefingTask[],
   dateKey: string,
   dateLabel: string,
   fallbackTimezone: string,
@@ -4062,7 +4066,7 @@ function buildDailyBriefingSections(
       items: dueTasks.slice(0, 4).map((task) => ({
         id: task.id,
         title: task.title,
-        detail: null,
+        detail: formatDailyBriefingTaskDetail(task.description),
       })),
     },
   ];
@@ -4198,8 +4202,39 @@ async function loadDailyBriefingReminders(
 }
 
 async function loadDailyBriefingTasks(env: Env, userId: string) {
-  const failedSources: Me3AgentContextSource[] = [];
-  return loadAssistantJobTasksContext(env, userId, failedSources);
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT id, project_id, title, description, status, due_at, scheduled_for,
+              source_ref, updated_at
+       FROM mission_tasks
+       WHERE user_id = ?
+         AND archived_at IS NULL
+         AND status NOT IN ('done', 'cancelled')
+         AND (source_ref IS NULL OR source_ref NOT LIKE 'weekly-review:%')
+       ORDER BY priority ASC, COALESCE(due_at, scheduled_for, updated_at) ASC
+       LIMIT 50`,
+    )
+      .bind(userId)
+      .all<MissionTaskContextRow>();
+    return (rows.results || []).map((row): DailyBriefingTask => ({
+      id: row.id,
+      title: row.title,
+      description: richTextToPlainText(row.description),
+      status: row.status,
+      dueAt: row.due_at || row.scheduled_for,
+      projectId: row.project_id,
+      source: contextSource({
+        id: row.id,
+        kind: "task",
+        label: row.title,
+        visibility: "private",
+        sourceRef: row.source_ref,
+        updatedAt: row.updated_at,
+      }),
+    }));
+  } catch {
+    return [];
+  }
 }
 
 function formatDailyCalendarSummary(events: CalendarEventContextRow[], dateLabel: string) {
@@ -4231,7 +4266,16 @@ function formatDailyReminders(reminders: DailyBriefingReminderRow[], fallbackTim
   ].join("\n");
 }
 
-function formatDailyTasks(tasks: Me3AgentContextTask[], dateKey: string) {
+const DAILY_BRIEFING_TASK_DETAIL_LIMIT = 180;
+
+function formatDailyBriefingTaskDetail(description: string | null | undefined) {
+  const normalized = description?.trim() || "";
+  if (!normalized) return null;
+  if (normalized.length <= DAILY_BRIEFING_TASK_DETAIL_LIMIT) return normalized;
+  return `${normalized.slice(0, DAILY_BRIEFING_TASK_DETAIL_LIMIT - 1).trimEnd()}…`;
+}
+
+function formatDailyTasks(tasks: DailyBriefingTask[], dateKey: string) {
   const due = tasks.filter((task) => {
     const dueAt = task.dueAt;
     return dueAt?.slice(0, 10) === dateKey;
@@ -4239,7 +4283,10 @@ function formatDailyTasks(tasks: Me3AgentContextTask[], dateKey: string) {
   if (due.length === 0) return "";
   return [
     `Mission Control: ${due.length} task${due.length === 1 ? "" : "s"} due today.`,
-    ...due.slice(0, 4).map((task) => `- ${task.title}`),
+    ...due.slice(0, 4).map((task) => {
+      const detail = formatDailyBriefingTaskDetail(task.description);
+      return `- ${task.title}${detail ? `: ${detail}` : ""}`;
+    }),
   ].join("\n");
 }
 

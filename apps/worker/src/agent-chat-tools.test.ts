@@ -106,6 +106,43 @@ describe("Core chat tool contracts", () => {
     });
   });
 
+  it("exposes landing-page design, draft creation, and stable-ID revision tools", () => {
+    expect(getCoreChatToolByName("core_sites_landing_page_designs")).toMatchObject({
+      capabilityId: "core.sites.landing_page.designs",
+      approvalMode: "none",
+      sideEffect: "read_private",
+    });
+    expect(getCoreChatToolByName("core_sites_landing_page_create")).toMatchObject({
+      capabilityId: "core.sites.landing_page.create",
+      approvalMode: "none",
+      sideEffect: "write_internal_draft",
+      parameters: {
+        required: ["purpose", "brief"],
+        properties: {
+          purpose: { enum: ["event", "service", "waitlist"] },
+          designPackId: {
+            enum: [
+              "starter-event-01",
+              "starter-service-01",
+              "starter-waitlist-01",
+            ],
+          },
+        },
+      },
+    });
+    expect(getCoreChatToolByName("core_sites_landing_page_update")).toMatchObject({
+      capabilityId: "core.sites.landing_page.update",
+      approvalMode: "none",
+      sideEffect: "write_internal_draft",
+      parameters: { required: ["pageId"] },
+    });
+    expect(
+      CORE_CHAT_CAPABILITIES.filter((capability) =>
+        capability.id.startsWith("core.sites.landing_page."),
+      ).every((capability) => capability.pluginId === "me3.landing-pages"),
+    ).toBe(true);
+  });
+
   it("defines full reminder CRUD tools and accepts offset-aware timestamps", () => {
     expect(
       CORE_CHAT_TOOLS.filter((tool) =>

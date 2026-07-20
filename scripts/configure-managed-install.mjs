@@ -7,6 +7,7 @@ const [
   workersDevText,
   managedInstallationId,
   managedEmailGatewayOriginText,
+  managedPublicOriginText,
 ] = process.argv.slice(2);
 if (
   !configPath ||
@@ -16,7 +17,7 @@ if (
   !managedEmailGatewayOriginText
 ) {
   throw new Error(
-    "usage: configure-managed-install.mjs <wrangler.toml> <worker-name> <true|false> <managed-installation-id> <managed-email-gateway-origin>",
+    "usage: configure-managed-install.mjs <wrangler.toml> <worker-name> <true|false> <managed-installation-id> <managed-email-gateway-origin> [managed-public-origin]",
   );
 }
 if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(workerName)) {
@@ -38,6 +39,25 @@ if (
 ) {
   throw new Error("managed email gateway origin must be an explicit HTTPS origin");
 }
+let managedPublicOrigin;
+if (managedPublicOriginText) {
+  const url = new URL(managedPublicOriginText);
+  if (
+    url.protocol !== "https:" ||
+    url.origin !== managedPublicOriginText ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash ||
+    !(
+      /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\.me3\.app$/.test(url.hostname) ||
+      (url.hostname.startsWith(`${workerName}.`) &&
+        url.hostname.endsWith(".workers.dev"))
+    )
+  ) {
+    throw new Error("managed public origin must be the exact managed HTTPS origin");
+  }
+  managedPublicOrigin = url.origin;
+}
 
 const routes = {
   ME3_MANAGED_INSTALLATION_ID: managedInstallationId,
@@ -50,6 +70,12 @@ const routes = {
   ME3_AI_REASONING_MODEL: "@cf/zai-org/glm-5.2",
   ME3_AI_IMAGE_GENERATION_PROVIDER: "workers-ai",
   ME3_AI_IMAGE_GENERATION_MODEL: "@cf/black-forest-labs/flux-2-klein-4b",
+  ...(managedPublicOrigin
+    ? {
+        CORE_WEB_ORIGIN: managedPublicOrigin,
+        CORE_API_ORIGIN: managedPublicOrigin,
+      }
+    : {}),
 };
 
 let config = readFileSync(configPath, "utf8");

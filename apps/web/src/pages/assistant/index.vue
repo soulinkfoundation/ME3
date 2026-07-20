@@ -646,6 +646,12 @@ const { refreshInboxDraftCount } = useInboxDraftCount();
 const route = useRoute();
 const router = useRouter();
 
+function routeAssistantPrompt() {
+  const value = route.query.prompt;
+  if (Array.isArray(value)) return value[0]?.trim() || "";
+  return typeof value === "string" ? value.trim() : "";
+}
+
 const jobs = ref<AssistantJob[]>([]);
 const recipes = ref<AssistantJobRecipe[]>([]);
 const chatMessages = agentChat.messages;
@@ -668,7 +674,7 @@ const scheduleNotice = ref("");
 const scheduleInlineEditing = ref(false);
 const inboxWatchRulesDraft = ref<InboxWatchRuleForm[]>([]);
 const inboxWatchRulesNotice = ref("");
-const assistantDraft = ref("");
+const assistantDraft = ref(routeAssistantPrompt());
 const assistantSending = ref(false);
 const assistantActionCardBusy = ref<string | null>(null);
 const assistantDraftHydrationIds = new Set<string>();
@@ -741,7 +747,6 @@ const managedDeployment = ref(false);
 const aiProviders = ref<AiProviderRecord[]>([]);
 const {
   canUse: canUseVoiceDictation,
-  elapsedLabel: voiceRecordingElapsedLabel,
   state: voiceDictationState,
   statusText: voiceDictationStatusText,
   toggle: toggleVoiceDictation,
@@ -1266,6 +1271,14 @@ const canSendAssistantMessage = computed(
 onMounted(() => {
   void loadPage();
   void syncAssistantSettingsFromRoute();
+  if (routeAssistantPrompt()) {
+    const { prompt: _prompt, ...query } = route.query;
+    void router.replace({ query });
+    void nextTick(() => {
+      autosizeAssistantComposer();
+      assistantComposerRef.value?.focus();
+    });
+  }
   window.addEventListener("keydown", handleWindowKeydown);
 });
 
@@ -1401,6 +1414,7 @@ async function startNewAssistantChat(
       ...route.query,
       thread: undefined,
       project: projectId || undefined,
+      prompt: undefined,
     },
   });
   await nextTick();
@@ -5771,7 +5785,37 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </span>
           </div>
           <div class="assistant-input-wrap">
+            <div
+              v-if="voiceDictationState === 'listening'"
+              class="assistant-composer__voice-wave"
+              role="status"
+              aria-live="polite"
+              aria-label="Recording voice dictation"
+            >
+              <span class="assistant-composer__voice-bars" aria-hidden="true">
+                <span
+                  v-for="bar in 30"
+                  :key="bar"
+                  :style="{ '--voice-bar-index': bar }"
+                />
+              </span>
+            </div>
+            <div
+              v-else-if="voiceDictationState === 'processing'"
+              class="assistant-input__transcribing"
+              role="status"
+              aria-live="polite"
+            >
+              <span>
+                Transcribing<span
+                  class="assistant-input__transcribing-ellipsis"
+                  aria-hidden="true"
+                  >...</span
+                >
+              </span>
+            </div>
             <textarea
+              v-else
               id="assistant-console-input"
               ref="assistantComposerRef"
               v-model="assistantDraft"
@@ -5783,45 +5827,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
               @input="autosizeAssistantComposer"
               @paste="onAssistantComposerPaste"
             />
-            <div
-              v-if="voiceDictationState === 'processing'"
-              class="assistant-input__transcribing"
-              role="status"
-              aria-live="polite"
-            >
-              <span>Transcribing...</span>
-            </div>
           </div>
-          <div
-            class="assistant-composer__bottom"
-            :class="{
-              'assistant-composer__bottom--recording':
-                voiceDictationState === 'listening',
-            }"
-          >
-            <div
-              v-if="voiceDictationState === 'listening'"
-              class="assistant-composer__voice-wave"
-              role="status"
-              aria-live="polite"
-              aria-label="Recording voice dictation"
-            >
-              <span
-                class="assistant-composer__voice-guide"
-                aria-hidden="true"
-              />
-              <span class="assistant-composer__voice-bars" aria-hidden="true">
-                <span
-                  v-for="bar in 24"
-                  :key="bar"
-                  :style="{ '--voice-bar-index': bar }"
-                />
-              </span>
-              <span class="assistant-composer__voice-time">
-                {{ voiceRecordingElapsedLabel }}
-              </span>
-            </div>
-            <div v-else class="assistant-composer__left">
+          <div class="assistant-composer__bottom">
+            <div class="assistant-composer__left">
               <input
                 ref="assistantAttachmentInputRef"
                 class="sr-only"
@@ -8946,14 +8954,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   min-width: 0;
 }
 
-.assistant-composer__bottom--recording {
-  gap: 12px;
-}
-
-.assistant-composer__bottom--recording .assistant-composer__right {
-  flex: 0 0 auto;
-}
-
 .assistant-composer__left,
 .assistant-composer__right {
   flex-shrink: 0;
@@ -8967,7 +8967,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-input-wrap {
   position: relative;
+  display: flex;
+  align-items: center;
   min-width: 0;
+  min-height: 44px;
 }
 
 .assistant-input {
@@ -8991,10 +8994,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-input__transcribing {
-  position: absolute;
-  inset: 6px 2px 2px;
   display: flex;
   align-items: flex-start;
+  min-height: 44px;
+  width: 100%;
+  padding: 6px 2px 2px;
   pointer-events: none;
   color: var(--ui-text-muted);
   font: inherit;
@@ -9008,25 +9012,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
   gap: 6px;
 }
 
-.assistant-input__transcribing span::after {
-  display: block;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--ui-accent);
-  content: "";
-  animation: assistantTranscribingPulse 900ms ease-in-out infinite alternate;
+.assistant-input__transcribing-ellipsis {
+  display: inline-block;
+  width: 0;
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: assistantTranscribingEllipsis 1.2s steps(4, end) infinite;
 }
 
-@keyframes assistantTranscribingPulse {
-  from {
-    opacity: 0.35;
-    transform: scale(0.82);
-  }
-
+@keyframes assistantTranscribingEllipsis {
   to {
-    opacity: 1;
-    transform: scale(1);
+    width: 0.75em;
   }
 }
 
@@ -9148,90 +9144,75 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-composer__voice-wave {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr auto auto;
+  display: flex;
   align-items: center;
-  gap: 10px;
-  flex: 1 1 auto;
   width: 100%;
   min-width: 0;
-  min-height: 22px;
+  min-height: 24px;
   color: var(--ui-text-muted);
 }
 
-.assistant-composer__voice-guide {
-  display: block;
-  width: 100%;
-  height: 2px;
-  border-radius: 999px;
-  background-image: linear-gradient(
-    90deg,
-    color-mix(in oklab, var(--ui-text-muted) 18%, transparent) 50%,
-    transparent 0
-  );
-  background-size: 4px 2px;
-}
-
 .assistant-composer__voice-bars {
-  position: absolute;
-  left: 50%;
-  top: 50%;
   display: flex;
   align-items: center;
-  gap: 2px;
-  transform: translate(-50%, -50%);
-  padding: 0 6px;
-  background: var(--ui-surface);
+  justify-content: space-between;
+  width: 100%;
 }
 
 .assistant-composer__voice-bars span {
   width: 2px;
-  height: 12px;
+  height: 10px;
   border-radius: 999px;
-  background: var(--ui-text);
-  animation: assistantVoiceWave 780ms ease-in-out infinite alternate;
-  animation-delay: calc(var(--voice-bar-index) * -42ms);
+  background: var(--ui-accent);
+  animation: assistantVoiceWave 1.6s ease-in-out infinite alternate;
+  animation-delay: calc(var(--voice-bar-index) * -70ms);
   transform-origin: center;
 }
 
 .assistant-composer__voice-bars span:nth-child(6n + 1) {
-  height: 7px;
+  height: 6px;
 }
 
 .assistant-composer__voice-bars span:nth-child(6n + 2) {
-  height: 18px;
+  height: 12px;
 }
 
 .assistant-composer__voice-bars span:nth-child(6n + 3) {
-  height: 26px;
+  height: 18px;
 }
 
 .assistant-composer__voice-bars span:nth-child(6n + 4) {
-  height: 20px;
+  height: 14px;
 }
 
 .assistant-composer__voice-bars span:nth-child(6n + 5) {
-  height: 10px;
-}
-
-.assistant-composer__voice-time {
-  min-width: 32px;
-  color: var(--ui-text);
-  font-variant-numeric: tabular-nums;
-  font-weight: 650;
-  text-align: right;
+  height: 8px;
 }
 
 @keyframes assistantVoiceWave {
   from {
-    transform: scaleY(0.45);
-    opacity: 0.64;
+    transform: scaleY(0.58);
+    opacity: 0.36;
   }
 
   to {
-    transform: scaleY(1.18);
-    opacity: 1;
+    transform: scaleY(1.08);
+    opacity: 0.7;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-composer__voice-bars span,
+  .assistant-input__transcribing-ellipsis {
+    animation: none;
+  }
+
+  .assistant-composer__voice-bars span {
+    opacity: 0.58;
+  }
+
+  .assistant-input__transcribing-ellipsis {
+    width: 0.75em;
   }
 }
 

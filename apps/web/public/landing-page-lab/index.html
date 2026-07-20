@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>ME3 Landing Page Lab</title>
+    <style>
+      :root {
+        --bg: #ececec;
+        --surface: #f8f8f6;
+        --ink: #111;
+        --muted: #666;
+        --line: #c7c7c2;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Helvetica Neue", Helvetica, sans-serif; }
+      a { color: inherit; }
+      .shell { width: min(1500px, calc(100% - 48px)); margin: 0 auto; }
+      header { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; padding: 72px 0 58px; border-bottom: 1px solid var(--line); }
+      h1 { max-width: 680px; margin: 0; font-size: clamp(3.5rem, 7vw, 7rem); font-weight: 500; line-height: .86; letter-spacing: -.065em; }
+      .intro { align-self: end; max-width: 660px; }
+      .intro p { margin: 0; color: #323232; font-size: 1.25rem; line-height: 1.45; }
+      .meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 28px; }
+      .meta span { padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .76rem; text-transform: uppercase; letter-spacing: .08em; }
+      main { padding: 56px 0 100px; }
+      .prototype { margin-bottom: 84px; }
+      .prototype-head { display: grid; grid-template-columns: 80px 1fr 1fr auto; gap: 26px; align-items: end; margin-bottom: 18px; }
+      .number { color: var(--muted); font-size: .78rem; letter-spacing: .1em; }
+      h2 { margin: 0; font-size: clamp(2rem, 3vw, 3.4rem); font-weight: 500; letter-spacing: -.045em; }
+      .direction { max-width: 560px; margin: 0; color: var(--muted); line-height: 1.45; }
+      .open { padding: 11px 16px; border: 1px solid var(--ink); text-decoration: none; font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; }
+      .open:hover { background: var(--ink); color: white; }
+      .preview { position: relative; height: min(72vh, 780px); overflow: hidden; border: 1px solid var(--line); background: white; }
+      iframe { width: 100%; height: 100%; border: 0; background: white; }
+      .hint { position: absolute; right: 14px; bottom: 14px; padding: 8px 10px; background: rgba(0,0,0,.78); color: white; font-size: .7rem; letter-spacing: .06em; pointer-events: none; }
+      footer { padding: 26px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: .8rem; }
+      footer .shell { display: flex; justify-content: space-between; gap: 24px; }
+      :focus-visible { outline: 3px solid #155eef; outline-offset: 3px; }
+      @media (max-width: 900px) {
+        header { grid-template-columns: 1fr; gap: 36px; }
+        .prototype-head { grid-template-columns: 50px 1fr auto; }
+        .direction { grid-column: 2 / -1; grid-row: 2; }
+        .preview { height: 680px; }
+      }
+      @media (max-width: 620px) {
+        .shell { width: min(100% - 24px, 1500px); }
+        header { padding-top: 50px; }
+        .prototype-head { grid-template-columns: 1fr auto; }
+        .number { grid-column: 1 / -1; }
+        .direction { grid-column: 1 / -1; }
+        .preview { height: 620px; }
+        footer .shell { display: grid; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="shell">
+      <h1>Landing Page Lab</h1>
+      <div class="intro">
+        <p>Three independent visual directions built from scratch. These are design benchmarks—not current templates—and deliberately share no layout system.</p>
+        <div class="meta"><span>Event</span><span>Service</span><span>Product waitlist</span><span>Desktop + mobile</span></div>
+      </div>
+    </header>
+
+    <main class="shell">
+      <article class="prototype">
+        <div class="prototype-head">
+          <span class="number">01 / EVENT</span>
+          <h2>Field Notes</h2>
+          <p class="direction">Tactile field-journal editorial for a small countryside retreat. Warm, slow, human and intentionally unlike a conventional events template.</p>
+          <a class="open" href="./field-notes/index.html" target="_blank" rel="noreferrer">Open full page ↗</a>
+        </div>
+        <div class="preview"><iframe src="./field-notes/index.html" title="Field Notes landing page"></iframe><span class="hint">Scroll inside preview</span></div>
+      </article>
+
+      <article class="prototype">
+        <div class="prototype-head">
+          <span class="number">02 / SERVICE</span>
+          <h2>Room to Think</h2>
+          <p class="direction">Confident print-editorial positioning practice. Oversized type, hard rules and direct commercial copy make the service itself feel specific.</p>
+          <a class="open" href="./room-to-think/index.html" target="_blank" rel="noreferrer">Open full page ↗</a>
+        </div>
+        <div class="preview"><iframe src="./room-to-think/index.html" title="Room to Think landing page"></iframe><span class="hint">Scroll inside preview</span></div>
+      </article>
+
+      <article class="prototype">
+        <div class="prototype-head">
+          <span class="number">03 / WAITLIST</span>
+          <h2>Northstar</h2>
+          <p class="direction">Dark, kinetic product storytelling built entirely with HTML and CSS. The page explains a complicated workflow without leaning on dashboard screenshots.</p>
+          <a class="open" href="./northstar/index.html" target="_blank" rel="noreferrer">Open full page ↗</a>
+        </div>
+        <div class="preview"><iframe src="./northstar/index.html" title="Northstar landing page"></iframe><span class="hint">Scroll inside preview</span></div>
+      </article>
+    </main>
+
+    <footer><div class="shell"><span>ME3 design exploration · July 2026</span><span>Prototype content and brands are fictional.</span></div></footer>
+  </body>
+</html>

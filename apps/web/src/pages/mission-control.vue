@@ -62,6 +62,16 @@ type DailyBriefingCardData = {
   id: string;
   title: string;
   message: string;
+  sections?: Array<{
+    kind: "calendar" | "reminders" | "tasks" | string;
+    title: string;
+    summary: string;
+    items: Array<{
+      id: string;
+      title: string;
+      detail: string | null;
+    }>;
+  }>;
   date: string;
   createdAt: string | null;
   status: string | null;
@@ -294,6 +304,18 @@ const dashboardReady = computed(
 const dailyBriefing = computed(
   () => liveDailyBriefing.value || dashboard.value?.data["mission.daily-briefing"] || null,
 );
+const dailyBriefingTaskSection = computed(
+  () =>
+    dailyBriefing.value?.sections?.find((section) => section.kind === "tasks") ||
+    null,
+);
+const dailyBriefingSummary = computed(() => {
+  const briefing = dailyBriefing.value;
+  if (!briefing) return "";
+  return briefing.sections?.some((section) => section.kind === "tasks")
+    ? dailyBriefingSummaryText(briefing.message)
+    : dailyBriefingBody(briefing.message);
+});
 const greetingName = computed(() => {
   const name = auth.user?.name?.trim() || "";
   return /^ME3(?: Core)? Owner$/i.test(name) ? "" : name;
@@ -304,6 +326,17 @@ const greeting = computed(() =>
 
 function dailyBriefingBody(message: string): string {
   return message.replace(/^☀️\s*Good morning[^.\n]*\.\s*/i, "");
+}
+
+function dailyBriefingSummaryText(message: string): string {
+  return dailyBriefingBody(message)
+    .replace(/Mission Control:[^\n]*(?:\n\s*-\s*[^\n]*)*/i, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function dailyBriefingTaskPath(taskId: string): string {
+  return `/mission-control/projects?task=${encodeURIComponent(taskId)}`;
 }
 const missionStatement = computed(
   () => dashboard.value?.data["mission.mission-statement"] || null,
@@ -1035,9 +1068,32 @@ onBeforeUnmount(() => {
                 {{ formatDashboardDate(dailyBriefing.createdAt) }}
               </span>
             </header>
-            <p v-if="dailyBriefing" class="dashboard-card__body">
-              {{ dailyBriefingBody(dailyBriefing.message) }}
-            </p>
+            <div v-if="dailyBriefing" class="daily-briefing">
+              <p v-if="dailyBriefingSummary" class="dashboard-card__body">
+                {{ dailyBriefingSummary }}
+              </p>
+              <section
+                v-if="dailyBriefingTaskSection"
+                class="daily-briefing__tasks"
+                aria-label="Mission Control tasks due today"
+              >
+                <p class="daily-briefing__task-summary">
+                  {{ dailyBriefingTaskSection.summary }}
+                </p>
+                <RouterLink
+                  v-for="task in dailyBriefingTaskSection.items"
+                  :key="task.id"
+                  class="daily-briefing__task"
+                  :to="dailyBriefingTaskPath(task.id)"
+                >
+                  <span class="daily-briefing__task-copy">
+                    <strong>{{ task.title }}</strong>
+                    <span v-if="task.detail">{{ task.detail }}</span>
+                  </span>
+                  <UiIcon name="ChevronRight" :size="15" aria-hidden="true" />
+                </RouterLink>
+              </section>
+            </div>
             <div v-else class="dashboard-empty">
               <p>No Daily Briefing has landed yet.</p>
               <Button
@@ -2082,6 +2138,86 @@ onBeforeUnmount(() => {
 
 .dashboard-card__body {
   white-space: pre-wrap;
+}
+
+.daily-briefing {
+  display: grid;
+  gap: 12px;
+}
+
+.daily-briefing__tasks {
+  display: grid;
+  gap: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.daily-briefing__task-summary {
+  margin: 0 0 2px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.daily-briefing__task {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-text);
+  text-decoration: none;
+}
+
+.daily-briefing__task:last-child {
+  border-bottom: 0;
+}
+
+.daily-briefing__task:hover,
+.daily-briefing__task:focus-visible {
+  color: var(--ui-accent);
+}
+
+.daily-briefing__task:focus-visible {
+  border-radius: var(--ui-radius-sm);
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 2px;
+}
+
+.daily-briefing__task-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.daily-briefing__task-copy strong,
+.daily-briefing__task-copy span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.daily-briefing__task-copy strong {
+  color: currentColor;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.daily-briefing__task-copy span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.daily-briefing__task > svg {
+  flex: 0 0 auto;
+  color: var(--ui-text-muted);
 }
 
 .dashboard-empty {

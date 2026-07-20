@@ -14,12 +14,17 @@ export async function recoverManagedProvisionManifest(
   const installationId = String(input.installationId || "").toLowerCase();
   const workerName = String(input.workerName || "");
   const d1Name = String(input.d1Name || "");
+  const canonicalHostname = String(input.canonicalHostname || "").toLowerCase();
+  const zoneId = String(input.zoneId || "").toLowerCase();
   if (
     !/^mi-[0-9a-f]{16}$/.test(installationId) ||
     workerName !== `me3-${installationId}` ||
     d1Name !== `${workerName}-d1` ||
     !/^[0-9a-f]{32}$/.test(input.accountId || "") ||
-    !input.apiToken
+    !input.apiToken ||
+    (canonicalHostname &&
+      (!/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\.me3\.app$/.test(canonicalHostname) ||
+        !/^[0-9a-f]{32}$/.test(zoneId)))
   ) {
     throw new Error("managed provision recovery contract is invalid");
   }
@@ -97,6 +102,30 @@ export async function recoverManagedProvisionManifest(
         await verifyManagedPublicOrigin(candidateOrigin, request, sleep)
       ) {
         origin = candidateOrigin;
+      }
+    }
+    if (canonicalHostname) {
+      const domainQuery = new URLSearchParams({ service: workerName });
+      const domains = await api(
+        `/accounts/${input.accountId}/workers/domains?${domainQuery}`,
+      );
+      if (!Array.isArray(domains) || domains.length > 1) {
+        throw new Error("managed Worker custom domain recovery proof is invalid");
+      }
+      if (domains.length === 1) {
+        const domain = domains[0];
+        if (
+          String(domain?.hostname || "").toLowerCase() !== canonicalHostname ||
+          String(domain?.service || "").toLowerCase() !== workerName ||
+          String(domain?.zone_id || "").toLowerCase() !== zoneId
+        ) {
+          throw new Error("managed Worker custom domain recovery proof conflicts");
+        }
+        workerPublic = true;
+        const candidateOrigin = `https://${canonicalHostname}`;
+        if (await verifyManagedPublicOrigin(candidateOrigin, request, sleep)) {
+          origin = candidateOrigin;
+        }
       }
     }
   }
@@ -211,6 +240,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     installationId: process.env.ME3_MANAGED_INSTALLATION_ID,
     workerName: process.env.WORKER_NAME,
     d1Name: process.env.D1_NAME,
+    canonicalHostname: process.env.ME3_MANAGED_CANONICAL_HOSTNAME,
+    zoneId: process.env.ME3_MANAGED_ZONE_ID,
     configPath: process.argv[2],
   });
   if (process.env.GITHUB_ENV) {

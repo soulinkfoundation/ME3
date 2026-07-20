@@ -1102,8 +1102,7 @@ const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
   id: "me3.landing-pages",
   name: "ME3 Landing Pages",
   version: "0.2.0",
-  description:
-    "First-party landing-page package for draft generation, template metadata, document validation, and static HTML rendering.",
+  description: "Create custom landing pages for offerings, events, and more.",
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",

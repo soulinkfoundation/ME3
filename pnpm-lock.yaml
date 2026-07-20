@@ -214,6 +214,9 @@ importers:
       '@me3-core/plugin-calendar':
         specifier: workspace:*
         version: link:../calendar
+      '@me3-core/plugin-landing-pages':
+        specifier: workspace:*
+        version: link:../landing-pages
       '@me3-core/plugin-mission-control':
         specifier: workspace:*
         version: link:../mission-control

@@ -27,6 +27,14 @@ on:
         description: Fixed ME3 Cloud provisioning callback
         required: true
         type: string
+      canonical_hostname:
+        description: Permanent owner-facing hostname
+        required: true
+        type: string
+      zone_id:
+        description: Cloudflare zone containing the permanent hostname
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -46,6 +54,9 @@ jobs:
       ME3_MANAGED_CALLBACK_URL: ${{ inputs.callback_url }}
       ME3_MANAGED_INSTALLATION_ID: ${{ inputs.installation_id }}
       ME3_MANAGED_RELEASE_TAG: ${{ inputs.release_tag }}
+      ME3_MANAGED_CANONICAL_HOSTNAME: ${{ inputs.canonical_hostname }}
+      ME3_MANAGED_ZONE_ID: ${{ inputs.zone_id }}
+      ME3_MANAGED_ORIGIN: https://${{ inputs.canonical_hostname }}
       ME3_MANAGED_EMAIL_GATEWAY_ORIGIN: https://api.me3.app
       WORKER_NAME: ${{ inputs.worker_name }}
       D1_NAME: ${{ inputs.d1_name }}
@@ -62,6 +73,8 @@ jobs:
           test "$D1_NAME" = "${WORKER_NAME}-d1"
           test "$R2_NAME" = "${WORKER_NAME}-r2"
           [[ "$ME3_MANAGED_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$ME3_MANAGED_CANONICAL_HOSTNAME" =~ ^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\.me3\.app$ ]]
+          [[ "$ME3_MANAGED_ZONE_ID" =~ ^[0-9a-fA-F]{32}$ ]]
           test "$ME3_MANAGED_CALLBACK_URL" = "https://api.me3.app/api/managed-install/provisioning/callback"
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
@@ -96,7 +109,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Configure the private managed deployment
-        run: node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" false "$ME3_MANAGED_INSTALLATION_ID" "$ME3_MANAGED_EMAIL_GATEWAY_ORIGIN"
+        run: node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" false "$ME3_MANAGED_INSTALLATION_ID" "$ME3_MANAGED_EMAIL_GATEWAY_ORIGIN" "$ME3_MANAGED_ORIGIN"
 
       - name: Provision isolated D1 and R2
         working-directory: source
@@ -179,17 +192,16 @@ jobs:
         run: |
           set -euo pipefail
           set +x
-          node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" true "$ME3_MANAGED_INSTALLATION_ID" "$ME3_MANAGED_EMAIL_GATEWAY_ORIGIN"
+          node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" false "$ME3_MANAGED_INSTALLATION_ID" "$ME3_MANAGED_EMAIL_GATEWAY_ORIGIN" "$ME3_MANAGED_ORIGIN"
           cd source
           pnpm exec wrangler deploy \
             --config wrangler.toml \
             --strict \
             --tag "$ME3_MANAGED_RELEASE_TAG" \
-            --message "Managed ME3 $ME3_MANAGED_RELEASE_TAG $ME3_MANAGED_INSTALLATION_ID" \
-            2>&1 | tee "$RUNNER_TEMP/me3-public-deploy.log"
-          origin="$(grep -Eo 'https://[^[:space:]]+\.workers\.dev' "$RUNNER_TEMP/me3-public-deploy.log" | tail -1)"
-          test -n "$origin"
-          printf 'ME3_MANAGED_ORIGIN=%s\n' "$origin" >> "$GITHUB_ENV"
+            --message "Managed ME3 $ME3_MANAGED_RELEASE_TAG $ME3_MANAGED_INSTALLATION_ID"
+
+      - name: Attach the permanent managed hostname
+        run: node control/scripts/attach-managed-custom-domain.mjs
 
       - name: Report deployment verification
         env:

@@ -1,22 +1,19 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
-import { useRoute, useRouter, type LocationQueryRaw } from "vue-router";
 import AppDialog from "../components/AppDialog.vue";
 import Button from "../components/Button.vue";
 import SocialAccountsPanel from "../components/SocialAccountsPanel.vue";
 import SocialCarouselEditor from "../components/SocialCarouselEditor.vue";
-import SocialPostingPlanDialog from "../components/SocialPostingPlanDialog.vue";
-import SocialSuggestionsPanel from "../components/SocialSuggestionsPanel.vue";
 import UiIcon from "../components/UiIcon.vue";
 import WorkspaceTabs from "../components/WorkspaceTabs.vue";
+import { socialPlatformIconPath } from "../utils/social-platform-icons";
 import { useSitesStore } from "../stores/sites";
 import {
   useSocialStore,
   type PostVersion,
-  type Publication,
   type PostLibraryItem,
-  type PostingPlan,
+  type PublicationStatus,
   type RenderAndAttachSocialCarouselResult,
   type SocialAccountRow,
   type SocialPlatform,
@@ -38,20 +35,15 @@ type WorkspaceMode = "drafts" | "scheduled" | "published";
 
 const sites = useSitesStore();
 const social = useSocialStore();
-const route = useRoute();
-const router = useRouter();
 const selectedSiteId = ref("");
 const posts = ref<SocialPostDetail[]>([]);
 const accounts = ref<SocialAccountRow[]>([]);
 const capabilities = ref<SocialPlatformCapabilities[]>([]);
-const publications = ref<Publication[]>([]);
-const publicationsLoading = ref(false);
 const activeMode = ref<WorkspaceMode>("drafts");
 const selectedPostId = ref<string | null>(null);
 const selectedVersionId = ref<string | null>(null);
 const editorBody = ref("");
 const editorAccountId = ref("");
-const scheduleLocal = ref("");
 const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
@@ -62,26 +54,16 @@ const composeBody = ref("");
 const composePlatforms = ref<SocialPlatform[]>([]);
 const composeError = ref("");
 const carouselEditorVersionId = ref<string | null>(null);
-const suggestionsOpen = ref(currentQueryParam("suggestions") === "open");
-const suggestionCount = ref(0);
-const postingPlanQueryId = computed(() => routeQueryText(route.query.postingPlan));
-const postingPlanOpen = ref(Boolean(postingPlanQueryId.value));
-const linkedPostingPlanId = ref(postingPlanQueryId.value);
+const showLibraryFilters = ref(false);
 const libraryQuery = ref("");
 const librarySource = ref("");
 const libraryPlatform = ref<SocialPlatform | "">("");
 const libraryAccountId = ref("");
-const libraryApproval = ref<PostVersion["approvalStatus"] | "">("");
-const libraryDelivery = ref<Publication["status"] | "">("");
-const libraryTag = ref("");
+const libraryDelivery = ref<PublicationStatus | "">("");
 const libraryPublishedFrom = ref("");
 const libraryPublishedTo = ref("");
 const libraryResults = ref<PostLibraryItem[] | null>(null);
 const librarySearching = ref(false);
-const tagEditor = ref("");
-const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-
-const linkedPublicationId = ref(currentQueryParam("publicationId"));
 
 const currentSite = computed(
   () => sites.sites.find((site) => site.id === selectedSiteId.value) || null,
@@ -91,10 +73,6 @@ const activeAccounts = computed(() =>
   accounts.value.filter(
     (account) => account.siteId === selectedSiteId.value && account.status === "active",
   ),
-);
-
-const capabilityMap = computed(
-  () => new Map(capabilities.value.map((capability) => [capability.platform, capability])),
 );
 
 const libraryVersionIds = computed(() =>
@@ -120,21 +98,6 @@ const visiblePosts = computed(() =>
         Date.parse(right.post.updatedAt) - Date.parse(left.post.updatedAt),
     ),
 );
-
-const visiblePostGroups = computed(() => {
-  const groups = new Map<string, { key: string; label: string; posts: SocialPostDetail[] }>();
-  for (const detail of visiblePosts.value) {
-    const key = detail.post.sourceRef || `${detail.post.sourceType}:${detail.post.sourceSnapshot}`;
-    const existing = groups.get(key) || {
-      key,
-      label: `${sourceLabel(detail)} · ${sourcePreview(detail)}`,
-      posts: [],
-    };
-    existing.posts.push(detail);
-    groups.set(key, existing);
-  }
-  return [...groups.values()];
-});
 
 const modeTabs = computed(() =>
   (["drafts", "scheduled", "published"] as WorkspaceMode[]).map((id) => ({
@@ -185,27 +148,6 @@ const selectedPostReadOnly = computed(
   () => selectedPost.value?.post.sourceType === "legacy_content_bank_read_only",
 );
 
-const selectedCapability = computed(() =>
-  selectedVersion.value
-    ? capabilityMap.value.get(selectedVersion.value.platform) || null
-    : null,
-);
-
-const scheduledPublication = computed(
-  () => publications.value.find((publication) => publication.status === "scheduled") || null,
-);
-
-const hasPublishedPublication = computed(() =>
-  publications.value.some((publication) => publication.status === "published"),
-);
-
-const matchingAccounts = computed(() => {
-  const platform = selectedVersion.value?.platform;
-  return platform
-    ? activeAccounts.value.filter((account) => account.platform === platform)
-    : [];
-});
-
 const editorDirty = computed(() => {
   const version = selectedVersion.value;
   return Boolean(
@@ -213,12 +155,6 @@ const editorDirty = computed(() => {
       (editorBody.value.trim() !== version.bodyText ||
         (editorAccountId.value || null) !== version.targetAccountId),
   );
-});
-
-const tagsDirty = computed(() => {
-  const detail = selectedPost.value;
-  if (!detail) return false;
-  return normalizeTagInput(tagEditor.value).join("\u0000") !== detail.post.tags.join("\u0000");
 });
 
 const canApprove = computed(() =>
@@ -230,34 +166,8 @@ const canApprove = computed(() =>
   ),
 );
 
-const canSchedule = computed(() =>
-  Boolean(
-    !selectedPostReadOnly.value &&
-      selectedCapability.value?.schedule &&
-      selectedVersion.value?.approvalStatus === "approved" &&
-      !editorDirty.value &&
-      scheduleLocal.value,
-  ),
-);
-
-const canPublish = computed(() =>
-  Boolean(
-    !selectedPostReadOnly.value &&
-      selectedCapability.value?.publish &&
-      selectedVersion.value?.approvalStatus === "approved" &&
-      !editorDirty.value &&
-      matchingAccounts.value.some((account) => account.id === editorAccountId.value) &&
-      !["queued", "publishing"].includes(
-        selectedVersion.value?.publicationStatus || "",
-      ) &&
-      !publications.value.some((publication) =>
-        publication.status === "queued" || publication.status === "publishing"
-      ),
-  ),
-);
-
 const composeOptions = computed(() =>
-  capabilities.value.filter((item) => item.draft).map((item) => ({
+  capabilities.value.filter((item) => item.draft && activeAccounts.value.some((account) => account.platform === item.platform)).map((item) => ({
     ...item,
     label: platformLabel(item.platform),
     connected: activeAccounts.value.some((account) => account.platform === item.platform),
@@ -268,7 +178,16 @@ const composeCanSave = computed(
   () => Boolean(composeBody.value.trim() && composePlatforms.value.length),
 );
 
-const minimumScheduleLocal = computed(() => toLocalInput(new Date(Date.now() + 60_000)));
+const advancedFiltersActive = computed(() =>
+  Boolean(
+    librarySource.value ||
+      libraryPlatform.value ||
+      libraryAccountId.value ||
+      libraryDelivery.value ||
+      libraryPublishedFrom.value ||
+      libraryPublishedTo.value,
+  ),
+);
 
 function platformLabel(platform: string): string {
   if (platform === "x") return "X";
@@ -283,20 +202,41 @@ function platformShortLabel(platform: SocialPlatform): string {
   return "X";
 }
 
-function sourceLabel(detail: SocialPostDetail): string {
-  if (detail.post.sourceType === "journal") return "Journal";
-  if (detail.post.sourceType === "mission_task") return "Mission Control";
-  if (detail.post.sourceType === "site") return "Site";
-  if (detail.post.sourceType === "file") return "File";
-  if (detail.post.sourceType === "script") return "Script";
-  if (detail.post.sourceType === "legacy_content_bank_read_only") return "Imported post";
-  return "Pasted text";
+function platformIconPath(platform: SocialPlatform): string {
+  return socialPlatformIconPath(platform);
 }
 
-function sourcePreview(detail: SocialPostDetail): string {
-  const firstLine = detail.post.sourceText.split("\n").map((line) => line.trim()).find(Boolean) ||
-    detail.post.ideaText;
-  return firstLine.length > 58 ? `${firstLine.slice(0, 55)}…` : firstLine;
+function previewAccountName(version: PostVersion): string {
+  const account = accounts.value.find((item) => item.id === version.targetAccountId);
+  return account?.displayName || account?.handle || "Your account";
+}
+
+function previewAccountHandle(version: PostVersion): string {
+  const account = accounts.value.find((item) => item.id === version.targetAccountId);
+  return account?.handle ? `@${account.handle.replace(/^@/, "")}` : "@you";
+}
+
+function isVideoAsset(asset: PostVersion["assetManifest"][number]): boolean {
+  return asset.kind === "video" || asset.mimeType?.startsWith("video/") === true;
+}
+
+function previewLinkUrl(bodyText: string): string | null {
+  return bodyText.match(/https?:\/\/[^\s<>()]+/i)?.[0] || null;
+}
+
+function previewLinkHost(bodyText: string): string {
+  const url = previewLinkUrl(bodyText);
+  if (!url) return "";
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function externalSourceUrl(detail: SocialPostDetail): string | null {
+  const sourceRef = detail.post.sourceRef?.trim();
+  return sourceRef && /^https?:\/\//i.test(sourceRef) ? sourceRef : null;
 }
 
 function versionState(version: PostVersion): string {
@@ -308,14 +248,6 @@ function versionState(version: PostVersion): string {
   if (version.scheduledFor) return "Scheduled";
   if (version.approvalStatus === "approved") return "Approved";
   return "Draft";
-}
-
-function publicationStateLabel(status: Publication["status"]): string {
-  return status[0]!.toUpperCase() + status.slice(1);
-}
-
-function publicationMoment(publication: Publication): string | null {
-  return publication.publishedAt || publication.scheduledFor || publication.queuedAt || publication.createdAt;
 }
 
 function versionMode(version: PostVersion): WorkspaceMode {
@@ -350,11 +282,6 @@ function formatDate(value: string | null): string {
   }).format(date);
 }
 
-function toLocalInput(value: Date): string {
-  const shifted = new Date(value.getTime() - value.getTimezoneOffset() * 60_000);
-  return shifted.toISOString().slice(0, 16);
-}
-
 function setActiveMode(value: string) {
   if (!(value === "drafts" || value === "scheduled" || value === "published")) return;
   activeMode.value = value;
@@ -363,34 +290,8 @@ function setActiveMode(value: string) {
 
 function selectPost(detail: SocialPostDetail) {
   selectedPostId.value = detail.post.id;
-  tagEditor.value = detail.post.tags.join(", ");
   const version = visibleVersionsFor(detail)[0] || null;
   selectVersion(version);
-}
-
-function normalizeTagInput(value: string): string[] {
-  return [...new Set(value.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean))];
-}
-
-async function saveTags() {
-  const detail = selectedPost.value;
-  if (!detail || selectedPostReadOnly.value || !tagsDirty.value) return;
-  saving.value = true;
-  error.value = "";
-  try {
-    const updated = await social.updateSocialPost(detail.post.id, {
-      tags: normalizeTagInput(tagEditor.value),
-      expectedUpdatedAt: detail.post.updatedAt,
-    });
-    posts.value = posts.value.map((item) => item.post.id === updated.post.id ? updated : item);
-    tagEditor.value = updated.post.tags.join(", ");
-    notice.value = "Post tags saved.";
-  } catch (value) {
-    social.setErrorFromApi(value, "Failed to save Post tags");
-    error.value = social.error || "Failed to save Post tags";
-  } finally {
-    saving.value = false;
-  }
 }
 
 async function searchLibrary() {
@@ -404,9 +305,7 @@ async function searchLibrary() {
       source: librarySource.value || undefined,
       platform: libraryPlatform.value || undefined,
       accountId: libraryAccountId.value || undefined,
-      approvalStatus: libraryApproval.value || undefined,
       deliveryState: libraryDelivery.value || undefined,
-      tag: libraryTag.value || undefined,
       publishedFrom: libraryPublishedFrom.value
         ? new Date(`${libraryPublishedFrom.value}T00:00:00`).toISOString()
         : undefined,
@@ -429,13 +328,16 @@ function clearLibrarySearch() {
   librarySource.value = "";
   libraryPlatform.value = "";
   libraryAccountId.value = "";
-  libraryApproval.value = "";
   libraryDelivery.value = "";
-  libraryTag.value = "";
   libraryPublishedFrom.value = "";
   libraryPublishedTo.value = "";
   libraryResults.value = null;
   ensureVisibleSelection();
+}
+
+async function applyLibraryFilters() {
+  await searchLibrary();
+  showLibraryFilters.value = false;
 }
 
 function selectVersion(version: PostVersion | null) {
@@ -444,12 +346,9 @@ function selectVersion(version: PostVersion | null) {
   }
   selectedVersionId.value = version?.id || null;
   editorBody.value = version?.bodyText || "";
-  editorAccountId.value = version?.targetAccountId || "";
-  scheduleLocal.value = version?.scheduledFor
-    ? toLocalInput(new Date(version.scheduledFor))
-    : "";
-  publications.value = [];
-  if (version) void loadVersionPublications(version.id);
+  editorAccountId.value = version?.targetAccountId || activeAccounts.value.find(
+    (account) => account.platform === version?.platform,
+  )?.id || "";
 }
 
 function openCarouselEditor() {
@@ -485,24 +384,6 @@ function handleCarouselAttached(result: RenderAndAttachSocialCarouselResult) {
     : "Carousel output changed. Approval was reset and scheduled Publications were cancelled.";
 }
 
-async function loadVersionPublications(versionId: string) {
-  publicationsLoading.value = true;
-  try {
-    const next = await social.listPostVersionPublications(versionId);
-    if (selectedVersionId.value === versionId) {
-      publications.value = next;
-      await focusLinkedPublication();
-    }
-  } catch (value) {
-    if (selectedVersionId.value === versionId) {
-      social.setErrorFromApi(value, "Failed to load Publication history");
-      error.value = social.error || "Failed to load Publication history";
-    }
-  } finally {
-    if (selectedVersionId.value === versionId) publicationsLoading.value = false;
-  }
-}
-
 function ensureVisibleSelection() {
   const current = visiblePosts.value.find((detail) => detail.post.id === selectedPostId.value);
   if (current) {
@@ -511,7 +392,6 @@ function ensureVisibleSelection() {
     selectPost(visiblePosts.value[0]);
   } else {
     selectedPostId.value = null;
-    tagEditor.value = "";
     selectVersion(null);
   }
 }
@@ -525,7 +405,6 @@ function selectLinkedSocialRecord(): boolean {
   if (!detail || !version) return false;
   activeMode.value = versionMode(version);
   selectedPostId.value = detail.post.id;
-  tagEditor.value = detail.post.tags.join(", ");
   selectVersion(version);
   return true;
 }
@@ -536,17 +415,15 @@ async function loadWorkspace() {
   loading.value = true;
   error.value = "";
   try {
-    const [nextPosts, nextAccounts, status, nextSuggestions] = await Promise.all([
+    const [nextPosts, nextAccounts, status] = await Promise.all([
       social.fetchSocialPosts(requestedSiteId),
       social.fetchSocialAccounts(),
       social.fetchSocialStatus(),
-      social.fetchSocialSuggestions(requestedSiteId),
     ]);
     if (selectedSiteId.value !== requestedSiteId) return;
     posts.value = nextPosts;
     accounts.value = nextAccounts;
     capabilities.value = status.plugin.platformCapabilities || [];
-    suggestionCount.value = nextSuggestions.length;
     if (!selectLinkedSocialRecord()) ensureVisibleSelection();
   } catch (value) {
     social.setErrorFromApi(value, "Failed to load social posts");
@@ -556,41 +433,6 @@ async function loadWorkspace() {
   }
 }
 
-function handleChosenSuggestion(post: SocialPostDetail) {
-  posts.value = [post, ...posts.value.filter((detail) => detail.post.id !== post.post.id)];
-  activeMode.value = "drafts";
-  selectPost(post);
-  notice.value = "Suggestion saved as a separate Source-backed Post for review.";
-}
-
-function handlePostingPlanConfirmed(plan: PostingPlan) {
-  notice.value = `${plan.items.length} Post${plan.items.length === 1 ? "" : "s"} scheduled from the confirmed Posting plan.`;
-  activeMode.value = "scheduled";
-  void loadWorkspace();
-}
-
-function handlePostingPlanSiteChange(siteId: string) {
-  if (siteId && siteId !== selectedSiteId.value) selectedSiteId.value = siteId;
-}
-
-function openFreshPostingPlan() {
-  linkedPostingPlanId.value = null;
-  postingPlanOpen.value = true;
-  if (postingPlanQueryId.value) void replacePostingPlanQuery(null);
-}
-
-function closePostingPlan() {
-  postingPlanOpen.value = false;
-  linkedPostingPlanId.value = null;
-  if (postingPlanQueryId.value) void replacePostingPlanQuery(null);
-}
-
-async function replacePostingPlanQuery(planId: string | null) {
-  const query: LocationQueryRaw = { ...route.query };
-  if (planId) query.postingPlan = planId;
-  else delete query.postingPlan;
-  await router.replace({ path: route.path, query });
-}
 
 function replaceVersion(version: PostVersion) {
   posts.value = posts.value.map((detail) =>
@@ -649,114 +491,10 @@ async function approveVersion() {
   }
 }
 
-async function scheduleVersion() {
-  const version = selectedVersion.value;
-  if (!version || selectedPostReadOnly.value || !canSchedule.value) return;
-  const date = new Date(scheduleLocal.value);
-  if (Number.isNaN(date.getTime())) return;
-  saving.value = true;
-  error.value = "";
-  notice.value = "";
-  try {
-    await social.createPostVersionPublication(version.id, {
-      scheduledFor: date.toISOString(),
-      timezone: browserTimezone,
-      requestContext: { surface: "social_workspace" },
-    });
-    activeMode.value = "scheduled";
-    selectedPostId.value = version.postId;
-    await loadWorkspace();
-    notice.value = "Post scheduled using this exact approved Version.";
-  } catch (value) {
-    social.setErrorFromApi(value, "Failed to schedule this Version");
-    error.value = social.error || "Failed to schedule this Version";
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function removeSchedule() {
-  const version = selectedVersion.value;
-  if (!version || selectedPostReadOnly.value) return;
-  saving.value = true;
-  try {
-    const publication = scheduledPublication.value ||
-      (await social.listPostVersionPublications(version.id)).find(
-        (item) => item.status === "scheduled",
-      );
-    if (!publication) throw new Error("No scheduled Publication found");
-    await social.cancelPublication(publication.id);
-    activeMode.value = "drafts";
-    selectedPostId.value = version.postId;
-    await loadWorkspace();
-    notice.value = "Post moved back to Drafts.";
-  } catch (value) {
-    social.setErrorFromApi(value, "Failed to remove the schedule");
-    error.value = social.error || "Failed to remove the schedule";
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function publishVersion() {
-  const version = selectedVersion.value;
-  if (!version || selectedPostReadOnly.value || !canPublish.value) return;
-  if (!window.confirm(`Publish this exact approved ${platformLabel(version.platform)} Version now?`)) {
-    return;
-  }
-  saving.value = true;
-  error.value = "";
-  try {
-    const publication = await social.publishPostVersion(version.id);
-    activeMode.value = publication.status === "published" ? "published" : "scheduled";
-    selectedPostId.value = version.postId;
-    await loadWorkspace();
-    notice.value =
-      publication.status === "published" ? "Post published." : "Post is publishing.";
-  } catch (value) {
-    social.setErrorFromApi(value, "Failed to publish this Version");
-    error.value = social.error || "Failed to publish this Version";
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function resolveUnknownOutcome(outcome: "published" | "not_published") {
-  const version = selectedVersion.value;
-  if (!version || version.failureClass !== "outcome_unknown") return;
-  let platformPostUrl: string | undefined;
-  if (outcome === "published") {
-    const value = window.prompt("Paste the published post URL so ME3 can attach it to the history:");
-    if (!value?.trim()) return;
-    platformPostUrl = value.trim();
-  } else if (!window.confirm("Confirm that you checked the platform and no post was created?")) {
-    return;
-  }
-  saving.value = true;
-  try {
-    const history = publications.value.length
-      ? publications.value
-      : await social.listPostVersionPublications(version.id);
-    const publication = history.find(
-      (item) => item.status === "publishing" && item.failureClass === "outcome_unknown",
-    );
-    if (!publication) throw new Error("No Publication needs outcome resolution");
-    await social.resolvePublicationOutcome(publication.id, outcome, platformPostUrl);
-    activeMode.value = outcome === "published" ? "published" : "drafts";
-    selectedPostId.value = version.postId;
-    await loadWorkspace();
-  } catch (value) {
-    social.setErrorFromApi(value, "Could not resolve the Publication outcome");
-    error.value = social.error || "Could not resolve the Publication outcome";
-  } finally {
-    saving.value = false;
-  }
-}
-
 function openCompose() {
   composeBody.value = "";
   composeError.value = "";
-  const connected = composeOptions.value.filter((item) => item.connected);
+  const connected = composeOptions.value;
   composePlatforms.value = connected.length === 1 ? [connected[0]!.platform] : [];
   composeOpen.value = true;
 }
@@ -788,7 +526,7 @@ async function saveComposedPost() {
         return {
           platform,
           bodyText: sourceText,
-          targetAccountId: platformAccounts.length === 1 ? platformAccounts[0]!.id : null,
+          targetAccountId: platformAccounts[0]!.id,
         };
       }),
     });
@@ -809,12 +547,6 @@ watch(selectedSiteId, () => {
   void loadWorkspace();
 });
 
-watch(postingPlanQueryId, (planId, previousPlanId) => {
-  linkedPostingPlanId.value = planId;
-  if (planId) postingPlanOpen.value = true;
-  else if (previousPlanId) postingPlanOpen.value = false;
-});
-
 onMounted(async () => {
   if (sites.sites.length === 0) await sites.fetchSites();
   const linkedSiteId = currentQueryParam("siteId");
@@ -829,25 +561,6 @@ function currentQueryParam(name: string): string | null {
   return new URLSearchParams(window.location.search).get(name)?.trim() || null;
 }
 
-function routeQueryText(value: unknown): string | null {
-  const candidate = Array.isArray(value) ? value[0] : value;
-  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
-}
-
-function publicationElementId(publicationId: string): string {
-  return `social-publication-${encodeURIComponent(publicationId)}`;
-}
-
-async function focusLinkedPublication() {
-  const publicationId = linkedPublicationId.value;
-  if (!publicationId || !publications.value.some((item) => item.id === publicationId)) {
-    return;
-  }
-  await nextTick();
-  const element = document.getElementById(publicationElementId(publicationId));
-  element?.focus({ preventScroll: true });
-  element?.scrollIntoView?.({ block: "center" });
-}
 </script>
 
 <template>
@@ -860,6 +573,39 @@ async function focusLinkedPublication() {
       </div>
 
       <header class="social-toolbar">
+        <form class="social-toolbar__search" role="search" @submit.prevent="searchLibrary">
+          <label>
+            <span class="sr-only">Search Post library</span>
+            <UiIcon name="Search" :size="17" aria-hidden="true" />
+            <input v-model="libraryQuery" type="search" placeholder="Search posts" />
+          </label>
+          <Button
+            v-if="libraryResults !== null"
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Clear post search"
+            title="Clear search"
+            @click="clearLibrarySearch"
+          >
+            <UiIcon name="X" :size="16" aria-hidden="true" />
+          </Button>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Open advanced search filters"
+            title="Advanced filters"
+            :class="{ 'library-filter-button--active': advancedFiltersActive }"
+            @click="showLibraryFilters = true"
+          >
+            <UiIcon name="SlidersHorizontal" :size="17" aria-hidden="true" />
+          </Button>
+        </form>
         <WorkspaceTabs
           :tabs="modeTabs"
           :model-value="activeMode"
@@ -881,48 +627,17 @@ async function focusLinkedPublication() {
             <UiIcon name="Settings" :size="18" aria-hidden="true" />
           </Button>
           <Button
-            color="outline"
-            shape="soft"
-            size="compact"
-            type="button"
-            :disabled="!currentSite"
-            @click="suggestionsOpen = true"
-          >
-            Suggestions<span v-if="suggestionCount"> ({{ suggestionCount }})</span>
-          </Button>
-          <Button
-            color="outline"
-            shape="soft"
-            size="compact"
-            type="button"
-            :disabled="!currentSite || activeAccounts.length === 0"
-            @click="openFreshPostingPlan"
-          >
-            Posting plan
-          </Button>
-          <Button
-            color="outline"
-            shape="soft"
-            size="compact"
-            type="button"
-            :disabled="!currentSite"
-            @click="openCompose"
-          >
-            <template #icon><UiIcon name="SquarePen" :size="16" aria-hidden="true" /></template>
-            New Post
-          </Button>
-          <Button
             color="ghost"
             shape="soft"
             size="compact"
             icon-only
             type="button"
-            aria-label="Refresh social posts"
-            title="Refresh"
-            :disabled="loading || !currentSite"
-            @click="loadWorkspace"
+            aria-label="New Post"
+            title="New Post"
+            :disabled="!currentSite || composeOptions.length === 0"
+            @click="openCompose"
           >
-            <UiIcon name="RefreshCw" :size="18" aria-hidden="true" />
+            <UiIcon name="SquarePen" :size="18" aria-hidden="true" />
           </Button>
         </div>
       </header>
@@ -934,172 +649,67 @@ async function focusLinkedPublication() {
 
       <div v-else class="social-workspace" :aria-busy="loading">
         <section class="post-list" aria-label="Social posts">
-          <form class="library-search" role="search" @submit.prevent="searchLibrary">
-            <label>
-              <span class="sr-only">Search Post library</span>
-              <input v-model="libraryQuery" type="search" placeholder="Search Source, topic, Post, or tag…" />
-            </label>
-            <div class="library-search__actions">
-              <Button color="outline" shape="soft" size="compact" type="submit" :disabled="librarySearching">
-                {{ librarySearching ? 'Searching…' : 'Search' }}
-              </Button>
-              <Button v-if="libraryResults !== null" color="ghost" shape="soft" size="compact" type="button" @click="clearLibrarySearch">
-                Clear
-              </Button>
-            </div>
-            <details class="library-filters">
-              <summary>Filters</summary>
-              <div class="library-filter-grid">
-                <label>
-                  <span>Source title or reference</span>
-                  <input v-model="librarySource" />
-                </label>
-                <label>
-                  <span>Platform</span>
-                  <select v-model="libraryPlatform">
-                    <option value="">All platforms</option>
-                    <option value="linkedin">LinkedIn</option>
-                    <option value="x">X</option>
-                    <option value="instagram">Instagram</option>
-                    <option value="instagram_business">Instagram Business</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Account</span>
-                  <select v-model="libraryAccountId">
-                    <option value="">All accounts</option>
-                    <option v-for="account in activeAccounts" :key="account.id" :value="account.id">
-                      {{ account.displayName || account.handle || platformLabel(account.platform) }}
-                    </option>
-                  </select>
-                </label>
-                <label>
-                  <span>Approval</span>
-                  <select v-model="libraryApproval">
-                    <option value="">Any approval</option>
-                    <option value="draft">Draft</option>
-                    <option value="approved">Approved</option>
-                    <option value="rejected">Rejected</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Delivery</span>
-                  <select v-model="libraryDelivery">
-                    <option value="">Any delivery</option>
-                    <option value="scheduled">Scheduled</option>
-                    <option value="queued">Queued</option>
-                    <option value="publishing">Publishing</option>
-                    <option value="published">Published</option>
-                    <option value="failed">Failed</option>
-                    <option value="cancelled">Cancelled</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Tag</span>
-                  <input v-model="libraryTag" />
-                </label>
-                <label>
-                  <span>Published from</span>
-                  <input v-model="libraryPublishedFrom" type="date" />
-                </label>
-                <label>
-                  <span>Published before</span>
-                  <input v-model="libraryPublishedTo" type="date" />
-                </label>
-              </div>
-            </details>
-            <p v-if="libraryResults !== null" class="library-result-count" role="status">
-              {{ libraryResults.length }} matching Version{{ libraryResults.length === 1 ? '' : 's' }}<template v-if="libraryResultBreakdown"> · {{ libraryResultBreakdown }}</template>
-            </p>
-          </form>
+          <p v-if="libraryResults !== null" class="library-result-count" role="status">
+            {{ libraryResults.length }} matching Version{{ libraryResults.length === 1 ? '' : 's' }}<template v-if="libraryResultBreakdown"> · {{ libraryResultBreakdown }}</template>
+          </p>
           <div v-if="loading" class="empty-state">Loading social posts…</div>
           <div v-else-if="visiblePosts.length === 0" class="empty-state">
             <strong>{{ libraryResults !== null ? 'No matching Posts.' : `No ${activeMode} yet.` }}</strong>
-            <span v-if="activeMode === 'drafts' && libraryResults === null">Write a Post or ask the agent to repurpose a Source.</span>
+            <span v-if="activeMode === 'drafts' && libraryResults === null">Write a Post or ask the agent to repurpose a journal entry, blog post, or project task.</span>
             <Button
               v-if="activeMode === 'drafts' && libraryResults === null"
               color="outline"
               shape="soft"
               size="compact"
               type="button"
+              :disabled="composeOptions.length === 0"
               @click="openCompose"
             >
               Write a Post
             </Button>
           </div>
           <template v-else>
-            <section
-              v-for="group in visiblePostGroups"
-              :key="group.key"
-              class="post-source-group"
-              :aria-label="`Posts from ${group.label}`"
+            <button
+              v-for="detail in visiblePosts"
+              :key="detail.post.id"
+              type="button"
+              class="post-row"
+              :class="{ 'post-row--active': selectedPostId === detail.post.id }"
+              :aria-current="selectedPostId === detail.post.id ? 'true' : undefined"
+              @click="selectPost(detail)"
             >
-              <h2>{{ group.label }}</h2>
-              <button
-                v-for="detail in group.posts"
-                :key="detail.post.id"
-                type="button"
-                class="post-row"
-                :class="{ 'post-row--active': selectedPostId === detail.post.id }"
-                :aria-current="selectedPostId === detail.post.id ? 'true' : undefined"
-                @click="selectPost(detail)"
-              >
-                <span class="post-row__meta">
-                  <span>Post</span>
-                  <time :datetime="detail.post.updatedAt">{{ formatDate(detail.post.updatedAt) }}</time>
-                </span>
-                <strong>{{ detail.post.ideaText }}</strong>
-                <span class="post-row__footer">
-                  <span class="platform-list">
-                    <span v-for="version in visibleVersionsFor(detail)" :key="version.id" class="platform-chip">
-                      {{ platformLabel(version.platform) }}
-                    </span>
+              <span class="post-row__meta">
+                <time :datetime="detail.post.updatedAt">{{ formatDate(detail.post.updatedAt) }}</time>
+              </span>
+              <strong>{{ detail.post.ideaText }}</strong>
+              <span class="post-row__footer">
+                <span class="platform-list">
+                  <span v-for="version in visibleVersionsFor(detail)" :key="version.id" class="platform-chip">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="platformIconPath(version.platform)" /></svg>
+                    <span class="sr-only">{{ platformLabel(version.platform) }}</span>
                   </span>
-                  <span class="row-status">{{ postStatus(detail) }}</span>
                 </span>
-              </button>
-            </section>
+                <span class="row-status">{{ postStatus(detail) }}</span>
+              </span>
+            </button>
           </template>
         </section>
 
         <section v-if="selectedPost" class="post-detail" aria-live="polite">
           <header class="detail-header">
             <div>
-              <div class="detail-meta">
-                <span>{{ sourceLabel(selectedPost) }}</span>
-                <span>Created by {{ selectedPost.post.createdBy === 'agent' ? 'agent' : 'you' }}</span>
-              </div>
               <h2>{{ selectedPost.post.ideaText }}</h2>
+              <a
+                v-if="externalSourceUrl(selectedPost)"
+                class="source-link"
+                :href="externalSourceUrl(selectedPost)!"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View source <UiIcon name="ExternalLink" :size="14" aria-hidden="true" />
+              </a>
             </div>
           </header>
-
-          <details class="source-context">
-            <summary>View Source</summary>
-            <p>{{ selectedPost.post.sourceText }}</p>
-          </details>
-
-          <div class="post-tags">
-            <label class="field">
-              <span>Tags</span>
-              <input
-                v-model="tagEditor"
-                placeholder="launch, founder, product"
-                :readonly="selectedPostReadOnly"
-                :disabled="saving"
-              />
-            </label>
-            <Button
-              v-if="!selectedPostReadOnly"
-              color="outline"
-              shape="soft"
-              size="compact"
-              type="button"
-              :disabled="saving || !tagsDirty"
-              @click="saveTags"
-            >
-              Save tags
-            </Button>
-          </div>
 
           <aside
             v-if="selectedPostReadOnly"
@@ -1129,37 +739,14 @@ async function focusLinkedPublication() {
 
           <div v-if="selectedVersion" class="version-workspace">
             <div class="version-editor">
-              <div v-if="selectedVersion.failureClass" class="recovery-banner" role="alert">
-                <strong>Publishing needs attention</strong>
-                <span>{{ selectedVersion.errorMessage || 'Review this Publication before retrying.' }}</span>
-                <div v-if="selectedVersion.failureClass === 'outcome_unknown'" class="inline-actions">
-                  <Button color="outline" shape="soft" size="compact" type="button" @click="resolveUnknownOutcome('published')">
-                    It was published
-                  </Button>
-                  <Button color="outline" shape="soft" size="compact" type="button" @click="resolveUnknownOutcome('not_published')">
-                    It was not published
-                  </Button>
-                </div>
-              </div>
-
               <label class="field">
-                <span>{{ platformLabel(selectedVersion.platform) }} Version</span>
+                <span class="sr-only">Post text</span>
                 <textarea
                   v-model="editorBody"
                   rows="10"
                   :disabled="saving"
                   :readonly="selectedPostReadOnly"
                 />
-              </label>
-
-              <label class="field">
-                <span>Account</span>
-                <select v-model="editorAccountId" :disabled="saving || selectedPostReadOnly">
-                  <option value="">Choose an account</option>
-                  <option v-for="account in matchingAccounts" :key="account.id" :value="account.id">
-                    {{ account.displayName || account.handle || platformLabel(account.platform) }}
-                  </option>
-                </select>
               </label>
 
               <div v-if="!selectedPostReadOnly" class="editor-actions">
@@ -1188,121 +775,66 @@ async function focusLinkedPublication() {
               </section>
             </div>
 
-            <aside class="post-preview" aria-label="Post preview">
-              <div class="preview-heading">
-                <span>{{ platformLabel(selectedVersion.platform) }} preview</span>
-                <span>{{ versionState(selectedVersion) }}</span>
+            <aside :class="['post-preview', `post-preview--${selectedVersion.platform}`]" aria-label="Post preview">
+              <div class="preview-platform-bar">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="platformIconPath(selectedVersion.platform)" /></svg>
+                <span>{{ platformLabel(selectedVersion.platform) }}</span>
+              </div>
+              <div class="preview-profile">
+                <span class="preview-avatar">{{ previewAccountName(selectedVersion).slice(0, 1).toUpperCase() }}</span>
+                <span><strong>{{ previewAccountName(selectedVersion) }}</strong><small>{{ previewAccountHandle(selectedVersion) }} · now</small></span>
+                <UiIcon name="Ellipsis" :size="18" aria-hidden="true" />
               </div>
               <p>{{ editorBody || 'Your Post preview will appear here.' }}</p>
-              <img
-                v-if="selectedVersion.assetManifest[0]"
-                :src="selectedVersion.assetManifest[0].url"
-                :alt="
-                  selectedVersion.assetManifest[0].altText ||
-                  selectedVersion.assetManifest[0].filename ||
-                  'Post image'
-                "
-              />
+              <div
+                v-if="selectedVersion.assetManifest.length"
+                :class="[
+                  'preview-media',
+                  { 'preview-media--gallery': selectedVersion.assetManifest.length > 1 },
+                ]"
+              >
+                <template v-for="(asset, index) in selectedVersion.assetManifest" :key="`${asset.url}-${index}`">
+                  <video
+                    v-if="isVideoAsset(asset)"
+                    :src="asset.url"
+                    controls
+                    muted
+                    preload="metadata"
+                    :aria-label="asset.altText || asset.filename || 'Post video'"
+                  />
+                  <img
+                    v-else
+                    :src="asset.url"
+                    :alt="asset.altText || asset.filename || 'Post image'"
+                  />
+                </template>
+                <span v-if="selectedVersion.assetManifest.length > 1" class="preview-media__count">
+                  <UiIcon name="Copy" :size="14" aria-hidden="true" />
+                  {{ selectedVersion.assetManifest.length }}
+                </span>
+              </div>
+              <a
+                v-if="previewLinkUrl(editorBody)"
+                class="preview-link-card"
+                :href="previewLinkUrl(editorBody)!"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <span class="preview-link-card__eyebrow">{{ previewLinkHost(editorBody) }}</span>
+                <strong>{{ previewLinkUrl(editorBody) }}</strong>
+              </a>
               <a v-if="selectedVersion.platformPostUrl" :href="selectedVersion.platformPostUrl" target="_blank" rel="noopener noreferrer">
                 View published Post
               </a>
+              <div class="preview-actions" aria-hidden="true">
+                <UiIcon name="MessageCircle" :size="17" />
+                <UiIcon name="Redo" :size="17" />
+                <UiIcon name="Heart" :size="17" />
+                <UiIcon name="Send" :size="17" />
+              </div>
             </aside>
           </div>
 
-          <section v-if="selectedVersion" class="publication-panel" aria-labelledby="publication-title">
-            <div>
-              <h2 id="publication-title">
-                {{ selectedPostReadOnly ? 'Publication history' : 'Publish' }}
-              </h2>
-              <template v-if="selectedPostReadOnly">
-                <p>
-                  Existing Publication activity remains visible, but no new Publication can be created.
-                </p>
-                <p v-if="selectedVersion.scheduledFor">
-                  Preserved schedule: {{ formatDate(selectedVersion.scheduledFor) }} ·
-                  {{ selectedVersion.timezone }}
-                </p>
-              </template>
-              <p v-else-if="scheduledPublication">
-                Scheduled for {{ formatDate(scheduledPublication.scheduledFor) }} · {{ scheduledPublication.timezone }}
-              </p>
-              <p v-else-if="!selectedCapability?.schedule">
-                {{ selectedCapability?.reason || 'This platform is draft-only for now.' }}
-              </p>
-              <p v-else>Approve this exact account Version before scheduling it.</p>
-            </div>
-            <div v-if="!selectedPostReadOnly" class="publication-actions">
-              <Button
-                v-if="selectedCapability?.publish"
-                color="primary"
-                shape="soft"
-                size="compact"
-                type="button"
-                :disabled="saving || !canPublish"
-                @click="publishVersion"
-              >
-                {{ hasPublishedPublication ? 'Repost now' : 'Publish now' }}
-              </Button>
-              <template v-if="selectedCapability?.schedule">
-                <label>
-                  <span class="sr-only">Schedule date and time</span>
-                  <input
-                    v-model="scheduleLocal"
-                    type="datetime-local"
-                    :min="minimumScheduleLocal"
-                    :disabled="selectedVersion.approvalStatus !== 'approved' || editorDirty"
-                  />
-                </label>
-                <Button color="outline" shape="soft" size="compact" type="button" :disabled="saving || !canSchedule" @click="scheduleVersion">
-                  Schedule
-                </Button>
-                <Button v-if="scheduledPublication" color="ghost" shape="soft" size="compact" type="button" :disabled="saving" @click="removeSchedule">
-                  Remove schedule
-                </Button>
-              </template>
-            </div>
-          </section>
-
-          <section
-            v-if="selectedVersion"
-            class="publication-history"
-            aria-labelledby="publication-history-title"
-            :aria-busy="publicationsLoading"
-          >
-            <div class="publication-history__heading">
-              <h2 id="publication-history-title">Publication history</h2>
-              <span v-if="publicationsLoading" role="status">Loading Publication history…</span>
-            </div>
-            <p v-if="!publicationsLoading && publications.length === 0" class="publication-history__empty">
-              This Version has not been scheduled or published yet.
-            </p>
-            <ul v-else class="publication-history__list">
-              <li
-                v-for="publication in publications"
-                :id="publicationElementId(publication.id)"
-                :key="publication.id"
-                :class="{
-                  'publication-history__item--linked': linkedPublicationId === publication.id,
-                }"
-                :aria-current="linkedPublicationId === publication.id ? 'true' : undefined"
-                :tabindex="linkedPublicationId === publication.id ? -1 : undefined"
-              >
-                <span class="row-status">{{ publicationStateLabel(publication.status) }}</span>
-                <time v-if="publicationMoment(publication)" :datetime="publicationMoment(publication) || undefined">
-                  {{ formatDate(publicationMoment(publication)) }}
-                </time>
-                <a
-                  v-if="publication.platformPostUrl"
-                  :href="publication.platformPostUrl"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >View Post</a>
-                <span v-else-if="publication.errorMessage" class="publication-history__error">
-                  {{ publication.errorMessage }}
-                </span>
-              </li>
-            </ul>
-          </section>
         </section>
 
         <section v-else class="detail-empty" aria-label="No social Post selected">
@@ -1375,26 +907,29 @@ async function focusLinkedPublication() {
       </section>
     </AppDialog>
 
-    <SocialSuggestionsPanel
-      :open="suggestionsOpen"
-      :site-id="selectedSiteId"
-      :capabilities="capabilities"
-      :accounts="accounts"
-      @close="suggestionsOpen = false"
-      @count="suggestionCount = $event"
-      @chosen="handleChosenSuggestion"
-    />
-
-    <SocialPostingPlanDialog
-      :open="postingPlanOpen"
-      :site-id="selectedSiteId"
-      :accounts="accounts"
-      :capabilities="capabilities"
-      :initial-plan-id="linkedPostingPlanId"
-      @close="closePostingPlan"
-      @confirmed="handlePostingPlanConfirmed"
-      @site-change="handlePostingPlanSiteChange"
-    />
+    <AppDialog :open="showLibraryFilters" labelled-by="social-library-filters-title" @close="showLibraryFilters = false">
+      <form class="library-filters-dialog" @submit.prevent="applyLibraryFilters">
+        <header>
+          <div>
+            <h2 id="social-library-filters-title">Advanced filters</h2>
+          </div>
+          <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close advanced filters" @click="showLibraryFilters = false">
+            <UiIcon name="X" :size="17" aria-hidden="true" />
+          </Button>
+        </header>
+        <div class="library-filter-grid">
+          <label><span>Source title or reference</span><input v-model="librarySource" /></label>
+          <label><span>Platform</span><select v-model="libraryPlatform"><option value="">All platforms</option><option value="linkedin">LinkedIn</option><option value="x">X</option><option value="instagram">Instagram</option><option value="instagram_business">Instagram Business</option></select></label>
+          <label><span>Account</span><select v-model="libraryAccountId"><option value="">All accounts</option><option v-for="account in activeAccounts" :key="account.id" :value="account.id">{{ account.displayName || account.handle || platformLabel(account.platform) }}</option></select></label>
+          <label><span>Status</span><select v-model="libraryDelivery"><option value="">Any status</option><option value="scheduled">Scheduled</option><option value="queued">Queued</option><option value="publishing">Publishing</option><option value="published">Published</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select></label>
+          <fieldset class="library-date-range"><legend>Publication date range</legend><div><label><span>From</span><input v-model="libraryPublishedFrom" type="date" /></label><label><span>To</span><input v-model="libraryPublishedTo" type="date" /></label></div></fieldset>
+        </div>
+        <footer>
+          <Button color="ghost" shape="soft" size="compact" type="button" @click="clearLibrarySearch(); showLibraryFilters = false">Clear filters</Button>
+          <Button color="primary" shape="soft" size="compact" type="submit" :disabled="librarySearching">{{ librarySearching ? 'Searching…' : 'Apply filters' }}</Button>
+        </footer>
+      </form>
+    </AppDialog>
 
     <SocialCarouselEditor
       v-if="selectedPost && selectedVersion?.format === 'carousel'"
@@ -1429,7 +964,7 @@ async function focusLinkedPublication() {
 .social-main {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 20px 0 40px;
+  padding: 0 0 40px;
 }
 
 .state-banner {
@@ -1467,15 +1002,127 @@ async function focusLinkedPublication() {
   position: sticky;
   top: 0;
   z-index: 3;
-  justify-content: space-between;
-  padding: 10px 0 14px;
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto minmax(190px, 1fr);
+  margin-left: calc(var(--app-shell-mobile-nav-leading-padding) - 16px);
+  padding: var(--workspace-topbar-padding-block) 0 0;
   background: var(--ui-bg);
 }
 
-.toolbar-actions :deep(button),
-.library-search :deep(button) {
+.social-toolbar__search {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.social-toolbar__search label {
+  display: flex;
+  align-items: center;
+  width: min(100%, 310px);
+  min-height: 36px;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text-muted);
+}
+
+.social-toolbar__search input {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.social-toolbar__search label:focus-within {
+  border-color: var(--ui-accent);
+  outline: 2px solid var(--ui-accent-soft);
+}
+
+.social-toolbar__search input:focus {
+  outline: 0;
+}
+
+.library-filter-button--active {
+  color: var(--ui-accent) !important;
+  background: var(--ui-accent-soft) !important;
+}
+
+.toolbar-actions {
+  justify-content: flex-end;
+}
+
+.toolbar-actions :deep(button) {
   min-width: 44px;
   min-height: 44px;
+}
+
+.social-toolbar__more {
+  position: relative;
+}
+
+.social-toolbar__more > summary {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  list-style: none;
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-text-muted);
+  cursor: pointer;
+}
+
+.social-toolbar__more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.social-toolbar__more > summary:hover,
+.social-toolbar__more[open] > summary {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.social-toolbar__more > summary:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+.social-toolbar__menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  width: 190px;
+  padding: 5px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-md);
+}
+
+.social-toolbar__menu button {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.social-toolbar__menu button:hover:not(:disabled) {
+  background: var(--ui-surface-muted);
+}
+
+.social-toolbar__menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .social-workspace {
@@ -1501,7 +1148,14 @@ async function focusLinkedPublication() {
   background: var(--ui-surface);
 }
 
-.library-search__actions,
+.library-result-count {
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-text-muted);
+  font-size: 0.76rem;
+}
+
 .post-tags {
   display: flex;
   align-items: end;
@@ -1548,7 +1202,10 @@ async function focusLinkedPublication() {
   color: var(--ui-text-muted);
   font-size: 0.74rem;
   font-weight: 650;
+  overflow: hidden;
   line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .post-row {
@@ -1613,18 +1270,30 @@ async function focusLinkedPublication() {
   font-size: 0.72rem;
 }
 
+.platform-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.platform-chip svg,
+.preview-platform-bar svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
 .post-detail {
   min-width: 0;
   padding: 24px;
 }
 
-.detail-header h1 {
+.detail-header h2 {
   margin: 8px 0 0;
   font-size: clamp(1.25rem, 2vw, 1.75rem);
   line-height: 1.25;
 }
 
-.source-context,
 .publication-panel,
 .recovery-banner {
   margin-top: 18px;
@@ -1634,12 +1303,6 @@ async function focusLinkedPublication() {
   background: var(--ui-surface-muted);
 }
 
-.source-context summary {
-  cursor: pointer;
-  font-weight: 650;
-}
-
-.source-context p,
 .post-preview p {
   white-space: pre-wrap;
   line-height: 1.55;
@@ -1651,6 +1314,27 @@ async function focusLinkedPublication() {
 
 .post-tags .field {
   flex: 1;
+}
+
+.post-tags small {
+  color: var(--ui-text-muted);
+  font-size: 0.76rem;
+  font-weight: 400;
+}
+
+.source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 7px;
+  color: var(--ui-text-muted);
+  font-size: 0.82rem;
+  text-decoration: none;
+}
+
+.source-link:hover {
+  color: var(--ui-text);
+  text-decoration: underline;
 }
 
 .version-tabs {
@@ -1757,15 +1441,298 @@ input:focus {
 
 .post-preview {
   align-self: start;
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-md);
-  background: var(--ui-surface-muted);
+  background: #fff;
+  color: #111827;
 }
 
 .post-preview img {
   width: 100%;
-  border-radius: var(--ui-radius-sm);
+  display: block;
+}
+
+.preview-media {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  margin-top: 2px;
+  border-top: 1px solid #e5e7eb;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f1f5f9;
+}
+
+.preview-media--gallery {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.preview-media img,
+.preview-media video {
+  width: 100%;
+  min-height: 160px;
+  max-height: 340px;
+  object-fit: cover;
+  background: #0f172a;
+}
+
+.preview-media--gallery img,
+.preview-media--gallery video {
+  min-height: 130px;
+  max-height: 190px;
+}
+
+.preview-media__count {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: rgb(15 23 42 / 78%);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.preview-link-card {
+  display: grid;
+  gap: 3px;
+  margin: 0 14px 12px;
+  padding: 10px 11px;
+  border: 1px solid #d8e0e5;
+  border-radius: 11px;
+  background: #f8fafc;
+  color: #111827;
+  overflow: hidden;
+  text-decoration: none;
+}
+
+.preview-link-card:hover {
+  background: #f1f5f9;
+}
+
+.preview-link-card__eyebrow {
+  color: #64748b;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.preview-link-card strong {
+  overflow: hidden;
+  font-size: 0.76rem;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-platform-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 13px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.preview-profile {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 14px 4px;
+}
+
+.preview-profile > span:not(.preview-avatar) {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.preview-profile strong,
+.preview-profile small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-profile strong {
+  font-size: 0.8rem;
+}
+
+.preview-profile small {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.preview-avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  background: #dbe3ea;
+  color: #334155;
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.post-preview p {
+  margin: 10px 14px 14px;
+  font-size: 0.88rem;
+}
+
+.post-preview > a {
+  display: inline-block;
+  margin: 10px 14px;
+  color: #0a66c2;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.preview-actions {
+  display: flex;
+  justify-content: space-around;
+  padding: 10px 14px;
+  border-top: 1px solid #e5e7eb;
+  color: #64748b;
+}
+
+.post-preview--linkedin .preview-platform-bar {
+  color: #0a66c2;
+}
+
+.post-preview--linkedin .preview-profile {
+  padding-top: 12px;
+}
+
+.post-preview--linkedin .preview-actions {
+  justify-content: space-between;
+}
+
+.post-preview--x {
+  border-color: #cfd9de;
+  border-radius: 16px;
+}
+
+.post-preview--x .preview-platform-bar {
+  display: none;
+}
+
+.post-preview--x .preview-profile {
+  padding: 13px 14px 2px;
+}
+
+.post-preview--x .preview-avatar {
+  background: #111827;
+  color: #fff;
+}
+
+.post-preview--x .preview-actions {
+  justify-content: space-between;
+  padding: 11px 18px;
+  border-top: 0;
+  color: #536471;
+}
+
+.post-preview--x .preview-media {
+  margin: 2px 14px 12px;
+  border: 1px solid #cfd9de;
+  border-radius: 13px;
+}
+
+.post-preview--x .preview-media--gallery {
+  gap: 1px;
+}
+
+.post-preview--x .preview-media img,
+.post-preview--x .preview-media video {
+  min-height: 180px;
+  max-height: 350px;
+}
+
+.post-preview--x .preview-link-card {
+  border-color: #cfd9de;
+  border-radius: 13px;
+  background: #fff;
+}
+
+.post-preview--instagram,
+.post-preview--instagram_business {
+  border-color: #dbdbdb;
+  border-radius: 3px;
+}
+
+.post-preview--instagram .preview-platform-bar,
+.post-preview--instagram_business .preview-platform-bar {
+  display: none;
+}
+
+.post-preview--instagram .preview-profile,
+.post-preview--instagram_business .preview-profile {
+  order: 1;
+  padding: 12px 12px 8px;
+}
+
+.post-preview--instagram .preview-avatar,
+.post-preview--instagram_business .preview-avatar {
+  width: 30px;
+  height: 30px;
+  background: linear-gradient(135deg, #f9ce34, #ee2a7b 52%, #6228d7);
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3px #e1306c;
+  color: #fff;
+}
+
+.post-preview--instagram p,
+.post-preview--instagram_business p {
+  order: 3;
+  margin: 10px 12px 14px;
+  font-size: 0.83rem;
+}
+
+.post-preview--instagram .preview-media,
+.post-preview--instagram_business .preview-media {
+  order: 2;
+  margin: 0;
+  border: 0;
+}
+
+.post-preview--instagram .preview-media--gallery,
+.post-preview--instagram_business .preview-media--gallery {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.post-preview--instagram .preview-media img,
+.post-preview--instagram .preview-media video,
+.post-preview--instagram_business .preview-media img,
+.post-preview--instagram_business .preview-media video {
+  min-height: 210px;
+  max-height: 390px;
+}
+
+.post-preview--instagram .preview-link-card,
+.post-preview--instagram_business .preview-link-card {
+  order: 4;
+  margin: 0 12px 12px;
+  border-radius: 3px;
+}
+
+.post-preview--instagram .preview-actions,
+.post-preview--instagram_business .preview-actions {
+  order: 5;
+  justify-content: flex-start;
+  gap: 16px;
+  padding: 10px 12px;
+  border-top: 0;
+  color: #262626;
 }
 
 .publication-panel {
@@ -1868,6 +1835,56 @@ input:focus {
   box-shadow: var(--ui-shadow-md);
 }
 
+.library-filters-dialog {
+  display: grid;
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  gap: 18px;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 20px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-md);
+}
+
+.library-filters-dialog header,
+.library-filters-dialog footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.library-filters-dialog h2 {
+  margin: 0;
+}
+
+.library-filters-dialog .library-filter-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0;
+}
+
+.library-date-range {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.library-date-range legend {
+  margin-bottom: 6px;
+  color: var(--ui-text-muted);
+  font-size: 0.76rem;
+}
+
+.library-date-range > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .compose-card {
   display: grid;
   gap: 20px;
@@ -1947,13 +1964,27 @@ input:focus {
 @media (max-width: 820px) {
   .social-main {
     width: min(100% - 20px, 680px);
+    padding-top: 0;
   }
 
-  .social-toolbar,
   .publication-panel,
   .publication-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .social-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    margin-left: calc(var(--app-shell-mobile-nav-leading-padding) - 10px);
+    padding-top: var(--workspace-topbar-padding-block);
+    padding-bottom: 0;
+  }
+
+  .social-toolbar > .workspace-tabs {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: center;
   }
 
   .social-workspace,
@@ -1968,16 +1999,26 @@ input:focus {
 }
 
 @media (max-width: 520px) {
-  .toolbar-actions,
   .editor-actions,
   .platform-picker {
     grid-template-columns: 1fr;
   }
 
-  .toolbar-actions,
   .editor-actions,
   .carousel-editor-entry {
     display: grid;
+  }
+
+  .library-filters-dialog .library-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .library-date-range > div {
+    grid-template-columns: 1fr;
+  }
+
+  .social-toolbar__search label {
+    width: 100%;
   }
 
   .carousel-editor-entry :deep(button) {

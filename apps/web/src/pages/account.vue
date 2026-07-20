@@ -2180,7 +2180,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="account-page">
-    <Teleport to="#app-side-nav-mobile-page-controls">
+    <Teleport to="#app-side-nav-mobile-page-controls" disabled>
       <div class="account-mobile-nav">
         <h1 class="account-title account-mobile-nav__title">
           <span>Account</span>

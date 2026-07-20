@@ -10,7 +10,9 @@ const INSTALLATION_ID = "mi-1234567890abcdef";
 const WORKER_NAME = `me3-${INSTALLATION_ID}`;
 const D1_ID = "11111111-1111-4111-8111-111111111111";
 const DO_ID = "d".repeat(32);
-const ORIGIN = `https://${WORKER_NAME}.managed-test.workers.dev`;
+const ZONE_ID = "b".repeat(32);
+const HOSTNAME = "owner.me3.app";
+const ORIGIN = `https://${HOSTNAME}`;
 
 test("recovers an exact public Worker origin after deploy output was lost", async () => {
   const config = createConfig();
@@ -30,10 +32,9 @@ test("recovers an exact public Worker origin after deploy output was lost", asyn
       durableObjectNamespaceId: DO_ID,
     });
     assert.equal(
-      fake.calls.some(({ path }) => path === `/workers/scripts/${WORKER_NAME}/subdomain`),
+      fake.calls.some(({ path }) => path === `/workers/domains`),
       true,
     );
-    assert.equal(fake.calls.some(({ path }) => path === "/workers/subdomain"), true);
     assert.equal(fake.publicCalls.length, 2);
     assert.equal(fake.publicCalls.every(({ authorization }) => authorization === null), true);
   } finally {
@@ -132,6 +133,8 @@ function createConfig() {
       installationId: INSTALLATION_ID,
       workerName: WORKER_NAME,
       d1Name: `${WORKER_NAME}-d1`,
+      canonicalHostname: HOSTNAME,
+      zoneId: ZONE_ID,
       configPath,
     },
     cleanup: () => rmSync(root, { recursive: true, force: true }),
@@ -185,12 +188,22 @@ function createCloudflareFixture({ workerState, validProbe = true }) {
     }
     if (path === `/workers/scripts/${WORKER_NAME}/subdomain`) {
       return successApi({
-        enabled: workerState === "public",
-        previews_enabled: workerState === "public" || workerState === "preview",
+        enabled: false,
+        previews_enabled: workerState === "preview",
       });
     }
-    if (path === "/workers/subdomain") {
-      return successApi({ subdomain: "managed-test" });
+    if (path === "/workers/domains") {
+      return successApi(
+        workerState === "public"
+          ? [{
+              id: "domain-id",
+              hostname: HOSTNAME,
+              service: WORKER_NAME,
+              zone_id: ZONE_ID,
+              zone_name: "me3.app",
+            }]
+          : [],
+      );
     }
     if (path === "/d1/database") {
       return successApi([{ uuid: D1_ID, name: `${WORKER_NAME}-d1` }]);

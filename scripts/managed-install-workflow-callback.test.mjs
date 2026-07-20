@@ -15,9 +15,9 @@ const callbackEnv = {
   ME3_MANAGED_CALLBACK_SECRET: "test-callback-secret",
   ME3_MANAGED_INSTALLATION_ID: "mi-1234567890abcdef",
   ME3_MANAGED_RELEASE_TAG: "v1.2.3",
+  ME3_MANAGED_CANONICAL_HOSTNAME: "owner.me3.app",
   ME3_MANAGED_STATUS: "ready",
-  ME3_MANAGED_ORIGIN:
-    "https://me3-mi-1234567890abcdef.managed-test.workers.dev",
+  ME3_MANAGED_ORIGIN: "https://owner.me3.app",
   ME3_MANAGED_D1_ID: "11111111-1111-4111-8111-111111111111",
   ME3_MANAGED_QUEUE_NAMES:
     '["me3-mi-1234567890abcdef-assistant-job-events"]',
@@ -47,7 +47,7 @@ test("a rejected activation callback fails without exposing its response or secr
     installationId: "mi-1234567890abcdef",
     releaseTag: "v1.2.3",
     status: "ready",
-    origin: "https://me3-mi-1234567890abcdef.managed-test.workers.dev",
+    origin: "https://owner.me3.app",
     d1Id: "11111111-1111-4111-8111-111111111111",
     queueNames: ["me3-mi-1234567890abcdef-assistant-job-events"],
     durableObjectNamespaceId: "a".repeat(32),
@@ -186,7 +186,21 @@ test("the workflow provisions the managed email install identity and HTTPS gatew
   for (const call of configureCalls) {
     assert.match(call, /"\$ME3_MANAGED_INSTALLATION_ID"/);
     assert.match(call, /"\$ME3_MANAGED_EMAIL_GATEWAY_ORIGIN"/);
+    assert.match(call, /"\$ME3_MANAGED_ORIGIN"/);
   }
+});
+
+test("the workflow keeps workers.dev private and attaches the exact managed hostname", () => {
+  const publish = getStep("Publish the managed Worker");
+  const attach = getStep("Attach the permanent managed hostname");
+
+  assert.match(workflow, /canonical_hostname:\n\s+description: Permanent owner-facing hostname/);
+  assert.match(workflow, /zone_id:\n\s+description: Cloudflare zone containing the permanent hostname/);
+  assert.match(workflow, /ME3_MANAGED_ORIGIN: https:\/\/\$\{\{ inputs\.canonical_hostname \}\}/);
+  assert.match(publish, /configure-managed-install\.mjs[^\n]+ false /);
+  assert.doesNotMatch(publish, /\.workers\.dev|tee |grep /);
+  assert.match(attach, /attach-managed-custom-domain\.mjs/);
+  assert.ok(workflow.indexOf(publish) < workflow.indexOf(attach));
 });
 
 test("the workflow waits for a newly published managed origin to become routable", () => {

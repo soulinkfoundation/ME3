@@ -125,6 +125,7 @@ export async function decommissionManagedInstall(
     }
   }
   await clearManagedWorkerBindings(api, input.accountId, contract.workerName);
+  await detachManagedCustomDomain(api, input.accountId, contract);
 
   const dedicatedQueueNames = orderedDedicatedQueueNames(
     contract.queueNames,
@@ -221,6 +222,7 @@ function validateContract(input) {
   const d1Id = String(input.d1Id || "").toLowerCase();
   const r2Name = String(input.r2Name || "");
   const durableObjectNamespaceId = String(input.durableObjectNamespaceId || "").toLowerCase();
+  const publicOrigin = normalizeManagedPublicOrigin(input.publicOrigin, workerName);
   let queueNames;
   try {
     queueNames = typeof input.queueNames === "string" ? JSON.parse(input.queueNames) : input.queueNames;
@@ -263,7 +265,41 @@ function validateContract(input) {
     r2Name,
     durableObjectNamespaceId,
     queueNames: [...queueNames].sort(),
+    publicOrigin,
+    customHostname:
+      publicOrigin && new URL(publicOrigin).hostname.endsWith(".me3.app")
+        ? new URL(publicOrigin).hostname
+        : null,
   };
+}
+
+function normalizeManagedPublicOrigin(value, workerName) {
+  if (value === undefined || value === null || value === "") return null;
+  try {
+    const url = new URL(String(value));
+    if (
+      url.protocol !== "https:" ||
+      url.origin !== value ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash ||
+      url.username ||
+      url.password ||
+      url.port
+    ) {
+      throw new Error();
+    }
+    if (
+      /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\.me3\.app$/.test(url.hostname) ||
+      (url.hostname.startsWith(`${workerName}.`) &&
+        url.hostname.endsWith(".workers.dev"))
+    ) {
+      return url.origin;
+    }
+  } catch {
+    // Fall through to the stable contract error below.
+  }
+  throw new Error("managed decommission public origin is invalid");
 }
 
 function parseExportWaived(value) {
@@ -480,6 +516,7 @@ async function assertManagedProviderResourcesAbsent(api, accountId, contract) {
     `/accounts/${accountId}/r2/buckets/${contract.r2Name}`,
     "R2 bucket",
   );
+  await assertManagedCustomDomainAbsent(api, accountId, contract);
   await assertMissing(
     api,
     `/accounts/${accountId}/workers/scripts/${contract.workerName}`,
@@ -503,6 +540,39 @@ async function assertManagedProviderResourcesAbsent(api, accountId, contract) {
   const namespaces = await listDurableObjectNamespaces(api, accountId);
   if (namespaces.some((item) => namespaceId(item) === contract.durableObjectNamespaceId)) {
     throw new Error("Durable Object namespace absence was not verified");
+  }
+}
+
+export async function detachManagedCustomDomain(api, accountId, contract) {
+  if (!contract.customHostname) return;
+  const query = new URLSearchParams({ service: contract.workerName });
+  const domains = await api(`/accounts/${accountId}/workers/domains?${query}`);
+  if (!Array.isArray(domains) || domains.length > 1) {
+    throw new Error("managed custom domain identity is ambiguous");
+  }
+  if (domains.length === 1) {
+    const domain = domains[0];
+    if (
+      String(domain?.hostname || "").toLowerCase() !== contract.customHostname ||
+      String(domain?.service || "") !== contract.workerName ||
+      !domain?.id
+    ) {
+      throw new Error("managed custom domain identity does not match the managed install");
+    }
+    await deleteIfPresent(
+      api,
+      `/accounts/${accountId}/workers/domains/${encodeURIComponent(domain.id)}`,
+    );
+  }
+  await assertManagedCustomDomainAbsent(api, accountId, contract);
+}
+
+async function assertManagedCustomDomainAbsent(api, accountId, contract) {
+  if (!contract.customHostname) return;
+  const query = new URLSearchParams({ service: contract.workerName });
+  const domains = await api(`/accounts/${accountId}/workers/domains?${query}`);
+  if (!Array.isArray(domains) || domains.length !== 0) {
+    throw new Error("managed custom domain absence was not verified");
   }
 }
 
@@ -1277,6 +1347,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       r2Name: args["r2-name"],
       queueNames: args["queue-names"],
       durableObjectNamespaceId: args["durable-object-namespace-id"],
+      publicOrigin: args["public-origin"],
       exportObjectKey: args["export-object-key"],
       exportSha256: args["export-sha256"],
       exportMd5: args["export-md5"],

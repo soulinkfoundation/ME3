@@ -33,7 +33,7 @@ const showAgentLauncher = computed(
 );
 
 async function loadAgentChatPluginState() {
-  if (!auth.isAuthenticated) {
+  if (!AGENT_LAUNCHER_UI_ENABLED || !auth.isAuthenticated) {
     agentChatInstalled.value = false;
     return;
   }
@@ -59,18 +59,24 @@ function handlePluginChanged() {
 
 onMounted(async () => {
   await auth.ensureInitialized();
-  await loadAgentChatPluginState();
-  window.addEventListener(pluginChangedEvent, handlePluginChanged);
+  if (AGENT_LAUNCHER_UI_ENABLED) {
+    void loadAgentChatPluginState();
+    window.addEventListener(pluginChangedEvent, handlePluginChanged);
+  }
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener(pluginChangedEvent, handlePluginChanged);
+  if (AGENT_LAUNCHER_UI_ENABLED) {
+    window.removeEventListener(pluginChangedEvent, handlePluginChanged);
+  }
 });
 
 watch(
   () => auth.isAuthenticated,
   () => {
-    void loadAgentChatPluginState();
+    if (AGENT_LAUNCHER_UI_ENABLED) {
+      void loadAgentChatPluginState();
+    }
   },
 );
 </script>
@@ -80,7 +86,6 @@ watch(
     <AppSideNav v-if="showAppShell" />
     <div class="app-root__view">
       <div
-        v-if="showAppShell"
         id="app-side-nav-mobile-page-controls"
         class="app-root__mobile-page-controls"
       />

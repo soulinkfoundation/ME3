@@ -62,6 +62,14 @@ import {
   type AgentOwnerContentSearchResult,
   type AgentOwnerContentSourceType,
 } from "./owner-content-search";
+import {
+  createAgentLandingPageDraft,
+  listAgentLandingPageDesigns,
+  listAgentLandingPages,
+  updateAgentLandingPageDraft,
+  type AgentLandingPageDraftInput,
+  type AgentLandingPageSummary,
+} from "./landing-pages";
 
 type CoreAgentDb = {
   prepare(sql: string): {
@@ -102,6 +110,7 @@ const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
   (tool) =>
     tool.capabilityId.startsWith("core.reminders.") ||
     tool.capabilityId === "core.owner_content.search" ||
+    tool.capabilityId.startsWith("core.sites.landing_page.") ||
     tool.capabilityId.startsWith("core.mission.task.") ||
     tool.capabilityId.startsWith("core.mailbox.") ||
     tool.capabilityId.startsWith("core.social."),
@@ -339,6 +348,9 @@ function executeCoreToolCall(input: {
   if (input.tool.capabilityId === "core.owner_content.search") {
     return executeOwnerContentSearchToolCall(input);
   }
+  if (input.tool.capabilityId.startsWith("core.sites.landing_page.")) {
+    return executeLandingPageToolCall(input);
+  }
   if (input.tool.capabilityId.startsWith("core.social.")) {
     return executeSocialToolCall(input);
   }
@@ -470,6 +482,132 @@ async function executeOwnerContentSearchToolCall(input: {
     fallbackReply: formatOwnerContentSearch(found.results, found.ambiguous),
     reminderAction: null,
     actionCards: [],
+  };
+}
+
+async function executeLandingPageToolCall(input: {
+  db: CoreAgentDb;
+  userId: string;
+  call: AgentToolCall;
+  tool: CoreChatToolDefinition;
+}): Promise<CoreToolOutcome> {
+  enforceLandingPageToolPolicy(input.tool);
+  assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+  const args = input.call.arguments;
+
+  if (input.tool.capabilityId === "core.sites.landing_page.designs") {
+    const designs = listAgentLandingPageDesigns();
+    return {
+      capabilityId: "core.sites.landing_page.designs",
+      result: { ok: true, designs },
+      fallbackReply: designs
+        .map((design) => `${design.name}: ${design.description}`)
+        .join("\n"),
+      reminderAction: null,
+      actionCards: [],
+    };
+  }
+
+  if (input.tool.capabilityId === "core.sites.landing_page.list") {
+    const pages = await listAgentLandingPages(
+      { DB: input.db },
+      input.userId,
+      optionalToolString(args.site),
+    );
+    return {
+      capabilityId: "core.sites.landing_page.list",
+      result: { ok: true, pages },
+      fallbackReply: pages.length
+        ? `Found ${pages.length} landing page${pages.length === 1 ? "" : "s"}: ${pages.map((page) => `${page.title} (${page.published ? "published" : "draft"}, ${page.designName})`).join(", ")}.`
+        : "I could not find any landing pages on that site.",
+      reminderAction: null,
+      actionCards: [],
+    };
+  }
+
+  if (input.tool.capabilityId === "core.sites.landing_page.create") {
+    const page = await createAgentLandingPageDraft(
+      { DB: input.db },
+      input.userId,
+      {
+        site: optionalToolString(args.site),
+        slug: optionalToolString(args.slug),
+        purpose: landingPagePurpose(args.purpose),
+        designPackId: optionalToolString(args.designPackId),
+        brief: requiredToolString(args.brief, "Landing-page brief"),
+        headline: optionalToolString(args.headline),
+        subheadline: optionalToolString(args.subheadline),
+        highlights: optionalToolString(args.highlights),
+        ctaLabel: optionalToolString(args.ctaLabel),
+      },
+    );
+    return landingPageWriteOutcome(page, "created");
+  }
+
+  const page = await updateAgentLandingPageDraft(
+    { DB: input.db },
+    input.userId,
+    {
+      site: optionalToolString(args.site),
+      pageId: requiredToolString(args.pageId, "Landing-page ID"),
+      designPackId: optionalToolString(args.designPackId),
+      headline: optionalToolString(args.headline),
+      subheadline: optionalToolString(args.subheadline),
+      highlights: optionalToolString(args.highlights),
+      ctaLabel: optionalToolString(args.ctaLabel),
+    },
+  );
+  return landingPageWriteOutcome(page, "updated");
+}
+
+function landingPagePurpose(value: unknown): AgentLandingPageDraftInput["purpose"] {
+  if (value === "event" || value === "service" || value === "waitlist") {
+    return value;
+  }
+  throw new Error('Landing-page purpose must be "event", "service", or "waitlist".');
+}
+
+function landingPageWriteOutcome(
+  page: AgentLandingPageSummary,
+  action: "created" | "updated",
+): CoreToolOutcome {
+  const capabilityId = action === "created"
+    ? "core.sites.landing_page.create" as const
+    : "core.sites.landing_page.update" as const;
+  return {
+    capabilityId,
+    result: { ok: true, page },
+    fallbackReply: `${action === "created" ? "Created" : "Updated"} the draft landing page “${page.title}” using ${page.designName}. It is still a draft.`,
+    reminderAction: null,
+    actionCards: [buildLandingPageActionCard(page, action)],
+  };
+}
+
+function buildLandingPageActionCard(
+  page: AgentLandingPageSummary,
+  action: "created" | "updated",
+): AgentChatActionCard {
+  return {
+    id: `landing-page:${page.id}:${action}`,
+    kind: action === "created"
+      ? "sites.landing_page_created"
+      : "sites.landing_page_updated",
+    capabilityId: action === "created"
+      ? "core.sites.landing_page.create"
+      : "core.sites.landing_page.update",
+    title: `Landing page ${action}`,
+    summary: page.title,
+    status: "complete",
+    statusLabel: "Draft",
+    changed: [
+      { label: "Page", value: page.title },
+      { label: "Path", value: `/me/${page.slug}` },
+      { label: "Design", value: page.designName },
+      { label: "Status", value: page.published ? "Published draft updated" : "Not published" },
+    ],
+    records: [{ kind: "landing_page", id: page.id }],
+    primaryAction: { label: "Open draft", href: page.editorPath },
+    secondaryActions: [{ label: "Preview", href: page.previewPath }],
   };
 }
 
@@ -1278,6 +1416,15 @@ function withCoreToolInstructions(
     "- Convert relative due dates such as today or tomorrow to YYYY-MM-DD in the owner's timezone using the current-time context above.",
     "- For update, send only fields the owner asked to change. Null optional fields mean no change.",
     "- Set clearDescription or clearDueAt only when the owner explicitly asks to remove that value.",
+    "Landing-page tool rules:",
+    "- Use landing-page tools when the owner clearly asks to list, create, or revise a landing page. Brainstorming alone is conversation, not a write request.",
+    "- A landing-page create or update tool saves a private draft only. Never claim the page is live or published.",
+    "- Use the owner's factual brief. Do not invent dates, locations, prices, testimonials, guarantees, customer names, or product claims.",
+    "- Choose purpose event, service, or waitlist from the owner's goal. Omit designPackId to use the recommended compatible starter design.",
+    "- If the owner asks what designs exist, list designs before creating. Design display names are changeable; stable IDs are tool data, not marketing copy.",
+    "- For revisions, list landing pages first unless the exact stable page ID is already present in tool context. Never invent a page ID.",
+    "- Keep highlights newline-separated in the form Title: factual explanation. Prefer three specific highlights over generic filler.",
+    "- After creating or revising, direct the owner to the returned draft or preview action. Publishing is not an available chat tool yet.",
     "Mailbox tool rules:",
     "- Search before reading or replying unless a stable mailbox message ID is already present. Never invent a message ID.",
     "- Search returns summaries only. Read exactly the intended stable message ID before using the full private body.",
@@ -1352,6 +1499,17 @@ function enforceMailboxToolPolicy(tool: CoreChatToolDefinition): void {
     tool.requiredSetupChecks.some((check) => check !== "mailbox")
   ) {
     throw new Error(`Tool "${tool.name}" is not allowed by the mailbox runtime policy.`);
+  }
+}
+
+function enforceLandingPageToolPolicy(tool: CoreChatToolDefinition): void {
+  if (
+    !tool.capabilityId.startsWith("core.sites.landing_page.") ||
+    tool.handlerRoute !== tool.capabilityId ||
+    tool.approvalMode !== "none" ||
+    tool.requiredSetupChecks.some((check) => check !== "landing-pages")
+  ) {
+    throw new Error(`Tool "${tool.name}" is not allowed by the landing-page draft runtime policy.`);
   }
 }
 

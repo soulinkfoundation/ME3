@@ -89,6 +89,16 @@ export {
   type AgentOwnerContentSearchResult,
   type AgentOwnerContentSourceType,
 } from "./owner-content-search";
+export {
+  createAgentLandingPageDraft,
+  listAgentLandingPageDesigns,
+  listAgentLandingPages,
+  updateAgentLandingPageDraft,
+  type AgentLandingPageDraftInput,
+  type AgentLandingPageEnv,
+  type AgentLandingPageSummary,
+  type AgentLandingPageUpdateInput,
+} from "./landing-pages";
 import {
   agentTurnResultStorageKey,
   cacheAgentTurnResult,
@@ -274,6 +284,7 @@ export type AgentChatActionCardRecord = {
     | "mailbox_draft"
     | "reminder"
     | "mission_task"
+    | "landing_page"
     | "social_post"
     | "social_suggestion"
     | "social_posting_plan";
@@ -290,6 +301,8 @@ export type AgentChatActionCard = {
     | "mission.task_created"
     | "mission.task_updated"
     | "mission.task_archived"
+    | "sites.landing_page_created"
+    | "sites.landing_page_updated"
     | "social.draft_saved"
     | "social.suggestions_created"
     | "social.posting_plan_proposed"

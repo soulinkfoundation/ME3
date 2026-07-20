@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Room to Think is a positioning practice for independent experts." />
+    <title>Room to Think — Positioning for independent experts</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --ink: #12120f;
+        --paper: #f4f0e8;
+        --acid: #dfff39;
+        --blue: #1847e8;
+        --red: #f0563d;
+        --display: "Archivo Black", sans-serif;
+        --serif: "Instrument Serif", Georgia, serif;
+        --mono: "IBM Plex Mono", monospace;
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--serif); font-size: 18px; }
+      a { color: inherit; }
+      button, input { font: inherit; }
+      .skip-link { position: fixed; top: -60px; left: 12px; z-index: 50; padding: 12px 16px; background: var(--acid); color: var(--ink); }
+      .skip-link:focus { top: 12px; }
+      .mono { font: 500 .68rem/1.35 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+      .frame { border-left: 1px solid var(--ink); border-right: 1px solid var(--ink); }
+      .shell { width: min(1380px, calc(100% - 48px)); margin: 0 auto; }
+
+      .ticker { overflow: hidden; border-bottom: 1px solid var(--ink); background: var(--acid); }
+      .ticker-track { display: flex; width: max-content; animation: ticker 24s linear infinite; }
+      .ticker span { padding: 9px 18px; white-space: nowrap; }
+      @keyframes ticker { to { transform: translateX(-50%); } }
+
+      nav { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-height: 76px; padding: 0 24px; border-bottom: 1px solid var(--ink); }
+      .brand { font-family: var(--display); font-size: 1.05rem; text-decoration: none; }
+      .nav-index { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--ink); }
+      .nav-links { display: flex; justify-content: flex-end; gap: 24px; }
+      .nav-links a { text-decoration: none; }
+      .nav-links a:hover { background: var(--ink); color: var(--paper); }
+
+      .hero { min-height: calc(100vh - 111px); border-bottom: 1px solid var(--ink); }
+      .hero-top { position: relative; padding: 48px 24px 22px; overflow: hidden; }
+      .hero h1 { margin: 0; font: 400 clamp(5.6rem, 15vw, 14rem)/.71 var(--serif); letter-spacing: -.07em; }
+      .hero h1 .line { display: block; }
+      .hero h1 .line:nth-child(2) { padding-left: 11vw; font-style: italic; }
+      .hero h1 .line:nth-child(3) { text-align: right; font-family: var(--display); font-size: .66em; letter-spacing: -.055em; }
+      .scribble { position: absolute; width: clamp(160px, 22vw, 360px); right: 30%; top: 20%; color: var(--blue); transform: rotate(-8deg); pointer-events: none; }
+      .hero-foot { display: grid; grid-template-columns: 1.4fr .75fr .55fr; min-height: 185px; border-top: 1px solid var(--ink); }
+      .hero-foot > * { padding: 28px 24px; }
+      .hero-foot > * + * { border-left: 1px solid var(--ink); }
+      .hero-lede { max-width: 720px; margin: 0; font-size: clamp(1.35rem, 2.2vw, 2rem); line-height: 1.15; }
+      .hero-note { display: flex; align-items: flex-end; margin: 0; font-family: var(--mono); font-size: .82rem; line-height: 1.5; }
+      .book-link { display: flex; flex-direction: column; justify-content: space-between; background: var(--blue); color: white; text-decoration: none; transition: background .2s ease, color .2s ease; }
+      .book-link:hover { background: var(--acid); color: var(--ink); }
+      .book-link strong { align-self: flex-end; font: 400 3rem/1 var(--serif); }
+
+      .problem { display: grid; grid-template-columns: .52fr 1.48fr; border-bottom: 1px solid var(--ink); }
+      .problem-aside { min-height: 700px; padding: 42px 24px; border-right: 1px solid var(--ink); background: var(--red); }
+      .problem-aside .giant { display: block; margin-top: 130px; font: 400 clamp(8rem, 18vw, 16rem)/.7 var(--serif); transform: rotate(-90deg); }
+      .problem-copy { padding: 95px 5vw 110px; }
+      .problem-copy h2 { max-width: 920px; margin: 0 0 60px; font: 400 clamp(3.8rem, 8vw, 8.3rem)/.86 var(--serif); letter-spacing: -.055em; }
+      .problem-copy h2 em { color: var(--blue); }
+      .problem-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; }
+      .problem-columns p { margin: 0; font-size: 1.25rem; line-height: 1.42; }
+
+      .offer-head { display: grid; grid-template-columns: 1fr auto; align-items: end; padding: 90px 24px 34px; border-bottom: 1px solid var(--ink); }
+      .offer-head h2 { margin: 0; font: 400 clamp(4rem, 9vw, 9rem)/.8 var(--serif); letter-spacing: -.06em; }
+      .offer-head span { padding-bottom: 8px; }
+      .offer-list { counter-reset: offers; }
+      .offer-row { counter-increment: offers; display: grid; grid-template-columns: 100px 1fr 1fr auto; gap: 30px; align-items: center; min-height: 160px; padding: 24px; border-bottom: 1px solid var(--ink); transition: background .25s ease; }
+      .offer-row:hover { background: var(--acid); }
+      .offer-row::before { content: "0" counter(offers); font-family: var(--mono); }
+      .offer-row h3 { margin: 0; font: 400 clamp(2rem, 4vw, 4.4rem)/.9 var(--serif); }
+      .offer-row p { max-width: 520px; margin: 0; line-height: 1.4; }
+      .offer-row strong { font-family: var(--display); font-size: 1.1rem; }
+
+      .proof { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--ink); }
+      .proof-quote { padding: 100px 5vw; background: var(--ink); color: var(--paper); }
+      .proof-quote blockquote { margin: 0; font: 400 clamp(2.8rem, 5vw, 5.8rem)/.98 var(--serif); letter-spacing: -.035em; }
+      .proof-quote blockquote em { color: var(--acid); }
+      .proof-quote footer { margin-top: 46px; color: rgba(244,240,232,.66); }
+      .proof-numbers { display: grid; grid-template-columns: 1fr 1fr; }
+      .proof-number { display: flex; flex-direction: column; justify-content: space-between; min-height: 320px; padding: 30px; border-left: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+      .proof-number:nth-child(3), .proof-number:nth-child(4) { border-bottom: 0; }
+      .proof-number strong { font: 400 clamp(4rem, 7vw, 7rem)/1 var(--serif); }
+      .proof-number:nth-child(2) { background: var(--blue); color: white; }
+      .proof-number:nth-child(3) { background: var(--acid); }
+
+      .process { padding: 110px 24px 130px; border-bottom: 1px solid var(--ink); }
+      .process h2 { max-width: 900px; margin: 0 0 80px; font: 400 clamp(4rem, 8vw, 8rem)/.86 var(--serif); letter-spacing: -.05em; }
+      .process-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--ink); border: 1px solid var(--ink); }
+      .process-step { min-height: 360px; padding: 28px; background: var(--paper); }
+      .process-step:nth-child(2) { background: var(--acid); }
+      .process-step h3 { margin: 80px 0 24px; font: 400 2.8rem/1 var(--serif); }
+      .process-step p { line-height: 1.45; }
+
+      .cta { display: grid; grid-template-columns: 1.4fr .6fr; background: var(--blue); color: white; }
+      .cta-copy { padding: 90px 5vw 100px 24px; }
+      .cta h2 { max-width: 1050px; margin: 0; font: 400 clamp(5rem, 11vw, 11rem)/.73 var(--serif); letter-spacing: -.07em; }
+      .cta h2 em { color: var(--acid); }
+      .cta-panel { display: flex; flex-direction: column; justify-content: flex-end; gap: 22px; padding: 42px 32px; border-left: 1px solid rgba(255,255,255,.5); }
+      .cta-panel p { font-size: 1.25rem; line-height: 1.45; }
+      .cta-panel a { display: flex; justify-content: space-between; padding: 20px; background: var(--acid); color: var(--ink); text-decoration: none; }
+      footer.site-footer { padding: 24px; border-top: 1px solid var(--ink); background: var(--paper); }
+      footer.site-footer .row { display: flex; justify-content: space-between; gap: 20px; }
+      :focus-visible { outline: 4px solid var(--red); outline-offset: 3px; }
+
+      @media (max-width: 880px) {
+        .hero-foot, .problem, .proof, .cta { grid-template-columns: 1fr; }
+        .hero-foot > * + *, .cta-panel { border-left: 0; border-top: 1px solid var(--ink); }
+        .problem-aside { display: flex; align-items: center; min-height: 170px; border-right: 0; border-bottom: 1px solid var(--ink); }
+        .problem-aside .giant { margin: 0 0 0 auto; transform: none; }
+        .offer-row { grid-template-columns: 60px 1fr auto; }
+        .offer-row p { grid-column: 2 / -1; }
+        .process-grid { grid-template-columns: 1fr; }
+        .process-step { min-height: 260px; }
+      }
+      @media (max-width: 600px) {
+        .shell { width: min(100% - 24px, 1380px); }
+        nav { grid-template-columns: 1fr auto; padding: 0 14px; }
+        .nav-index { display: none; }
+        .nav-links a:first-child { display: none; }
+        .hero-top { padding: 44px 14px 20px; }
+        .hero h1 { font-size: clamp(4.5rem, 25vw, 7rem); }
+        .hero h1 .line:nth-child(2) { padding-left: 0; }
+        .hero h1 .line:nth-child(3) { text-align: left; }
+        .scribble { right: 3%; top: 24%; opacity: .7; }
+        .hero-foot > * { padding: 24px 14px; }
+        .problem-copy { padding: 65px 14px 78px; }
+        .problem-columns { grid-template-columns: 1fr; gap: 26px; }
+        .offer-head { display: grid; gap: 24px; padding: 70px 14px 24px; }
+        .offer-row { grid-template-columns: 44px 1fr; gap: 16px; padding: 24px 14px; }
+        .offer-row p, .offer-row strong { grid-column: 2; }
+        .proof-numbers { grid-template-columns: 1fr; }
+        .proof-number { min-height: 230px; border-left: 0; border-bottom: 1px solid var(--ink) !important; }
+        .process { padding: 70px 14px; }
+        .process h2 { margin-bottom: 46px; }
+        .cta-copy { padding: 70px 14px; }
+        .cta-panel { padding: 38px 14px 60px; }
+        footer.site-footer .row { display: grid; }
+      }
+      @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .ticker-track { animation: none; } }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="ticker mono" aria-hidden="true"><div class="ticker-track">
+      <span>Positioning for independent experts · Fewer words, sharper meaning ·</span><span>Positioning for independent experts · Fewer words, sharper meaning ·</span><span>Positioning for independent experts · Fewer words, sharper meaning ·</span><span>Positioning for independent experts · Fewer words, sharper meaning ·</span>
+    </div></div>
+    <div class="shell frame">
+      <nav aria-label="Main navigation">
+        <a class="brand" href="#">ROOM TO THINK</a>
+        <span class="nav-index mono">R/T</span>
+        <div class="nav-links mono"><a href="#work">The work</a><a href="#book">Book a call</a></div>
+      </nav>
+
+      <main id="main">
+        <header class="hero">
+          <div class="hero-top">
+            <span class="mono">Positioning practice · Dublin / Everywhere</span>
+            <h1><span class="line">Make room</span><span class="line">for the thing</span><span class="line">only you can build.</span></h1>
+            <svg class="scribble" viewBox="0 0 380 220" aria-hidden="true"><path d="M8 155c57-28 88-86 158-112 57-22 130-5 182 26M50 184c50-70 99-93 167-109 45-10 101-4 151 14M207 16l-36 150M178 150l-34-28M178 150l39-5" fill="none" stroke="currentColor" stroke-width="3" /></svg>
+          </div>
+          <div class="hero-foot">
+            <p class="hero-lede">For brilliant independent people who have outgrown the words they use to explain their work.</p>
+            <p class="hero-note">Clear positioning.<br />A useful offer.<br />A page that sounds like you.</p>
+            <a class="book-link mono" href="#book"><span>Start here</span><strong>↘</strong></a>
+          </div>
+        </header>
+
+        <section class="problem">
+          <aside class="problem-aside"><span class="mono">The actual problem</span><strong class="giant">?</strong></aside>
+          <div class="problem-copy">
+            <h2>Your work is good. The way you explain it is <em>doing it no favours.</em></h2>
+            <div class="problem-columns">
+              <p>You have years of experience, a slightly unusual way of seeing things, and an offer that refuses to fit inside a tidy industry label.</p>
+              <p>Together, we find the sharp idea beneath all of that—then build the language, offer and sales story around it.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="work">
+          <header class="offer-head"><h2>Three useful engagements.</h2><span class="mono">Choose by urgency</span></header>
+          <div class="offer-list">
+            <article class="offer-row"><h3>The Sharp Hour</h3><p>Ninety minutes to untangle one stubborn positioning, offer or messaging decision.</p><strong>€480</strong></article>
+            <article class="offer-row"><h3>Positioning Sprint</h3><p>Two focused weeks to clarify what you do, who it is really for, and why it matters now.</p><strong>€2,800</strong></article>
+            <article class="offer-row"><h3>The Whole Story</h3><p>Positioning, flagship offer and a complete sales page—built as one coherent argument.</p><strong>€6,400</strong></article>
+          </div>
+        </section>
+
+        <section class="proof">
+          <div class="proof-quote">
+            <blockquote>“For the first time in five years I can explain what I do <em>without apologising halfway through.</em>”</blockquote>
+            <footer class="mono">Elena · Organisational psychologist</footer>
+          </div>
+          <div class="proof-numbers">
+            <div class="proof-number"><span class="mono">Projects since 2019</span><strong>86</strong></div>
+            <div class="proof-number"><span class="mono">Work from referrals</span><strong>72%</strong></div>
+            <div class="proof-number"><span class="mono">Average engagement</span><strong>18d</strong></div>
+            <div class="proof-number"><span class="mono">Slide decks required</span><strong>0</strong></div>
+          </div>
+        </section>
+
+        <section class="process">
+          <h2>A process with no theatre in it.</h2>
+          <div class="process-grid">
+            <article class="process-step"><span class="mono">01 · Listen</span><h3>Find the live wire.</h3><p>We start with the work itself: what people ask you for, what changes because of you, and where your attention naturally sharpens.</p></article>
+            <article class="process-step"><span class="mono">02 · Decide</span><h3>Choose the sharpest truth.</h3><p>Good positioning excludes. We decide what belongs at the centre and give everything else a less important job.</p></article>
+            <article class="process-step"><span class="mono">03 · Make</span><h3>Put it into the world.</h3><p>You leave with language you can use, an offer people understand, and a page ready to do some actual work.</p></article>
+          </div>
+        </section>
+
+        <section class="cta" id="book">
+          <div class="cta-copy"><h2>Let’s make it <em>obvious.</em></h2></div>
+          <div class="cta-panel"><span class="mono">A useful first conversation</span><p>Thirty minutes. Bring the knot. I’ll tell you honestly whether I think we should work on it together.</p><a class="mono" href="mailto:hello@example.com"><span>Book the conversation</span><span>↗</span></a></div>
+        </section>
+      </main>
+
+      <footer class="site-footer"><div class="row mono"><span>Room to Think © 2026</span><span>Independent positioning practice</span></div></footer>
+    </div>
+  </body>
+</html>

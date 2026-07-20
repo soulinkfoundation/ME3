@@ -183,6 +183,7 @@ test("re-verifies retained evidence and exact absence before decommission succes
   assert.match(deletion, /--export-waived "\$EXPORT_WAIVED"/);
   assert.match(deletion, /--export-md5/);
   assert.match(deletion, /--export-etag/);
+  assert.match(deletion, /--public-origin "\$PUBLIC_ORIGIN"/);
   assert.match(success, /ME3_MANAGED_STAGE: verified_absent/);
   assert.ok(lifecycle.indexOf(retained) < lifecycle.indexOf(retentionAttestation));
   assert.ok(lifecycle.indexOf(retentionAttestation) < lifecycle.indexOf(drain));
@@ -265,6 +266,7 @@ test("cleans a never-public failed provision through a distinct authorized opera
   assert.match(cleanup, /cleanup-failed-managed-provision\.mjs/);
   assert.match(cleanup, /--worker-ever-public "\$WORKER_EVER_PUBLIC"/);
   assert.match(cleanup, /ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET/);
+  assert.doesNotMatch(cleanup, /--public-origin/);
   assert.doesNotMatch(cleanup, /managed-runtime-control|managed-retained-export/);
   for (const s3Step of [derive, verify]) {
     assert.match(s3Step, /inputs\.operation == 'export'/);

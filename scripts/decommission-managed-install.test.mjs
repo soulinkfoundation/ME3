@@ -140,6 +140,54 @@ test("removes Worker producer bindings before queue deletion and retries safely 
   assert.equal(stages.at(-1), "verifying_absence");
 });
 
+test("detaches and verifies the permanent custom domain before Worker deletion", async () => {
+  const fake = createCloudflareFixture();
+  let domain = {
+    id: "managed-domain-id",
+    hostname: "owner.me3.app",
+    service: WORKER_NAME,
+  };
+  const domainCalls = [];
+  const request = async (url, init = {}) => {
+    const parsed = new URL(url);
+    const resource = parsed.pathname.replace(
+      `/client/v4/accounts/${ACCOUNT_ID}`,
+      "",
+    );
+    const method = init.method || "GET";
+    if (resource === "/workers/domains" && method === "GET") {
+      domainCalls.push({ method, resource });
+      return success(domain ? [domain] : []);
+    }
+    if (resource === "/workers/domains/managed-domain-id" && method === "DELETE") {
+      domainCalls.push({ method, resource });
+      domain = null;
+      return success(null);
+    }
+    return fake.request(url, init);
+  };
+  const input = waivedContract();
+  input.publicOrigin = "https://owner.me3.app";
+
+  await decommissionManagedInstall(input, {
+    request,
+    deployTombstone: async () => {
+      fake.state.producerBindings.clear();
+      fake.state.namespaces = [];
+    },
+  });
+
+  assert.equal(domain, null);
+  assert.equal(
+    domainCalls.some(
+      (call) =>
+        call.method === "DELETE" &&
+        call.resource === "/workers/domains/managed-domain-id",
+    ),
+    true,
+  );
+});
+
 test("decommissions without S3 evidence only after persisted purge proof and verified REST absence", async () => {
   const fake = createCloudflareFixture();
   const stages = [];

@@ -803,21 +803,28 @@ watch(
 
 .social-connect-btn__check {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 9px;
+  right: 9px;
   z-index: 1;
-  flex-shrink: 0;
-  color: #15803d;
+  width: 18px;
+  height: 18px;
+  padding: 2px;
+  border: 2px solid var(--ui-surface, var(--color-bg));
+  border-radius: 50%;
+  background: #15803d;
+  color: #fff;
   pointer-events: none;
 }
 
 :root[data-theme="dark"] .social-connect-btn__check {
-  color: #4ade80;
+  background: #4ade80;
+  color: #072b15;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .social-connect-btn__check {
-    color: #4ade80;
+    background: #4ade80;
+    color: #072b15;
   }
 }
 

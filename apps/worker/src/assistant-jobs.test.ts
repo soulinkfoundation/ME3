@@ -932,7 +932,8 @@ describe("assistant jobs persistence", () => {
         {
           ...taskRow("task-1", "Order a nuc of bees", "project-1"),
           description:
-            '<p>Ask donough</p><p></p><p><a target="_blank" rel="noopener noreferrer" href="https://nihbs.org/nucs-and-queens/">https://nihbs.org/nucs-and-queens/</a></p>',
+            '<p>Ask donough</p><p></p><p><a target="_blank" rel="noopener noreferrer" href="https://nihbs.org/nucs-and-queens/">https://nihbs.org/nucs-and-queens/</a></p>' +
+            `<p>${"More context ".repeat(30)}</p>`,
           due_at: "2026-07-07T09:00:00.000Z",
         },
       ],
@@ -942,14 +943,34 @@ describe("assistant jobs persistence", () => {
 
     await runAssistantJobNow(env, "owner", created.job.id);
 
-    const message = JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)
-      .dailyBriefing.message;
+    const dailyBriefing = JSON.parse(
+      env.__state.pluginActivities[0]?.metadata_json as string,
+    ).dailyBriefing;
+    const message = dailyBriefing.message;
     expect(message).toContain(
       "- Order a nuc of bees: Ask donough https://nihbs.org/nucs-and-queens/",
     );
     expect(message).not.toContain("<p>");
     expect(message).not.toContain("target=");
     expect(message).not.toContain("</a>");
+    expect(message).not.toContain("More context ".repeat(20));
+    const taskDetail = dailyBriefing.sections.find(
+      (section: { kind: string }) => section.kind === "tasks",
+    )?.items[0]?.detail;
+    expect(taskDetail).toHaveLength(180);
+    expect(taskDetail).toMatch(/…$/);
+    expect(dailyBriefing.sections).toContainEqual(
+      expect.objectContaining({
+        kind: "tasks",
+        items: [
+          expect.objectContaining({
+            id: "task-1",
+            title: "Order a nuc of bees",
+            detail: taskDetail,
+          }),
+        ],
+      }),
+    );
   });
 
   it("customizes the daily briefing notification template", async () => {
