@@ -364,6 +364,8 @@ const OWNER_APP_ROUTE_PREFIXES = [
   "/start",
 ];
 const STRICT_TRANSPORT_SECURITY_HEADER = "max-age=31536000";
+const fetchWithWorkerGlobalContext: typeof fetch = (input, init) =>
+  globalThis.fetch(input, init);
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
@@ -1130,7 +1132,7 @@ app.get("/api/social/:platform/callback", async (c) => {
       {
         apiOrigin: getCoreApiOrigin(c.env, c.req.url),
         webOrigin: getCoreWebOrigin(c.env, c.req.url),
-        fetch,
+        fetch: fetchWithWorkerGlobalContext,
         installKey: await getOrCreateInstallEncryptionKey(c.env),
         hostedOAuthOrigin,
       },

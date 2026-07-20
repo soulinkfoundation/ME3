@@ -7,6 +7,7 @@ import {
   normalizeMe3DeploymentMode,
 } from "@me3-core/plugin-agent-chat";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
+import coreApp from "./app";
 import {
   DEFAULT_WORKERS_AI_TEXT_MODEL,
   generateAiText,
@@ -10488,6 +10489,107 @@ describe("ME3 Worker auth", () => {
       "http://localhost:8787/api/social/linkedin/callback",
     );
     expect(env.socialOauthStates).toHaveLength(1);
+  });
+
+  it("redeems hosted Social Publishing OAuth with the Worker global fetch context", async () => {
+    const env = createEnv();
+    env.ME3_SOCIAL_OAUTH_ORIGIN = "https://social-oauth.example";
+    const session = cookieHeader(
+      await coreApp.fetch(
+        new Request("http://localhost/api/admin/bootstrap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Origin: "http://localhost:4000" },
+          body: JSON.stringify({
+            bootstrapCode: "owner-code",
+            email: "owner@example.com",
+            name: "ME3 Owner",
+            username: "owner",
+            password: "correct-horse-battery",
+          }),
+        }),
+        env,
+      ),
+    );
+    await coreApp.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const authorizeResponse = await coreApp.fetch(
+      new Request("http://localhost/api/social/linkedin/authorize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          siteId: "site-1",
+          returnPath: "/social",
+          credentialSource: "managed",
+        }),
+      }),
+      env,
+    );
+    const authorizeBody = (await authorizeResponse.json()) as { url: string };
+    const state = new URL(authorizeBody.url).searchParams.get("state");
+
+    const fetchMock = vi.fn(
+      function (this: typeof globalThis, input: RequestInfo | URL) {
+        expect(this).toBe(globalThis);
+        expect(String(input)).toBe("https://social-oauth.example/api/social/oauth/redeem");
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              account: {
+                id: "linkedin-owner",
+                handle: "owner",
+                displayName: "Owner LinkedIn",
+              },
+              token: {
+                accessToken: "linkedin-access-token",
+                refreshToken: "linkedin-refresh-token",
+                expiresAt: "2026-08-01T00:00:00.000Z",
+                scopes: ["openid", "profile", "w_member_social"],
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const callbackResponse = await coreApp.fetch(
+        new Request(
+          `http://localhost/api/social/linkedin/callback?state=${encodeURIComponent(
+            state || "",
+          )}&handoff=hosted-linkedin-handoff`,
+        ),
+        env,
+      );
+
+      expect(callbackResponse.status).toBe(302);
+      expect(callbackResponse.headers.get("location")).toBe(
+        "http://localhost:4000/social?social_connected=linkedin",
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(env.socialOauthStates).toHaveLength(0);
+      expect(env.socialAccounts).toEqual([
+        expect.objectContaining({
+          platform: "linkedin",
+          platform_account_id: "linkedin-owner",
+          platform_handle: "owner",
+          display_name: "Owner LinkedIn",
+          status: "active",
+        }),
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("allows explicit BYO OAuth when the hosted bridge is configured", async () => {
