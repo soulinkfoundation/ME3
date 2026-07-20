@@ -207,7 +207,7 @@ jobs:
           const health = JSON.parse(readFileSync(process.env.HEALTH_PATH, "utf8"));
           const mobile = JSON.parse(readFileSync(process.env.MOBILE_PATH, "utf8"));
           if (health.ok !== true || health.service !== "me3-core") throw new Error("health failed");
-          for (const binding of ["db", "userAgent", "workersAi"]) {
+          for (const binding of ["db", "userAgent", "workersAi", "siteAssets"]) {
             if (health.bindings?.[binding] !== true) throw new Error(`${binding} binding missing`);
           }
           if (!/^core_[0-9a-f-]{36}$/.test(mobile.installId || "")) throw new Error("install ID missing");

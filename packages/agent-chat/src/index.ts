@@ -2633,20 +2633,42 @@ async function maybeHandleAssistantImageTurn(
       },
     };
   } catch (error) {
+    const failure = describeAssistantImageGenerationFailure(error);
     return {
       route,
       response: failedImageResponse({
         turnId: input.turnId,
         prompt,
-        reason: "image_generation_failed",
-        replyText:
-          "I tried to generate the image, but the image provider or asset storage failed before I could save it.",
+        reason: failure.reason,
+        replyText: failure.replyText,
         route,
-        debugError: modelErrorMessage(error),
+        debugError: failure.debugError,
       }),
     };
   }
 
+}
+
+function describeAssistantImageGenerationFailure(error: unknown): {
+  reason: string;
+  replyText: string;
+  debugError: string;
+} {
+  const debugError = modelErrorMessage(error) || "Image generation failed";
+  if (/\b3030\b|output has been flagged/i.test(debugError)) {
+    return {
+      reason: "image_generation_provider_moderation",
+      replyText:
+        "The image provider blocked that result. Try rewording the request or adding neutral visual details, and I can try again.",
+      debugError,
+    };
+  }
+  return {
+    reason: "image_generation_failed",
+    replyText:
+      "I tried to generate the image, but the image provider or asset storage failed before I could save it.",
+    debugError,
+  };
 }
 
 function blockedImageResponse(input: {
@@ -4916,6 +4938,12 @@ export const MANAGED_AI_MODELS = [
   "openai/gpt-5.5",
 ] as const;
 const MANAGED_AI_MODEL_SET = new Set<string>(MANAGED_AI_MODELS);
+const MANAGED_AI_FALLBACK_MODELS = ["zai-org/glm-4.7-flash"] as const;
+const MANAGED_AI_IMAGE_MODELS = ["black-forest-labs/flux-2-klein-4b"] as const;
+const MANAGED_AI_BILLABLE_TEXT_MODEL_SET = new Set<string>([
+  ...MANAGED_AI_MODELS,
+  ...MANAGED_AI_FALLBACK_MODELS,
+]);
 const MANAGED_DEFAULT_MODEL = MANAGED_AI_MODELS[0];
 const MANAGED_AI_INCLUDED_MONTHLY_CENTS = 500;
 const MANAGED_AI_POLICY_SECRET = "ME3_MANAGED_AI_BILLING_POLICY";
@@ -4986,11 +5014,19 @@ async function isManagedEverydayBudgetExceeded(
       `SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total
        FROM ai_usage_events
        WHERE user_id = ?
-         AND kind = 'text'
-         AND lower(replace(model, '@cf/', '')) IN (?, ?, ?)
+         AND (
+           (kind = 'text' AND lower(replace(model, '@cf/', '')) IN (?, ?, ?, ?))
+           OR
+           (kind = 'image' AND lower(replace(model, '@cf/', '')) IN (?))
+         )
          AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')`,
     )
-      .bind(ownerId, ...MANAGED_AI_MODELS)
+      .bind(
+        ownerId,
+        ...MANAGED_AI_MODELS,
+        ...MANAGED_AI_FALLBACK_MODELS,
+        ...MANAGED_AI_IMAGE_MODELS,
+      )
       .first<{ total: number }>();
     return Number(usage?.total || 0) >= maximumCents / 100;
   } catch {
@@ -5007,7 +5043,7 @@ async function recordManagedEverydayUsage(
 ): Promise<void> {
   if (
     providerId !== "workers-ai" ||
-    !MANAGED_AI_MODEL_SET.has(normalizeManagedAiModel(model))
+    !MANAGED_AI_BILLABLE_TEXT_MODEL_SET.has(normalizeManagedAiModel(model))
   ) {
     return;
   }
@@ -5032,7 +5068,7 @@ async function recordManagedEverydayUsage(
           estimated: true,
           pricing: estimate.pricing,
           cachedInputTokens: usage.cachedInputTokens,
-          cloudflareUnifiedBillingFeeRate: 0.05,
+          cloudflareUnifiedBillingFeeRate: estimate.billingFeeRate,
         }),
         new Date().toISOString(),
       )
@@ -5045,6 +5081,7 @@ async function recordManagedEverydayUsage(
 export function estimateManagedKimiK3Usage(usage: AgentModelUsage): {
   costUsd: number;
   pricing: string;
+  billingFeeRate: number;
 } {
   return estimateManagedAiUsage(MANAGED_DEFAULT_MODEL, usage);
 }
@@ -5052,12 +5089,14 @@ export function estimateManagedKimiK3Usage(usage: AgentModelUsage): {
 export function estimateManagedAiUsage(model: string, usage: AgentModelUsage): {
   costUsd: number;
   pricing: string;
+  billingFeeRate: number;
 } {
   const normalizedModel = normalizeManagedAiModel(model);
   const pricing = {
-    "moonshotai/kimi-k3": { input: 3, cached: 0.3, output: 15, id: "cloudflare-unified-kimi-k3-2026-07" },
-    "anthropic/claude-sonnet-4.6": { input: 3, cached: 0.3, output: 15, id: "cloudflare-unified-claude-sonnet-4-6-2026-07" },
-    "openai/gpt-5.5": { input: 5, cached: 0.5, output: 30, id: "cloudflare-unified-gpt-5-5-2026-07" },
+    "moonshotai/kimi-k3": { input: 3, cached: 0.3, output: 15, feeRate: 0.05, id: "cloudflare-unified-kimi-k3-2026-07" },
+    "anthropic/claude-sonnet-4.6": { input: 3, cached: 0.3, output: 15, feeRate: 0.05, id: "cloudflare-unified-claude-sonnet-4-6-2026-07" },
+    "openai/gpt-5.5": { input: 5, cached: 0.5, output: 30, feeRate: 0.05, id: "cloudflare-unified-gpt-5-5-2026-07" },
+    "zai-org/glm-4.7-flash": { input: 0.06, cached: 0.06, output: 0.4, feeRate: 0, id: "workers-ai-glm-4-7-flash-2026-07" },
   }[normalizedModel];
   if (!pricing) throw new Error("Unsupported managed AI model");
   const inputTokens = Math.max(0, Math.trunc(usage.inputTokens));
@@ -5073,8 +5112,9 @@ export function estimateManagedAiUsage(model: string, usage: AgentModelUsage): {
       outputTokens * pricing.output) /
     1_000_000;
   return {
-    costUsd: providerCost * 1.05,
+    costUsd: providerCost * (1 + pricing.feeRate),
     pricing: pricing.id,
+    billingFeeRate: pricing.feeRate,
   };
 }
 

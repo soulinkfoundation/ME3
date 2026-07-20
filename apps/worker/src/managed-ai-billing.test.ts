@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   estimateManagedAiUsage,
   estimateManagedKimiK3Usage,
 } from "../../../packages/agent-chat/src";
+import { syncManagedAiUsage } from "./managed-ai-billing";
+import type { Env } from "./types";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("managed Everyday AI billing", () => {
   it("prices Kimi K3 input, cached input, output, and the Unified Billing fee", () => {
@@ -52,5 +58,113 @@ describe("managed Everyday AI billing", () => {
     expect(openai).toMatchObject({
       pricing: "cloudflare-unified-gpt-5-5-2026-07",
     });
+  });
+
+  it("prices the managed Workers AI fallback without a Unified Billing fee", () => {
+    const fallback = estimateManagedAiUsage("@cf/zai-org/glm-4.7-flash", {
+      inputTokens: 1_000_000,
+      cachedInputTokens: 0,
+      outputTokens: 100_000,
+    });
+
+    expect(fallback).toMatchObject({
+      costUsd: 0.1,
+      pricing: "workers-ai-glm-4-7-flash-2026-07",
+      billingFeeRate: 0,
+    });
+  });
+
+  it("syncs managed fallback-model and image-generation usage", async () => {
+    const rows = [
+      {
+        id: "fallback-usage",
+        provider: "workers-ai",
+        model: "@cf/zai-org/glm-4.7-flash",
+        kind: "text",
+        tokens_in: 100,
+        tokens_out: 20,
+        estimated_cost_usd: 0.000014,
+        metadata_json: "{}",
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: "image-usage",
+        provider: "workers-ai",
+        model: "@cf/black-forest-labs/flux-2-klein-4b",
+        kind: "image",
+        tokens_in: 0,
+        tokens_out: 0,
+        estimated_cost_usd: 0.001148,
+        metadata_json: "{}",
+        created_at: new Date().toISOString(),
+      },
+    ];
+    let requestBody: { events?: Array<{ id: string; kind: string; model: string }> } = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        requestBody = JSON.parse(String(init?.body || "{}"));
+        return Response.json({
+          acceptedEventIds: rows.map((row) => row.id),
+          settings: {
+            available: true,
+            managed: true,
+            currency: "usd",
+            billingSource: "internal",
+            defaultModel: "moonshotai/kimi-k3",
+            models: [],
+            eligible: false,
+            ineligibleReason: null,
+            overagesEnabled: false,
+            includedMonthlyCents: 500,
+            monthlyMaximumCents: 500,
+            minimumMonthlyMaximumCents: 600,
+            maximumMonthlyMaximumCents: 50_000,
+            currentMonth: new Date().toISOString().slice(0, 7),
+            currentMonthUsageMicrousd: 1_162,
+            currentMonthBillableMicrousd: 0,
+            effectiveMaximumCents: 500,
+            fallbackActive: false,
+          },
+        });
+      }),
+    );
+    const env = {
+      ME3_DEPLOYMENT_MODE: "managed",
+      ME3_COMMERCE_BRIDGE_ORIGIN: "https://api.me3.app",
+      ME3_COMMERCE_BRIDGE_TOKEN: "bridge-token",
+      DB: {
+        prepare(sql: string) {
+          return {
+            bind(..._values: unknown[]) {
+              return {
+                async all<T>() {
+                  return sql.includes("FROM ai_usage_events")
+                    ? { results: rows as T[] }
+                    : { results: [] as T[] };
+                },
+                async run() {
+                  return { success: true, meta: { changes: 1 } };
+                },
+              };
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+
+    await expect(syncManagedAiUsage(env)).resolves.toMatchObject({ managed: true });
+    expect(requestBody.events).toEqual([
+      expect.objectContaining({
+        id: "fallback-usage",
+        kind: "text",
+        model: "zai-org/glm-4.7-flash",
+      }),
+      expect.objectContaining({
+        id: "image-usage",
+        kind: "image",
+        model: "black-forest-labs/flux-2-klein-4b",
+      }),
+    ]);
   });
 });

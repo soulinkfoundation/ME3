@@ -94,6 +94,8 @@ type WheelSnapshotCardData = {
 type AiUsageCardData = {
   configured: boolean;
   setupRequired: boolean;
+  displayMode: "provider_details" | "managed_allowance";
+  allowanceUsedPercent: number | null;
   period: {
     id: "current_month";
     startsAt: string;
@@ -344,14 +346,21 @@ const aiUsageMoreModelsCount = computed(() =>
     (aiUsage.value?.models.length || 0) - aiUsageTopModels.value.length,
   ),
 );
+const aiUsageIsManaged = computed(
+  () => aiUsage.value?.displayMode === "managed_allowance",
+);
+const aiUsageAllowancePercent = computed(() =>
+  Math.min(100, Math.max(0, aiUsage.value?.allowanceUsedPercent || 0)),
+);
 const aiUsageDetailsAvailable = computed(
   () =>
     Boolean(aiUsage.value) &&
+    !aiUsageIsManaged.value &&
     !aiUsage.value?.setupRequired &&
     !aiUsage.value?.error,
 );
 const aiUsagePeriodLabel = computed(() =>
-  aiUsageDetailsAvailable.value && aiUsage.value
+  aiUsage.value && !aiUsage.value.setupRequired && !aiUsage.value.error
     ? formatAiUsagePeriod(aiUsage.value.period)
     : "",
 );
@@ -1256,35 +1265,56 @@ onBeforeUnmount(() => {
               </Button>
             </div>
             <div v-else-if="aiUsage" class="ai-usage-summary">
-              <div class="ai-usage-summary__total">
-                <strong>{{ formatCurrency(aiUsage.totalCost) }}</strong>
-                <span>
-                  {{ formatCompactNumber(aiUsage.totalRequests) }} requests ·
-                  {{ formatTokenCount(aiUsage.totalTokens) }}
-                </span>
-              </div>
-              <div v-if="aiUsageTopModels.length" class="ai-usage-models">
-                <div
-                  v-for="model in aiUsageTopModels"
-                  :key="`${model.provider}:${model.model}`"
-                  class="ai-usage-models__row"
-                >
-                  <div>
-                    <strong :title="model.model">{{ model.model }}</strong>
-                    <span :title="model.provider">{{ model.provider }}</span>
-                  </div>
-                  <span>{{ formatCurrency(model.cost) }}</span>
+              <template v-if="aiUsageIsManaged">
+                <div class="ai-usage-summary__total">
+                  <strong>{{ Math.round(aiUsageAllowancePercent) }}% used</strong>
+                  <span>of this month's AI allowance</span>
                 </div>
-                <button
-                  v-if="!dashboardEditing && aiUsageMoreModelsCount"
-                  type="button"
-                  class="ai-usage-models__more"
-                  :aria-label="`Show ${aiUsageMoreModelsCount} more AI usage items`"
-                  @click="aiUsageModalOpen = true"
+                <div
+                  class="ai-usage-summary__track"
+                  role="progressbar"
+                  aria-label="Monthly AI usage"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  :aria-valuenow="Math.round(aiUsageAllowancePercent)"
                 >
-                  {{ aiUsageMoreModelsCount }} more
-                </button>
-              </div>
+                  <span
+                    class="ai-usage-summary__fill"
+                    :style="{ width: `${aiUsageAllowancePercent}%` }"
+                  />
+                </div>
+              </template>
+              <template v-else>
+                <div class="ai-usage-summary__total">
+                  <strong>{{ formatCurrency(aiUsage.totalCost) }}</strong>
+                  <span>
+                    {{ formatCompactNumber(aiUsage.totalRequests) }} requests ·
+                    {{ formatTokenCount(aiUsage.totalTokens) }}
+                  </span>
+                </div>
+                <div v-if="aiUsageTopModels.length" class="ai-usage-models">
+                  <div
+                    v-for="model in aiUsageTopModels"
+                    :key="`${model.provider}:${model.model}`"
+                    class="ai-usage-models__row"
+                  >
+                    <div>
+                      <strong :title="model.model">{{ model.model }}</strong>
+                      <span :title="model.provider">{{ model.provider }}</span>
+                    </div>
+                    <span>{{ formatCurrency(model.cost) }}</span>
+                  </div>
+                  <button
+                    v-if="!dashboardEditing && aiUsageMoreModelsCount"
+                    type="button"
+                    class="ai-usage-models__more"
+                    :aria-label="`Show ${aiUsageMoreModelsCount} more AI usage items`"
+                    @click="aiUsageModalOpen = true"
+                  >
+                    {{ aiUsageMoreModelsCount }} more
+                  </button>
+                </div>
+              </template>
             </div>
             <div v-else class="dashboard-empty">
               <p>AI usage is ready to load.</p>
@@ -2230,6 +2260,20 @@ onBeforeUnmount(() => {
   color: var(--ui-text-muted);
   font-size: 12px;
   font-weight: 650;
+}
+
+.ai-usage-summary__track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--ui-surface-strong, var(--ui-border));
+}
+
+.ai-usage-summary__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ui-accent);
 }
 
 .ai-usage-models {

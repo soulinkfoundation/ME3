@@ -515,6 +515,7 @@ app.get("/health", async (c) => {
       db: Boolean(c.env.DB),
       userAgent: Boolean(c.env.ME3_USER_AGENT),
       workersAi: Boolean(c.env.AI),
+      siteAssets: Boolean(c.env.SITE_ASSETS),
     },
     hosts: {
       admin: getAdminHost(c.env, c.req.url),

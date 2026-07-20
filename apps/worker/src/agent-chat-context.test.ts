@@ -1446,6 +1446,41 @@ describe("Core chat native context", () => {
     });
   });
 
+  it("explains provider moderation failures without blaming asset storage", async () => {
+    const aiRun = vi.fn(async () => {
+      throw new Error(
+        "3030: Your output has been flagged. Please choose another prompt / input image combination",
+      );
+    });
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        SITE_ASSETS: createR2Bucket().bucket,
+      } as never,
+      createStorage(),
+      {
+        ...dispatchInput("Generate an image of an international football tournament."),
+        threadId: "thread-1",
+        selectedModel: {
+          providerId: "workers-ai",
+          model: "@cf/qwen/qwen3-30b-a3b-fp8",
+          optionId: "workers-qwen3-30b",
+        },
+      },
+    );
+
+    expect(aiRun).toHaveBeenCalledOnce();
+    expect(response.replyText).toContain("image provider blocked");
+    expect(response.replyText).not.toContain("asset storage");
+    expect(response.imageAction).toMatchObject({
+      status: "failed",
+      reason: "image_generation_provider_moderation",
+    });
+  });
+
   it("blocks image generation before provider work when no compatible route exists", async () => {
     const env = createEnv();
 

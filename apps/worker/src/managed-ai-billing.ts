@@ -9,6 +9,8 @@ const MANAGED_MODELS = [
   "anthropic/claude-sonnet-4.6",
   "openai/gpt-5.5",
 ] as const;
+const MANAGED_FALLBACK_MODELS = ["zai-org/glm-4.7-flash"] as const;
+const MANAGED_IMAGE_MODELS = ["black-forest-labs/flux-2-klein-4b"] as const;
 
 export type ManagedAiModelOption = {
   id: string;
@@ -126,14 +128,17 @@ export async function syncManagedAiUsage(
       `SELECT id, provider, model, kind, tokens_in, tokens_out,
               estimated_cost_usd, metadata_json, created_at
        FROM ai_usage_events
-       WHERE kind = 'text'
-         AND lower(replace(model, '@cf/', '')) IN (?, ?, ?)
+       WHERE (
+           (kind = 'text' AND lower(replace(model, '@cf/', '')) IN (?, ?, ?, ?))
+           OR
+           (kind = 'image' AND lower(replace(model, '@cf/', '')) IN (?))
+         )
          AND created_at >= datetime('now', '-35 days')
          AND json_extract(metadata_json, '$.managedBillingReportedAt') IS NULL
        ORDER BY created_at ASC
        LIMIT 100`,
     )
-      .bind(...MANAGED_MODELS)
+      .bind(...MANAGED_MODELS, ...MANAGED_FALLBACK_MODELS, ...MANAGED_IMAGE_MODELS)
       .all<LocalUsageRow>();
     rows = result.results || [];
   } catch (error) {

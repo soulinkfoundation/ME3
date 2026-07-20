@@ -3,6 +3,7 @@ import {
   getOrCreateInstallEncryptionKey,
   hasInstallEncryptionKey,
 } from "./install-secrets";
+import { getManagedAiBillingSettings } from "./managed-ai-billing";
 import type { Env } from "./types";
 
 type AiGatewaySettingsRow = {
@@ -80,6 +81,8 @@ export type AiGatewayRuntimeConfig = {
 export type AiGatewayUsageSummary = {
   configured: boolean;
   setupRequired: boolean;
+  displayMode: "provider_details" | "managed_allowance";
+  allowanceUsedPercent: number | null;
   period: {
     id: "current_month";
     startsAt: string;
@@ -290,6 +293,32 @@ export async function getAiGatewayUsageSummary(
     endsAt,
     usage,
   );
+
+  if (env.ME3_DEPLOYMENT_MODE?.trim().toLowerCase() === "managed") {
+    const billing = await getManagedAiBillingSettings(env);
+    const localUsageMicrousd = Math.max(0, Math.round(usage.totalCost * 1_000_000));
+    const currentMonthUsageMicrousd = billing.available
+      ? Math.max(billing.currentMonthUsageMicrousd, localUsageMicrousd)
+      : localUsageMicrousd;
+    const effectiveMaximumMicrousd = Math.max(
+      1,
+      (billing.effectiveMaximumCents || billing.includedMonthlyCents) * 10_000,
+    );
+    return {
+      ...buildUsageSummary(empty, usage, {
+        configured: true,
+        setupRequired: false,
+        fetchedAt: new Date().toISOString(),
+        truncated: localTruncated,
+      }),
+      displayMode: "managed_allowance",
+      allowanceUsedPercent: Math.min(
+        100,
+        Math.max(0, (currentMonthUsageMicrousd / effectiveMaximumMicrousd) * 100),
+      ),
+    };
+  }
+
   const config = await getAiGatewayRuntimeConfig(env, userId);
 
   if (!config.accountId || !config.gatewayId || !config.apiToken) {
@@ -535,6 +564,8 @@ function buildUsageSummary(
   return {
     configured: options.configured,
     setupRequired: options.setupRequired,
+    displayMode: "provider_details",
+    allowanceUsedPercent: null,
     period: empty.period,
     currency: "usd",
     totalCost: usage.totalCost,
@@ -619,6 +650,8 @@ function createEmptyUsageSummary(startsAt: Date, endsAt: Date): AiGatewayUsageSu
   return {
     configured: false,
     setupRequired: false,
+    displayMode: "provider_details",
+    allowanceUsedPercent: null,
     period: {
       id: "current_month",
       startsAt: startsAt.toISOString(),
