@@ -42,6 +42,7 @@ if (
 const routes = {
   ME3_MANAGED_INSTALLATION_ID: managedInstallationId,
   ME3_MANAGED_EMAIL_GATEWAY_ORIGIN: managedEmailGatewayUrl.origin,
+  ME3_SOCIAL_OAUTH_ORIGIN: "https://api.me3.app",
   ME3_AI_CHAT_PROVIDER: "workers-ai",
   ME3_AI_CHAT_MODEL: "moonshotai/kimi-k3",
   ME3_AI_CHAT_BACKUP_MODEL: "@cf/zai-org/glm-4.7-flash",

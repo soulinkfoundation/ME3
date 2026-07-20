@@ -623,6 +623,38 @@ type SocialPublishingEnv = {
   TOKEN_ENCRYPTION_KEY?: string;
 };
 
+const ME3_CLOUD_SOCIAL_OAUTH_ORIGIN = "https://api.me3.app";
+const HOSTED_SOCIAL_OAUTH_LINK_SECRET_NAMES = [
+  "ME3_CLOUD_OWNER_ID",
+  "ME3_CORE_INSTALL_ID",
+  "ME3_CLOUD_CORE_TOKEN",
+] as const;
+
+export async function resolveHostedSocialOAuthOrigin(
+  env: SocialPublishingEnv,
+): Promise<string | null> {
+  const configuredOrigin = env.ME3_SOCIAL_OAUTH_ORIGIN?.trim().replace(/\/+$/, "") || null;
+  if (configuredOrigin && configuredOrigin !== ME3_CLOUD_SOCIAL_OAUTH_ORIGIN) {
+    return configuredOrigin;
+  }
+
+  try {
+    const [ownerId, installId, installToken] = await Promise.all(
+      HOSTED_SOCIAL_OAUTH_LINK_SECRET_NAMES.map(async (name) => {
+        const row = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
+          .bind(name)
+          .first<{ value: string }>();
+        return row?.value?.trim() || "";
+      }),
+    );
+    return ownerId && installId && installToken
+      ? configuredOrigin || ME3_CLOUD_SOCIAL_OAUTH_ORIGIN
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export class SocialPublishingGateError extends Error {
   constructor(
     public readonly gate: SocialPublishingGate,
@@ -4078,7 +4110,7 @@ async function refreshHostedProviderToken(
   refreshToken: string,
   fetcher: typeof fetch,
 ): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: string | null } | null> {
-  const origin = env.ME3_SOCIAL_OAUTH_ORIGIN?.replace(/\/$/, "");
+  const origin = await resolveHostedSocialOAuthOrigin(env);
   if (!origin) return null;
   const installationHeaders = await getHostedOAuthInstallationHeaders(env);
   if (!installationHeaders) return null;

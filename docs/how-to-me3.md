@@ -491,7 +491,9 @@ Production installations offer the ME3 Cloud LinkedIn and Instagram OAuth bridge
 connection path. The installation must first be linked to ME3 Cloud; provider app secrets stay in the
 bridge, while the resulting owner-authorized social token is encrypted and stored in the installation.
 Owners can select the advanced bring-your-own-app path instead, and independent self-hosted installs
-can leave the bridge unset.
+can leave the bridge unset. Linked installations automatically use the official bridge even when an
+older preserved `wrangler.toml` does not contain `ME3_SOCIAL_OAUTH_ORIGIN`; LinkedIn and Instagram
+client secrets must not be copied into the installation.
 
 The X adapter can prepare text and up to four validated PNG, JPEG, or WebP images, including
 optional alt text, through the current X v2 media and Post APIs. Owners must provide their own X

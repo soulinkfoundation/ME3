@@ -57,6 +57,7 @@ import {
   listSocialProviderSettings,
   listSocialPublishingAccounts,
   processSocialPublishBatch,
+  resolveHostedSocialOAuthOrigin,
   SOCIAL_PUBLISH_QUEUE_NAME,
   startSocialOAuth,
   updateSocialProviderSettings,
@@ -1008,12 +1009,13 @@ registerSocialCarouselRoutes(app, { requireOwner, unauthorized });
 app.get("/api/social/status", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
+  const hostedOAuthOrigin = await resolveHostedSocialOAuthOrigin(c.env);
 
   return c.json({
     plugin: await getSocialPublishingRuntimeStatus(c.env),
     hostedOAuth: {
-      configured: Boolean(c.env.ME3_SOCIAL_OAUTH_ORIGIN),
-      platforms: c.env.ME3_SOCIAL_OAUTH_ORIGIN ? ["linkedin", "instagram"] : [],
+      configured: Boolean(hostedOAuthOrigin),
+      platforms: hostedOAuthOrigin ? ["linkedin", "instagram"] : [],
     },
   });
 });
@@ -1089,6 +1091,7 @@ app.post("/api/social/:platform/authorize", async (c) => {
 
   const body = await c.req.json<unknown>().catch((): unknown => ({}));
   try {
+    const hostedOAuthOrigin = await resolveHostedSocialOAuthOrigin(c.env);
     return c.json(
       await startSocialOAuth(
         c.env,
@@ -1096,7 +1099,7 @@ app.post("/api/social/:platform/authorize", async (c) => {
         { ...(body && typeof body === "object" ? body : {}), platform: c.req.param("platform") },
         {
           apiOrigin: getCoreApiOrigin(c.env, c.req.url),
-          hostedOAuthOrigin: c.env.ME3_SOCIAL_OAUTH_ORIGIN || null,
+          hostedOAuthOrigin,
         },
       ),
     );
@@ -1113,6 +1116,7 @@ app.post("/api/social/:platform/authorize", async (c) => {
 
 app.get("/api/social/:platform/callback", async (c) => {
   try {
+    const hostedOAuthOrigin = await resolveHostedSocialOAuthOrigin(c.env);
     const redirect = await completeSocialOAuth(
       c.env,
       c.req.param("platform"),
@@ -1127,7 +1131,7 @@ app.get("/api/social/:platform/callback", async (c) => {
         webOrigin: getCoreWebOrigin(c.env, c.req.url),
         fetch,
         installKey: await getOrCreateInstallEncryptionKey(c.env),
-        hostedOAuthOrigin: c.env.ME3_SOCIAL_OAUTH_ORIGIN || null,
+        hostedOAuthOrigin,
       },
     );
     return c.redirect(redirect);

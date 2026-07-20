@@ -53,6 +53,7 @@ export {
   publishQueuedPublication,
   resolvePublicationOutcome,
   renderAndAttachSocialCarousel,
+  resolveHostedSocialOAuthOrigin,
   reschedulePublication,
   searchPostLibrary,
   socialPlatformCapabilities,

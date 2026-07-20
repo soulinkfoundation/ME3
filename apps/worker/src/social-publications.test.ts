@@ -586,7 +586,6 @@ describe("reusable social Publications", () => {
          ('ME3_CORE_INSTALL_ID', 'core-install'),
          ('ME3_CLOUD_CORE_TOKEN', 'core-update-token');`,
     );
-    fixture.env.ME3_SOCIAL_OAUTH_ORIGIN = "https://api.me3.app";
     fixture.db.run(
       `UPDATE social_accounts
        SET status = 'active', access_token_ciphertext = ?, refresh_token_ciphertext = ?,
