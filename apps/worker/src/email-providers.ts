@@ -869,13 +869,7 @@ export async function sendEmailWithProvider(
 ): Promise<EmailProviderSendResponse> {
   const resolved = await resolveReadyProvider(env, ownerId, input.providerId || null);
   const managedGateway = resolved.providerId === MANAGED_EMAIL_PROVIDER_ID;
-  if (managedGateway && input.purpose === "workflow") {
-    throw new EmailProviderInputError(
-      "Automated workflow email is not available through ME3 managed email yet",
-      409,
-    );
-  }
-  if (managedGateway && !input.approvedByUserId) {
+  if (managedGateway && input.purpose !== "workflow" && !input.approvedByUserId) {
     throw new EmailProviderInputError(
       "ME3 managed email requires explicit owner approval",
       403,

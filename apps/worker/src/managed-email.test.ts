@@ -419,9 +419,14 @@ describe("managed email outbound provider", () => {
     },
   );
 
-  it("allows only explicitly owner-approved one-to-one purposes", async () => {
+  it("allows system workflow sends and keeps manual sends owner-approved", async () => {
     const db = new ManagedEmailTestDb();
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json(
+        { status: "accepted", providerMessageId: "cf-workflow-message" },
+        { status: 201 },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
@@ -429,10 +434,12 @@ describe("managed email outbound provider", () => {
         purpose: "workflow",
         toAddress: "client@example.com",
         subject: "Automated send",
-        textBody: "Not yet supported.",
-        approvedByUserId: "owner",
+        textBody: "System workflow send.",
       }),
-    ).rejects.toMatchObject({ status: 409 });
+    ).resolves.toMatchObject({
+      providerId: "managed_gateway",
+      providerMessageId: "cf-workflow-message",
+    });
     await expect(
       sendEmailWithProvider(managedEnv(db), "owner", {
         purpose: "reply",
@@ -441,8 +448,8 @@ describe("managed email outbound provider", () => {
         textBody: "Must not send.",
       }),
     ).rejects.toMatchObject({ status: 403 });
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(db.sendAudits).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(db.sendAudits).toHaveLength(1);
   });
 
   it("translates an owner-approved provider test to the Cloud owner identity", async () => {
