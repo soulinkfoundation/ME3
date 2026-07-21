@@ -104,6 +104,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: source/pnpm-lock.yaml
 
+      - name: Verify Cloudflare account owns the permanent hostname zone
+        run: node control/scripts/verify-managed-cloudflare-placement.mjs
+
       - name: Install the pinned release
         working-directory: source
         run: pnpm install --frozen-lockfile

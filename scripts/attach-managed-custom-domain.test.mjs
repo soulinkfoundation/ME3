@@ -61,6 +61,29 @@ test("is idempotent and rejects a hostname assigned to another Worker", async ()
   );
 });
 
+test("reports sanitized Cloudflare API errors", async () => {
+  const exposed = "secret-token-value-123456789012345678901234567890";
+  await assert.rejects(
+    attachManagedCustomDomain(contract(), async () =>
+      new Response(
+        JSON.stringify({
+          success: false,
+          errors: [{ code: 10000, message: `Authentication failed ${exposed}` }],
+        }),
+        { status: 403, headers: { "Content-Type": "application/json" } },
+      ),
+    ),
+    (error) => {
+      assert.match(
+        error.message,
+        /status 403 \(10000: Authentication failed \[redacted\]\)/,
+      );
+      assert.doesNotMatch(error.message, new RegExp(exposed));
+      return true;
+    },
+  );
+});
+
 function contract() {
   return {
     accountId: ACCOUNT_ID,

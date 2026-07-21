@@ -32,7 +32,9 @@ export async function attachManagedCustomDomain(input, request = globalThis.fetc
     });
     const body = await response.json().catch(() => null);
     if (!response.ok || body?.success !== true || !Object.hasOwn(body, "result")) {
-      throw new Error("managed custom domain request failed");
+      throw new Error(
+        `managed custom domain request failed with status ${response.status}${summarizeCloudflareApiErrors(body)}`,
+      );
     }
     return body.result;
   };
@@ -90,6 +92,26 @@ export async function attachManagedCustomDomain(input, request = globalThis.fetc
     origin: `https://${hostname}`,
     domainId: String(exact[0].id || ""),
   };
+}
+
+function summarizeCloudflareApiErrors(body) {
+  const errors = Array.isArray(body?.errors) ? body.errors.slice(0, 3) : [];
+  const summaries = errors.map((error) => {
+    const code =
+      typeof error?.code === "number" || typeof error?.code === "string"
+        ? String(error.code)
+        : "unknown";
+    const message =
+      typeof error?.message === "string"
+        ? error.message
+            .replace(/[^\x20-\x7e]+/g, " ")
+            .replace(/(?:bearer\s+)?[A-Za-z0-9_-]{32,}/gi, "[redacted]")
+            .trim()
+            .slice(0, 300)
+        : "unknown";
+    return `${code}: ${message}`;
+  });
+  return summaries.length > 0 ? ` (${summaries.join("; ")})` : "";
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
