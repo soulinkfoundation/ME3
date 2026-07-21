@@ -123,7 +123,7 @@ const runtimeMigrations: RuntimeMigration[] = [
   },
   {
     id: "0030_social_youtube_tiktok",
-    checksum: "2026-07-21-social-youtube-tiktok-v1",
+    checksum: "2026-07-21-social-youtube-tiktok-v2",
     apply: applySocialYoutubeTikTokMigration,
   },
 ];
@@ -1753,7 +1753,7 @@ async function applySocialYoutubeTikTokMigration(db: D1Database): Promise<void> 
   }
   if (definitions.every((definition) => definition.includes("'tiktok'"))) return;
 
-  await db.exec(`
+  const sql = `
     PRAGMA defer_foreign_keys = ON;
 
     CREATE TABLE social_posting_preferences_0030_backup AS SELECT * FROM social_posting_preferences;
@@ -1908,7 +1908,13 @@ async function applySocialYoutubeTikTokMigration(db: D1Database): Promise<void> 
     DROP TABLE social_posting_plan_items_0030_backup;
     DROP TABLE social_media_delivery_grants_0030_backup;
     PRAGMA defer_foreign_keys = OFF;
-  `);
+  `;
+  const statements = sql
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter(Boolean)
+    .map((statement) => db.prepare(statement));
+  await db.batch(statements);
 }
 
 async function tableExists(db: D1Database, tableName: string): Promise<boolean> {

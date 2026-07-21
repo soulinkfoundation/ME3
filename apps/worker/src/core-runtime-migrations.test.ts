@@ -123,14 +123,15 @@ describe("Core runtime migrations", () => {
       "2026-07-21-social-media-delivery-v1",
     );
     expect(db.migrations.get("0030_social_youtube_tiktok")).toBe(
-      "2026-07-21-social-youtube-tiktok-v1",
+      "2026-07-21-social-youtube-tiktok-v2",
     );
     expect(
       db.statements.some(
         (sql) =>
           sql.includes("social_accounts_0030_new") &&
           sql.includes("'youtube'") &&
-          sql.includes("'tiktok'"),
+          sql.includes("'tiktok'") &&
+          !sql.includes("PRAGMA defer_foreign_keys"),
       ),
     ).toBe(true);
     expect(
@@ -356,6 +357,12 @@ class RuntimeMigrationDb {
     return new RuntimeMigrationStatement(this, sql);
   }
 
+  async batch(statements: RuntimeMigrationStatement[]) {
+    const results = [];
+    for (const statement of statements) results.push(await statement.run());
+    return results;
+  }
+
   async exec(sql: string) {
     this.statements.push(sql);
     return { count: 1, duration: 0 };
@@ -504,8 +511,9 @@ class RuntimeMigrationStatement {
       return { success: true };
     }
     if (
-      this.sql.includes("ALTER TABLE social_packages") ||
-      this.sql.includes("ALTER TABLE social_variants")
+      this.sql.includes(" ADD COLUMN ") &&
+      (this.sql.includes("ALTER TABLE social_packages") ||
+        this.sql.includes("ALTER TABLE social_variants"))
     ) {
       const match = this.sql.match(/ALTER TABLE (\w+) ADD COLUMN (\w+)/);
       if (!match) throw new Error("invalid social alter statement");
