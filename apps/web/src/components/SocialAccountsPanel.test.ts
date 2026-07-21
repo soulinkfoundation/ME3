@@ -135,6 +135,7 @@ describe("SocialAccountsPanel X funding acknowledgement", () => {
         },
       },
     });
+    expect(toastHarness.error).not.toHaveBeenCalled();
     await flushPromises();
 
     expect(toastHarness.success).toHaveBeenCalledWith(message);
@@ -176,6 +177,7 @@ describe("SocialAccountsPanel X funding acknowledgement", () => {
         },
       },
     });
+    expect(toastHarness.error).not.toHaveBeenCalled();
     await flushPromises();
 
     expect(toastHarness.error).toHaveBeenCalledWith(

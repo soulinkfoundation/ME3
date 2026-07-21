@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter, type LocationQueryRaw } from "vue-router";
 import {
   useSocialStore,
@@ -212,6 +212,14 @@ function clearOAuthQueryFromUrl() {
   void router.replace({ path: route.path, query });
 }
 
+function presentOAuthFeedback() {
+  if (oauthMessage.value) toastSuccess(oauthMessage.value);
+  if (oauthErrorMessage.value) toastError(oauthErrorMessage.value);
+  if (oauthMessage.value || oauthErrorMessage.value) {
+    clearOAuthQueryFromUrl();
+  }
+}
+
 function buildReturnPath(): string {
   const query: LocationQueryRaw = { ...route.query };
   delete query.social_connected;
@@ -325,16 +333,12 @@ async function disconnectCurrentAccount() {
 
 onMounted(() => {
   void reloadAccounts();
+  void nextTick(presentOAuthFeedback);
 });
 
 watch(
   () => [oauthMessage.value, oauthErrorMessage.value] as const,
-  ([message, errorMessage]) => {
-    if (message) toastSuccess(message);
-    if (errorMessage) toastError(errorMessage);
-    if (message || errorMessage) clearOAuthQueryFromUrl();
-  },
-  { immediate: true },
+  () => void nextTick(presentOAuthFeedback),
 );
 
 watch(() => props.siteId, () => void reloadAccounts());
