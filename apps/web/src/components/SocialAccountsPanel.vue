@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter, type LocationQueryRaw } from "vue-router";
 import {
   useSocialStore,
@@ -220,6 +220,10 @@ function presentOAuthFeedback() {
   }
 }
 
+function scheduleOAuthFeedback() {
+  window.setTimeout(presentOAuthFeedback, 0);
+}
+
 function buildReturnPath(): string {
   const query: LocationQueryRaw = { ...route.query };
   delete query.social_connected;
@@ -333,12 +337,12 @@ async function disconnectCurrentAccount() {
 
 onMounted(() => {
   void reloadAccounts();
-  void nextTick(presentOAuthFeedback);
+  scheduleOAuthFeedback();
 });
 
 watch(
   () => [oauthMessage.value, oauthErrorMessage.value] as const,
-  () => void nextTick(presentOAuthFeedback),
+  scheduleOAuthFeedback,
 );
 
 watch(() => props.siteId, () => void reloadAccounts());
