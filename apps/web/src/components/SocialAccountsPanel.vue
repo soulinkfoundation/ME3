@@ -7,6 +7,7 @@ import {
   type SocialProviderSetting,
   type SocialStatus,
 } from "../stores/social";
+import { useAppToast } from "../composables/useAppToast";
 import UiIcon from "./UiIcon.vue";
 
 type SupportedPlatform =
@@ -24,6 +25,7 @@ const props = defineProps<{
 const social = useSocialStore();
 const route = useRoute();
 const router = useRouter();
+const { toastError, toastSuccess } = useAppToast();
 
 const accounts = ref<SocialAccountRow[]>([]);
 const status = ref<SocialStatus | null>(null);
@@ -31,7 +33,6 @@ const providerSettings = ref<SocialProviderSetting[]>([]);
 const busyPlatform = ref<SupportedPlatform | null>(null);
 const savingProvider = ref(false);
 const connectModalPlatform = ref<SupportedPlatform | null>(null);
-const localError = ref<string | null>(null);
 const xFundingAcknowledged = ref(false);
 const providerDraft = ref({
   clientId: "",
@@ -113,6 +114,30 @@ const oauthErrorMessage = computed(() => {
       return "This social connection is not configured on the server yet.";
     case "token":
       return "OAuth completed, but the token exchange failed.";
+    case "youtube_token_invalid_client":
+      return "Google rejected the YouTube app credentials. Check that the client ID and client secret belong to the same Web application.";
+    case "youtube_token_invalid_grant":
+    case "youtube_token_redirect_uri":
+      return "Google rejected the YouTube authorization code. Confirm the authorized redirect URI is exactly https://api.me3.app/api/social/youtube/callback, then try again.";
+    case "youtube_token_refresh_missing":
+      return "Google did not return an offline refresh token. Remove ME3 from your Google Account connections, then reconnect.";
+    case "youtube_token_invalid_scope":
+    case "youtube_token_unauthorized_client":
+      return "The Google OAuth app is not allowed to request the required YouTube scopes yet.";
+    case "youtube_token":
+      return "Google could not complete the YouTube token exchange. Check the OAuth client configuration and try again.";
+    case "tiktok_token_invalid_client":
+      return "TikTok rejected the app credentials. Check that the client key and client secret come from the same TikTok app.";
+    case "tiktok_token_invalid_grant":
+    case "tiktok_token_redirect_uri":
+      return "TikTok rejected the authorization code. Confirm the redirect URI is exactly https://api.me3.app/api/social/tiktok/callback, then try again.";
+    case "tiktok_token_invalid_scope":
+    case "tiktok_token_unauthorized_client":
+      return "The TikTok app is not allowed to request user.info.basic and video.upload. Check its Login Kit and Content Posting API configuration.";
+    case "tiktok_token_response":
+      return "TikTok returned an incomplete token response. Check the app products and scopes, then reconnect.";
+    case "tiktok_token":
+      return "TikTok could not complete the token exchange. Check the app credentials and redirect URI, then try again.";
     case "profile":
       return "OAuth completed, but ME3 could not load your social profile.";
     case "state_error":
@@ -159,28 +184,10 @@ const managedOnlyPlatform = computed(
   () => connectModalPlatform.value === "youtube" || connectModalPlatform.value === "tiktok",
 );
 
-const modalSummary = computed(() => {
-  if (connectModalPlatform.value === "x") {
-    return "X requires your own developer app and API credits. Add your app credentials, then connect your X account with OAuth.";
-  }
-  if (connectModalPlatform.value === "instagram") {
-    return hostedOAuthAvailable.value
-      ? "Connect through ME3 Cloud without creating a developer app. Your social token is stored in this ME3 installation."
-      : "Connect Instagram with your own Meta app credentials. Publishing requires a professional account that can use Meta content publishing.";
-  }
-  if (connectModalPlatform.value === "linkedin") {
-    return hostedOAuthAvailable.value
-      ? "Connect through ME3 Cloud without creating a LinkedIn developer app. Your social token is stored in this ME3 installation."
-      : "Connect LinkedIn with your own app credentials. The app needs Share on LinkedIn access.";
-  }
-  if (connectModalPlatform.value === "youtube") {
-    return "Connect your YouTube channel through ME3. Google returns to ME3 Cloud, while the channel token remains encrypted in this installation.";
-  }
-  if (connectModalPlatform.value === "tiktok") {
-    return "Connect TikTok through ME3 to send short videos to your TikTok inbox for final editing and posting in the TikTok app.";
-  }
-  return "";
-});
+function reportSocialError(error: unknown, fallback: string) {
+  social.setErrorFromApi(error, fallback);
+  toastError(social.error || fallback);
+}
 
 async function reloadAccounts() {
   try {
@@ -193,8 +200,7 @@ async function reloadAccounts() {
     accounts.value = nextAccounts;
     providerSettings.value = nextSettings;
   } catch (error) {
-    social.setErrorFromApi(error, "Failed to load connected social accounts");
-    localError.value = social.error;
+    reportSocialError(error, "Failed to load connected social accounts");
   }
 }
 
@@ -218,7 +224,6 @@ async function connect(
   credentialSource: "managed" | "byo",
 ) {
   if (busyPlatform.value) return;
-  localError.value = null;
   busyPlatform.value = platform;
   try {
     const url = await social.startSocialOAuth(
@@ -229,14 +234,12 @@ async function connect(
     );
     window.location.href = url;
   } catch (error) {
-    social.setErrorFromApi(error, "Could not start OAuth");
-    localError.value = social.error;
+    reportSocialError(error, "Could not start OAuth");
     busyPlatform.value = null;
   }
 }
 
 function openConnectModal(platform: SupportedPlatform) {
-  localError.value = null;
   connectModalPlatform.value = platform;
   const setting = providerSettings.value.find(
     (provider) => provider.providerId === platform,
@@ -262,23 +265,22 @@ async function continueWithManagedApp() {
 
 async function continueWithOwnApp() {
   if (!connectModalPlatform.value || savingProvider.value) return;
-  localError.value = null;
   const platform = connectModalPlatform.value;
   const current = modalProviderSetting.value;
   const clientId = providerDraft.value.clientId.trim();
   const clientSecret = providerDraft.value.clientSecret.trim();
 
   if (platform === "x" && !xFundingAcknowledged.value) {
-    localError.value = "Acknowledge that X API usage is funded through your developer account.";
+    toastError("Acknowledge that X API usage is funded through your developer account.");
     return;
   }
 
   if (!clientId) {
-    localError.value = "Client ID is required.";
+    toastError("Client ID is required.");
     return;
   }
   if (!clientSecret && !current?.configured) {
-    localError.value = "Client secret is required the first time you configure this app.";
+    toastError("Client secret is required the first time you configure this app.");
     return;
   }
 
@@ -292,8 +294,7 @@ async function continueWithOwnApp() {
     });
     await connect(platform, "byo");
   } catch (error) {
-    social.setErrorFromApi(error, "Could not configure social app");
-    localError.value = social.error;
+    reportSocialError(error, "Could not configure social app");
     busyPlatform.value = null;
   } finally {
     savingProvider.value = false;
@@ -311,14 +312,12 @@ async function disconnectCurrentAccount() {
     return;
   }
   busyPlatform.value = connectModalPlatform.value;
-  localError.value = null;
   try {
     await social.disconnectSocialAccount(account.id);
     await reloadAccounts();
     connectModalPlatform.value = null;
   } catch (error) {
-    social.setErrorFromApi(error, "Could not disconnect social account");
-    localError.value = social.error;
+    reportSocialError(error, "Could not disconnect social account");
   } finally {
     busyPlatform.value = null;
   }
@@ -329,48 +328,21 @@ onMounted(() => {
 });
 
 watch(
-  () => [oauthConnected.value, oauthError.value, props.siteId] as const,
-  () => {
-    void reloadAccounts();
+  () => [oauthMessage.value, oauthErrorMessage.value] as const,
+  ([message, errorMessage]) => {
+    if (message) toastSuccess(message);
+    if (errorMessage) toastError(errorMessage);
+    if (message || errorMessage) clearOAuthQueryFromUrl();
   },
+  { immediate: true },
 );
+
+watch(() => props.siteId, () => void reloadAccounts());
 </script>
 
 <template>
   <section class="social-panel">
     <h2>Connect social accounts</h2>
-
-    <div
-      v-if="oauthMessage"
-      class="banner banner-info banner--with-dismiss"
-      role="status"
-    >
-      <span class="banner__body">{{ oauthMessage }}</span>
-      <button
-        type="button"
-        class="banner__dismiss"
-        aria-label="Dismiss message"
-        @click="clearOAuthQueryFromUrl"
-      >
-        <UiIcon name="X" :size="18" aria-hidden="true" />
-      </button>
-    </div>
-    <div
-      v-if="oauthErrorMessage"
-      class="banner banner-error banner--with-dismiss"
-      role="alert"
-    >
-      <span class="banner__body">{{ oauthErrorMessage }}</span>
-      <button
-        type="button"
-        class="banner__dismiss"
-        aria-label="Dismiss message"
-        @click="clearOAuthQueryFromUrl"
-      >
-        <UiIcon name="X" :size="18" aria-hidden="true" />
-      </button>
-    </div>
-    <p v-if="localError" class="banner banner-error" role="alert">{{ localError }}</p>
 
     <div class="social-connect-row" role="group" aria-label="Social accounts">
       <div v-for="item in platforms" :key="item.id" class="social-connect-card">
@@ -506,7 +478,6 @@ watch(
           </button>
         </div>
 
-        <p class="social-connect-modal__summary">{{ modalSummary }}</p>
         <aside
           v-if="connectModalPlatform === 'x'"
           class="x-funding-notice"
@@ -546,10 +517,7 @@ watch(
           v-if="hostedOAuthAvailable"
           class="social-connect-option social-connect-option--managed"
         >
-          <div>
-            <strong>Connect with ME3</strong>
-            <p>Recommended. Requires this installation to be linked to ME3 Cloud; no developer credentials required.</p>
-          </div>
+          <strong>Connect with ME3</strong>
           <button
             type="button"
             class="social-connect-option__button"
@@ -648,56 +616,6 @@ watch(
   font-size: 16px;
   font-weight: 600;
   margin: 0 0 16px;
-}
-
-.banner {
-  margin: 0 0 14px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  font-size: 0.95rem;
-}
-
-.banner-info {
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-}
-
-.banner-error {
-  border: 1px solid #ffcdd2;
-  background: #ffebee;
-}
-
-.banner--with-dismiss {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding-right: 8px;
-}
-
-.banner__body {
-  flex: 1;
-  min-width: 0;
-}
-
-.banner__dismiss {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  margin: -4px -4px -4px 0;
-  padding: 0;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--color-text-muted);
-  cursor: pointer;
-}
-
-.banner__dismiss:hover {
-  color: var(--color-text);
-  background: var(--color-bg-muted);
 }
 
 .social-connect-row {
@@ -936,14 +854,8 @@ watch(
   background: var(--color-bg-muted);
 }
 
-.social-connect-modal__summary {
-  margin: 12px 20px 18px;
-  color: var(--color-text-muted);
-  line-height: 1.45;
-}
-
 .x-funding-notice {
-  margin: 0 20px 18px;
+  margin: 16px 20px 18px;
   padding: 14px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-md, 8px);
@@ -1003,7 +915,7 @@ watch(
 
 .social-connect-option,
 .social-own-app {
-  margin: 0 20px 18px;
+  margin: 16px 20px 18px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-bg-subtle);
@@ -1017,7 +929,6 @@ watch(
   padding: 14px;
 }
 
-.social-connect-option p,
 .social-own-app__hint {
   margin: 4px 0 0;
   color: var(--color-text-muted);

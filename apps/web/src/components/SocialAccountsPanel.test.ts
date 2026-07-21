@@ -12,12 +12,23 @@ const routerHarness = vi.hoisted(() => ({
   replace: vi.fn(),
   route: { path: "/social", query: {} as Record<string, string> },
 }));
+const toastHarness = vi.hoisted(() => ({
+  error: vi.fn(),
+  success: vi.fn(),
+}));
 
 vi.mock("vue-router", () => ({
   useRoute: () => routerHarness.route,
   useRouter: () => ({
     replace: routerHarness.replace,
     resolve: (location: { path: string }) => ({ fullPath: location.path }),
+  }),
+}));
+
+vi.mock("../composables/useAppToast", () => ({
+  useAppToast: () => ({
+    toastError: toastHarness.error,
+    toastSuccess: toastHarness.success,
   }),
 }));
 
@@ -126,10 +137,15 @@ describe("SocialAccountsPanel X funding acknowledgement", () => {
     });
     await flushPromises();
 
-    expect(wrapper.get('[role="status"]').text()).toContain(message);
+    expect(toastHarness.success).toHaveBeenCalledWith(message);
+    expect(routerHarness.replace).toHaveBeenCalledWith({
+      path: "/social",
+      query: {},
+    });
+    expect(wrapper.find(".banner").exists()).toBe(false);
   });
 
-  it("explains the ME3 Cloud boundary for hosted LinkedIn OAuth", async () => {
+  it("keeps hosted connection choices concise", async () => {
     const wrapper = mount(SocialAccountsPanel, {
       props: { siteId: "site-1" },
       global: {
@@ -142,9 +158,33 @@ describe("SocialAccountsPanel X funding acknowledgement", () => {
 
     await wrapper.findAll(".social-connect-btn")[1]!.trigger("click");
     const dialog = wrapper.get('[role="dialog"]');
-    expect(dialog.text()).toContain("Connect through ME3 Cloud");
-    expect(dialog.text()).toContain("Your social token is stored in this ME3 installation");
-    expect(dialog.text()).toContain("Requires this installation to be linked to ME3 Cloud");
+    expect(dialog.text()).toContain("Connect with ME3");
     expect(dialog.text()).toContain("Advanced: use my own app");
+    expect(dialog.text()).not.toContain("Connect through ME3 Cloud");
+    expect(dialog.text()).not.toContain("Recommended. Requires this installation");
+  });
+
+  it("reports actionable hosted OAuth failures through vue-sonner", async () => {
+    routerHarness.route.query = {
+      social_error: "youtube_token_invalid_client",
+    };
+    const wrapper = mount(SocialAccountsPanel, {
+      props: { siteId: "site-1" },
+      global: {
+        stubs: {
+          UiIcon: { template: "<span aria-hidden=\"true\" />" },
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(toastHarness.error).toHaveBeenCalledWith(
+      "Google rejected the YouTube app credentials. Check that the client ID and client secret belong to the same Web application.",
+    );
+    expect(routerHarness.replace).toHaveBeenCalledWith({
+      path: "/social",
+      query: {},
+    });
+    expect(wrapper.find(".banner").exists()).toBe(false);
   });
 });
