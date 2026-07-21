@@ -1,5 +1,6 @@
 import { JOURNAL_PLUGIN_ID } from "@me3-core/plugin-journal";
 import {
+  JournalConflictError,
   JournalInputError,
   deleteJournalDay,
   getJournalMedia,
@@ -19,7 +20,11 @@ export function registerJournalRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (blocked) return blocked;
 
     try {
-      return c.json(await getJournalDay(c.env, ownerId, c.req.param("date")));
+      const result = await getJournalDay(c.env, ownerId, c.req.param("date"));
+      c.header("ETag", journalRevisionETag(result.entry?.revision));
+      c.header("Cache-Control", "private, no-cache");
+      c.header("Vary", "Authorization");
+      return c.json(result);
     } catch (error) {
       return journalErrorResponse(c, error);
     }
@@ -32,14 +37,15 @@ export function registerJournalRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (blocked) return blocked;
 
     try {
-      return c.json(
-        await updateJournalDay(
-          c.env,
-          ownerId,
-          c.req.param("date"),
-          await c.req.json().catch(() => ({})),
-        ),
+      const result = await updateJournalDay(
+        c.env,
+        ownerId,
+        c.req.param("date"),
+        await c.req.json().catch(() => ({})),
+        parseJournalIfMatch(c.req.header("If-Match")),
       );
+      c.header("ETag", journalRevisionETag(result.entry.revision));
+      return c.json(result);
     } catch (error) {
       return journalErrorResponse(c, error);
     }
@@ -52,7 +58,11 @@ export function registerJournalRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (blocked) return blocked;
 
     try {
-      return c.json(await deleteJournalDay(c.env, ownerId, c.req.param("date")));
+      const expectedRevision = parseJournalIfMatch(c.req.header("If-Match"));
+      if (expectedRevision === null) throw new JournalConflictError();
+      return c.json(
+        await deleteJournalDay(c.env, ownerId, c.req.param("date"), expectedRevision),
+      );
     } catch (error) {
       return journalErrorResponse(c, error);
     }
@@ -124,6 +134,23 @@ export function registerJournalRoutes(app: AppHono, deps: OwnerRouteDeps) {
       return journalErrorResponse(c, error);
     }
   });
+}
+
+function journalRevisionETag(revision: number | undefined): string {
+  return revision === undefined ? '"journal-missing"' : `"journal-${revision}"`;
+}
+
+function parseJournalIfMatch(header: string | undefined): number | null | undefined {
+  if (!header) return undefined;
+  const value = header.trim();
+  if (value === '"journal-missing"') return null;
+  const match = /^"journal-(\d+)"$/.exec(value);
+  if (!match) throw new JournalInputError("Journal If-Match validator is invalid");
+  const revision = Number.parseInt(match[1], 10);
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new JournalInputError("Journal If-Match validator is invalid");
+  }
+  return revision;
 }
 
 async function requireJournalPlugin(c: AppContext) {

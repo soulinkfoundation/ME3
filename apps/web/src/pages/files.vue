@@ -120,6 +120,7 @@ const currentFiles = ref<DriveFile[]>([]);
 const currentFolderId = ref<string | null>(null);
 const selected = ref<{ kind: DriveItem["kind"]; id: string } | null>(null);
 const preview = ref<PreviewResponse | null>(null);
+const pdfPreviewUrl = ref("");
 const loading = ref(true);
 const itemsLoading = ref(false);
 const previewLoading = ref(false);
@@ -128,7 +129,6 @@ const uploadProgress = ref<{ filename: string; percent: number } | null>(null);
 const actionBusy = ref(false);
 const dropActive = ref(false);
 const error = ref("");
-const message = ref("");
 const searchQuery = ref("");
 const sortKey = ref<"name" | "modified" | "size">("name");
 const sortDirection = ref<"asc" | "desc">("asc");
@@ -139,6 +139,7 @@ const dialogItem = ref<DriveItem | null>(null);
 const dialogName = ref("");
 const dialogFolderId = ref<string | null>(null);
 let searchTimer: number | null = null;
+let previewRequestId = 0;
 const { toastSuccess } = useAppToast();
 
 const r2Available = computed(() => status.value?.r2Available === true);
@@ -237,6 +238,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener("click", closeRowMenu);
   if (searchTimer !== null) window.clearTimeout(searchTimer);
+  clearPdfPreviewUrl();
 });
 
 watch(currentFolderId, () => {
@@ -254,7 +256,9 @@ watch(searchQuery, () => {
 
 watch(selectedFile, (file) => {
   if (!file) {
+    previewRequestId += 1;
     preview.value = null;
+    clearPdfPreviewUrl();
     return;
   }
   void loadPreview(file.id);
@@ -307,15 +311,48 @@ async function loadItems() {
 }
 
 async function loadPreview(fileId: string) {
+  const requestId = ++previewRequestId;
   previewLoading.value = true;
   preview.value = null;
+  clearPdfPreviewUrl();
   try {
-    preview.value = await api.get<PreviewResponse>(`/files/${encodeURIComponent(fileId)}/preview`);
+    const nextPreview = await api.get<PreviewResponse>(
+      `/files/${encodeURIComponent(fileId)}/preview`,
+    );
+    if (requestId !== previewRequestId) return;
+    preview.value = nextPreview;
+
+    if (nextPreview.previewKind === "pdf") {
+      const response = await fetch(contentUrl(nextPreview.file), { credentials: "include" });
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        let message = body;
+        try {
+          message = (JSON.parse(body) as { error?: string }).error || body;
+        } catch {
+          // Keep the response text as the fallback error message.
+        }
+        throw new ApiError(message || "Failed to load PDF preview", response.status);
+      }
+      const url = URL.createObjectURL(await response.blob());
+      if (requestId !== previewRequestId) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      pdfPreviewUrl.value = url;
+    }
   } catch (e) {
-    error.value = apiErrorMessage(e, "Failed to load preview");
+    if (requestId === previewRequestId) {
+      error.value = apiErrorMessage(e, "Failed to load preview");
+    }
   } finally {
-    previewLoading.value = false;
+    if (requestId === previewRequestId) previewLoading.value = false;
   }
+}
+
+function clearPdfPreviewUrl() {
+  if (pdfPreviewUrl.value) URL.revokeObjectURL(pdfPreviewUrl.value);
+  pdfPreviewUrl.value = "";
 }
 
 function openFolder(folderId: string | null) {
@@ -393,24 +430,23 @@ async function submitDialog() {
   if (!dialogMode.value || dialogSubmitDisabled.value) return;
   actionBusy.value = true;
   error.value = "";
-  message.value = "";
   try {
     if (dialogMode.value === "new-folder") {
       const response = await api.post<{ ok: true; folder: DriveFolder }>("/files/folders", {
         name: dialogName.value.trim(),
         parentId: currentFolderId.value,
       });
-      message.value = "Folder created.";
+      toastSuccess("Folder created.");
       selected.value = { kind: "folder", id: response.folder.id };
     } else if (dialogMode.value === "rename" && dialogItem.value) {
       await renameItem(dialogItem.value, dialogName.value.trim());
-      message.value = "Renamed.";
+      toastSuccess("Renamed.");
     } else if (dialogMode.value === "move" && dialogItem.value) {
       await moveItem(dialogItem.value, dialogFolderId.value);
-      message.value = "Moved.";
+      toastSuccess("Moved.");
     } else if (dialogMode.value === "delete" && dialogItem.value) {
       await deleteItem(dialogItem.value);
-      message.value = "Deleted.";
+      toastSuccess("Deleted.");
       selected.value = null;
     }
     closeDialogAfterAction();
@@ -468,7 +504,6 @@ async function uploadFileList(list: FileList | File[] | null | undefined) {
   if (filesToUpload.length === 0 || uploadBusy.value) return;
   uploadBusy.value = true;
   error.value = "";
-  message.value = "";
   try {
     const uploadedFiles: DriveFile[] = [];
     for (const file of filesToUpload) {
@@ -829,7 +864,7 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
       @dragleave.prevent="dropActive = false"
       @drop.prevent="handleDrop"
     >
-      <div v-if="error || message || uploadProgress" class="files-status-line" aria-live="polite">
+      <div v-if="error || uploadProgress" class="files-status-line" aria-live="polite">
         <p v-if="error" class="files-status-line__error" role="alert">{{ error }}</p>
         <div v-else-if="uploadProgress" class="files-upload-progress" role="status">
           <span>
@@ -839,7 +874,6 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
             {{ uploadProgress.percent }}%
           </progress>
         </div>
-        <p v-else class="files-status-line__message">{{ message }}</p>
       </div>
 
       <div class="files-body" :class="{ 'files-body--preview-open': selectedFile }">
@@ -1081,10 +1115,10 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
                   Your browser cannot preview this video.
                 </video>
                 <iframe
-                  v-else-if="preview.previewKind === 'pdf'"
+                  v-else-if="preview.previewKind === 'pdf' && pdfPreviewUrl"
                   class="files-pdf-preview"
-                  :src="contentUrl(selectedFile)"
-                  title="PDF preview"
+                  :src="pdfPreviewUrl"
+                  :title="`Preview of ${selectedFile.filename}`"
                 />
                 <div v-else-if="preview.previewKind === 'csv'" class="files-table-preview">
                   <table v-if="csvRows.length">
@@ -1329,10 +1363,6 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
 
 .files-status-line__error {
   color: #dc2626;
-}
-
-.files-status-line__message {
-  color: var(--ui-accent, var(--color-accent));
 }
 
 .files-upload-progress {

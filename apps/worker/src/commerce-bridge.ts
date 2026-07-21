@@ -11,6 +11,31 @@ export type ManagedCommerceBridgeConfig = {
   mode: "explicit" | "cloud";
 };
 
+export type ManagedCommerceConnectionStatus = {
+  connected: boolean;
+  status: "not_connected" | "pending" | "restricted" | "active";
+  accountId: string | null;
+  chargesEnabled: boolean;
+  payoutsEnabled: boolean;
+  requirementsDue: string[];
+};
+
+export type ManagedCommerceOnboardingLink = {
+  url: string;
+  accountId: string;
+  mode: "onboard" | "refresh";
+};
+
+export class ManagedCommerceBridgeError extends Error {
+  constructor(
+    message: string,
+    public readonly status = 502,
+  ) {
+    super(message);
+    this.name = "ManagedCommerceBridgeError";
+  }
+}
+
 /**
  * Resolve the credentials used for managed commerce requests.
  *
@@ -66,6 +91,80 @@ export async function hasManagedCommerceBridge(env: Env): Promise<boolean> {
   return Boolean(await getManagedCommerceBridgeConfig(env));
 }
 
+export async function getManagedCommerceConnectionStatus(
+  env: Env,
+): Promise<ManagedCommerceConnectionStatus | null> {
+  const bridge = await getManagedCommerceBridgeConfig(env);
+  if (!bridge) return null;
+
+  const response = await fetch(`${bridge.origin}/v1/commerce/connect/status`, {
+    headers: bridge.headers,
+  });
+  const data = await readBridgeJson(response);
+  if (!response.ok) {
+    throw new ManagedCommerceBridgeError(
+      normalizeSecret(data.error) || "Failed to check Stripe connection status.",
+      response.status,
+    );
+  }
+
+  const status = normalizeManagedStatus(data.status);
+  return {
+    connected: data.connected === true,
+    status,
+    accountId: normalizeSecret(data.accountId) || null,
+    chargesEnabled: data.chargesEnabled === true,
+    payoutsEnabled: data.payoutsEnabled === true,
+    requirementsDue: Array.isArray(data.requirementsDue)
+      ? data.requirementsDue.filter((value): value is string => typeof value === "string")
+      : [],
+  };
+}
+
+export async function createManagedCommerceOnboardingLink(
+  env: Env,
+  input: {
+    country?: string;
+    returnUrl: string;
+    mode?: "onboard" | "refresh";
+  },
+): Promise<ManagedCommerceOnboardingLink> {
+  const bridge = await getManagedCommerceBridgeConfig(env);
+  if (!bridge) {
+    throw new ManagedCommerceBridgeError(
+      "Managed commerce is not available for this installation.",
+      503,
+    );
+  }
+
+  const mode = input.mode === "refresh" ? "refresh" : "onboard";
+  const response = await fetch(`${bridge.origin}/v1/commerce/connect/${mode}`, {
+    method: "POST",
+    headers: {
+      ...bridge.headers,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      country: normalizeSecret(input.country).toUpperCase() || undefined,
+      returnUrl: input.returnUrl,
+    }),
+  });
+  const data = await readBridgeJson(response);
+  if (!response.ok) {
+    throw new ManagedCommerceBridgeError(
+      normalizeSecret(data.error) || "Failed to start Stripe setup.",
+      response.status,
+    );
+  }
+
+  const url = normalizeSecret(data.url);
+  const accountId = normalizeSecret(data.accountId);
+  if (!url || !accountId) {
+    throw new ManagedCommerceBridgeError("Stripe setup returned an invalid response.");
+  }
+  return { url, accountId, mode };
+}
+
 async function getInstallSecret(env: Env, name: string): Promise<string | null> {
   try {
     const row = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
@@ -77,6 +176,23 @@ async function getInstallSecret(env: Env, name: string): Promise<string | null> 
   }
 }
 
-function normalizeSecret(value: string | undefined): string {
+async function readBridgeJson(response: Response): Promise<Record<string, unknown>> {
+  return response.json().then(
+    (value) => value && typeof value === "object"
+      ? value as Record<string, unknown>
+      : {},
+    () => ({}),
+  );
+}
+
+function normalizeManagedStatus(
+  value: unknown,
+): ManagedCommerceConnectionStatus["status"] {
+  return value === "active" || value === "restricted" || value === "pending"
+    ? value
+    : "not_connected";
+}
+
+function normalizeSecret(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }

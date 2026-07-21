@@ -19,6 +19,10 @@ import {
   type ProductPurchaseConfirmationEmail,
 } from "../../../shared/product-purchase-confirmation";
 import { getManagedCommerceBridgeConfig } from "./commerce-bridge";
+import { isCommerceReady } from "./commerce-settings";
+
+const PAYMENTS_UNAVAILABLE_MESSAGE =
+  "Payments are not available for this purchase right now. Please contact the site owner.";
 
 type ProductCheckoutBody = {
   buyerName?: unknown;
@@ -71,9 +75,9 @@ export async function createProductCheckout(
     throw new CommerceOrderInputError("Product price is not ready for checkout.", 409);
   }
   const stripe = await getStripe(env, site.user_id);
-  const managed = Boolean(await getManagedCommerceBridgeConfig(env));
+  const managed = !stripe && await isCommerceReady(env, site.user_id);
   if (!stripe && !managed) {
-    throw new CommerceOrderInputError("Connect Stripe before using paid product actions.", 503);
+    throw new CommerceOrderInputError(PAYMENTS_UNAVAILABLE_MESSAGE, 503);
   }
   const provider = stripe ? "stripe_direct" : "me3_cloud";
   const orderId = crypto.randomUUID();
@@ -374,7 +378,8 @@ async function createManagedCheckout(
     error?: string;
   };
   if (!response.ok || !data.url || !data.sessionId) {
-    throw new CommerceOrderInputError(data.error || "Managed checkout is unavailable.", 502);
+    console.error("Managed product checkout failed:", response.status, data.error);
+    throw new CommerceOrderInputError(PAYMENTS_UNAVAILABLE_MESSAGE, 503);
   }
   return { url: data.url, sessionId: data.sessionId };
 }

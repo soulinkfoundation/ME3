@@ -197,6 +197,7 @@ describe("site generator", () => {
       {
         version: "0.1",
         name: "Booking Site",
+        handle: "booking-site",
         avatar: "./files/avatar.jpg",
         links: {
           _vibe: "tech",
@@ -302,6 +303,11 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("testimonial-quote");
     expect(files["index.html"]).toContain('<h2 class="newsletter-title">Newsletter</h2>');
     expect(files["index.html"]).toContain('class="newsletter-form"');
+    expect(files["index.html"]).toContain('action="/api/sites/booking-site/subscribe"');
+    expect(files["index.html"]).toContain("event.preventDefault()");
+    expect(files["index.html"]).toContain('role="status" aria-live="polite"');
+    expect(files["index.html"]).toContain('name="website"');
+    expect(files["index.html"]).not.toContain('action="/subscribe"');
     expect(files["index.html"]).toContain("No spam. Unsubscribe anytime.");
     expect(files["index.html"]).toContain("body[data-vibe=tech] .name{font-size:24px");
     expect(files["index.html"]).toContain("body[data-vibe=tech] .newsletter input[type=email]");

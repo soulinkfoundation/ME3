@@ -12,6 +12,12 @@ import {
 } from "../stores/social";
 import SocialCarouselEditor from "./SocialCarouselEditor.vue";
 
+const toastHarness = vi.hoisted(() => ({ success: vi.fn() }));
+
+vi.mock("../composables/useAppToast", () => ({
+  useAppToast: () => ({ toastSuccess: toastHarness.success }),
+}));
+
 const post = {
   id: "post-1",
   siteId: "site-1",
@@ -255,8 +261,8 @@ describe("SocialCarouselEditor", () => {
         carouselRenderSetId: "render-set-1",
       },
     });
-    expect(wrapper.get('[role="status"]').text()).toContain(
-      "Approval was reset and scheduled Publications were cancelled",
+    expect(toastHarness.success).toHaveBeenCalledWith(
+      expect.stringContaining("Approval was reset and scheduled Publications were cancelled"),
     );
     const preview = wrapper.get(".carousel-preview img");
     expect(preview.attributes("src"))

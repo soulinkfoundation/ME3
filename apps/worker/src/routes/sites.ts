@@ -35,6 +35,7 @@ import {
   applyPurchaseEmailTokens,
   productSendsPurchaseConfirmation,
 } from "../../../../shared/product-purchase-confirmation";
+import { getProfileCommercePublishBlockReason } from "../commerce-readiness";
 import {
   EMAIL_REGEX,
   USERNAME_REGEX,
@@ -860,6 +861,23 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       const files = form.getAll("files").filter((entry): entry is File => entry instanceof File);
       if (files.length === 0) return c.json({ error: "No files uploaded" }, 400);
 
+      const uploadedProfileFile = files.find(
+        (file) => normalizeSiteFileName(file.name) === "me.json",
+      );
+      const nextProfileJson = uploadedProfileFile
+        ? await uploadedProfileFile.text()
+        : (await getSiteFileText(c.env, site.id, "src/me.json")) ||
+          (await getSiteFileText(c.env, site.id, "public/me.json"));
+      if (nextProfileJson) {
+        const nextProfile = parseSiteProfile(nextProfileJson, site.username);
+        const commerceError = await getProfileCommercePublishBlockReason(
+          c.env,
+          ownerId,
+          nextProfile,
+        );
+        if (commerceError) return c.json({ error: commerceError }, 409);
+      }
+
       const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
 
       for (const file of files) {
@@ -1373,6 +1391,18 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (!site) return c.json({ error: "Site not found" }, 404);
     const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(c.env, site.username);
     if (cloudUsernameError) return c.json({ error: cloudUsernameError }, 409);
+    const profileJson =
+      (await getSiteFileText(c.env, site.id, "src/me.json")) ||
+      (await getSiteFileText(c.env, site.id, "public/me.json"));
+    if (profileJson) {
+      const profile = parseSiteProfile(profileJson, site.username);
+      const commerceError = await getProfileCommercePublishBlockReason(
+        c.env,
+        ownerId,
+        profile,
+      );
+      if (commerceError) return c.json({ error: commerceError }, 409);
+    }
     const html =
       (await getSiteFileText(c.env, site.id, "landing/index.html")) ||
       (await getSiteFileText(c.env, site.id, "public/index.html"));

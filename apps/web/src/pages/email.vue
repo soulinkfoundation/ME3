@@ -334,7 +334,6 @@ const telegramLoadingMore = ref(false);
 const telegramClearing = ref(false);
 const telegramError = ref("");
 const telegramMoreError = ref("");
-const telegramNotice = ref("");
 const turns = ref<AgentTurn[]>([]);
 const telegramTotal = ref(0);
 let messageRequestId = 0;
@@ -1637,7 +1636,6 @@ async function loadTelegramHistory() {
   telegramLoadingMore.value = false;
   telegramError.value = "";
   telegramMoreError.value = "";
-  telegramNotice.value = "";
   try {
     await Promise.all([loadMailboxHealth(), loadTelegramHealth()]);
     const turnResponse = await api.get<AgentTurnsResponse>(
@@ -1709,7 +1707,6 @@ async function clearTelegramHistory() {
   telegramClearing.value = true;
   telegramError.value = "";
   telegramMoreError.value = "";
-  telegramNotice.value = "";
 
   try {
     const result = await api.delete<ClearTelegramHistoryResponse>(
@@ -1717,10 +1714,11 @@ async function clearTelegramHistory() {
     );
     turns.value = [];
     telegramTotal.value = 0;
-    telegramNotice.value =
+    toastSuccess(
       result.deletedTurns > 0 || result.deletedEvents > 0
         ? "Telegram history cleared."
-        : "Telegram history was already empty.";
+        : "Telegram history was already empty.",
+    );
   } catch (err) {
     telegramMoreError.value =
       err instanceof Error ? err.message : "Failed to clear Telegram history";
@@ -1739,7 +1737,6 @@ function switchTab(tab: Tab) {
   error.value = "";
   telegramError.value = "";
   telegramMoreError.value = "";
-  telegramNotice.value = "";
   if (tab === "telegram") {
     void loadTelegramHistory();
   } else {
@@ -3308,13 +3305,6 @@ onBeforeUnmount(() => {
         >
           {{ error }}
         </div>
-        <div
-          v-if="activeTab === 'telegram' && telegramNotice"
-          class="state-card state-card--info"
-        >
-          {{ telegramNotice }}
-        </div>
-
         <div
           class="inbox-panel"
           :class="{ 'inbox-panel--with-mobile-controls': isEmailTab(activeTab) }"

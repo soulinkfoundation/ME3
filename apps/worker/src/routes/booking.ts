@@ -42,6 +42,10 @@ import {
 import type { DbBooking, DbSite, Env } from "../types";
 import { finalizeStripeProductCheckout } from "../commerce-orders";
 import { getManagedCommerceBridgeConfig } from "../commerce-bridge";
+import { isCommerceReady } from "../commerce-settings";
+
+const PAYMENTS_UNAVAILABLE_MESSAGE =
+  "Payments are not available for this booking right now. Please contact the site owner.";
 
 export function registerBookingRoutes(app: AppHono) {
   app.get("/api/book/:username/slots", async (c) => {
@@ -323,9 +327,9 @@ export function registerBookingRoutes(app: AppHono) {
     if (!site) return c.json({ error: "Site not found" }, 404);
 
     const stripe = await getStripe(c.env, site.user_id);
-    const managedCommerce = Boolean(await getManagedCommerceBridgeConfig(c.env));
+    const managedCommerce = !stripe && await isCommerceReady(c.env, site.user_id);
     if (!stripe && !managedCommerce) {
-      return c.json({ error: "Stripe is not configured for this ME3 install" }, 503);
+      return c.json({ error: PAYMENTS_UNAVAILABLE_MESSAGE }, 503);
     }
 
     const body = await c.req.json<PaidBookingCheckoutBody>().catch(() => null);
@@ -468,7 +472,8 @@ export function registerBookingRoutes(app: AppHono) {
       return c.json({ url: session.url, sessionId: session.id });
     } catch (error) {
       await releaseBookingHold(c.env, holdToken);
-      throw error;
+      console.error("Paid booking checkout failed:", error);
+      return c.json({ error: PAYMENTS_UNAVAILABLE_MESSAGE }, 503);
     }
   });
 

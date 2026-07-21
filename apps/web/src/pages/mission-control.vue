@@ -465,9 +465,9 @@ function projectTaskCount(mode: ProjectDashboardMode): number {
 }
 
 function projectTaskPath(task: ProjectDashboardTask): string {
-  return task.projectId === "personal"
-    ? "/mission-control/projects"
-    : `/mission-control/projects?project=${encodeURIComponent(task.projectId)}`;
+  const query = new URLSearchParams({ task: task.id });
+  if (task.projectId !== "personal") query.set("project", task.projectId);
+  return `/mission-control/projects?${query.toString()}`;
 }
 
 function visibleCardEnabled(cardId: string): boolean {

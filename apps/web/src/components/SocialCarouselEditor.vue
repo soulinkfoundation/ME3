@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import AppDialog from "./AppDialog.vue";
 import Button from "./Button.vue";
+import { useAppToast } from "../composables/useAppToast";
 import {
   SocialCarouselApiError,
   useSocialStore,
@@ -30,6 +31,7 @@ const emit = defineEmits<{
 }>();
 
 const social = useSocialStore();
+const { toastSuccess } = useAppToast();
 const CAROUSEL_MEDIA_MAX_BYTES = 640_000;
 const model = ref<CarouselRenderModel | null>(null);
 const renderSet = ref<SocialCarouselRenderSet | null>(null);
@@ -38,7 +40,6 @@ const rendering = ref(false);
 const uploading = ref(false);
 const error = ref("");
 const issues = ref<CarouselValidationIssue[]>([]);
-const attachNotice = ref("");
 const availableMedia = ref<SocialCarouselMedia[]>([]);
 
 const contentSlides = computed(() =>
@@ -65,7 +66,6 @@ async function initializeEditor() {
   loading.value = true;
   error.value = "";
   issues.value = [];
-  attachNotice.value = "";
   renderSet.value = null;
   availableMedia.value = [];
   let mediaError = "";
@@ -236,7 +236,7 @@ async function uploadMedia(event: Event) {
       const slide = draft.slides.find((item) => item.id === currentSlide?.id);
       if (slide) slide.mediaRefId = reference.id;
     });
-    attachNotice.value = "Image saved to this owner workspace and selected for the first available slide.";
+    toastSuccess("Image saved to this owner workspace and selected for the first available slide.");
   } catch (value) {
     error.value = value instanceof Error ? value.message : "Failed to upload Carousel media.";
   } finally {
@@ -249,7 +249,6 @@ async function renderAndAttach() {
   rendering.value = true;
   error.value = "";
   issues.value = [];
-  attachNotice.value = "";
   try {
     const result = await social.renderAndAttachCarousel({
       siteId: props.post.siteId,
@@ -260,9 +259,9 @@ async function renderAndAttach() {
     });
     model.value = cloneModel(result.renderSet.model);
     renderSet.value = result.renderSet;
-    attachNotice.value = result.approvalPreserved
+    toastSuccess(result.approvalPreserved
       ? "Identical output attached. Existing approval and schedules were preserved."
-      : "Carousel changed. Approval was reset and scheduled Publications were cancelled. Review and approve this exact Version again.";
+      : "Carousel changed. Approval was reset and scheduled Publications were cancelled. Review and approve this exact Version again.");
     emit("attached", result);
   } catch (value) {
     if (value instanceof SocialCarouselApiError) {
@@ -283,7 +282,6 @@ function updateModel(update: (draft: CarouselRenderModel) => void) {
   draft.revision += 1;
   model.value = draft;
   issues.value = [];
-  attachNotice.value = "";
 }
 
 function mediaForSlide(slide: CarouselSlide): CarouselMediaReference | null {
@@ -494,10 +492,6 @@ function cloneModel(value: CarouselRenderModel): CarouselRenderModel {
             </li>
           </ul>
         </section>
-        <p v-if="attachNotice" class="carousel-alert" role="status" aria-live="polite">
-          {{ attachNotice }}
-        </p>
-
         <div class="carousel-editor__body">
           <div class="carousel-controls">
             <fieldset class="template-picker">

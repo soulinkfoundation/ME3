@@ -216,4 +216,48 @@ describe("SocialPage", () => {
     expect(wrapper.text()).toContain("Add 1 video");
     expect(wrapper.findAll(".social-media-picker__grid video")).toHaveLength(1);
   });
+
+  it("renders TikTok video previews with the caption at the bottom of the stage", async () => {
+    const tiktokAccount = {
+      ...account,
+      id: "account-tiktok",
+      platform: "tiktok",
+      handle: "kieranofearth",
+      displayName: "kieranofearth",
+    };
+    const tiktokPost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        id: "version-tiktok",
+        platform: "tiktok" as const,
+        targetAccountId: "account-tiktok",
+        bodyText: "Greetings Earthling 🌍",
+        assetManifest: [{ url: "https://example.com/short.mp4", kind: "video" as const, mimeType: "video/mp4" }],
+      }],
+    };
+
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") return Promise.resolve({ posts: [tiktokPost] });
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [tiktokAccount] });
+      if (endpoint === "/files/folders") return Promise.resolve({ folders: [] });
+      if (endpoint === "/files/items") return Promise.resolve({ files: mediaFiles });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: { status: "installed", enabled: true, ready: true, statusLabel: "Installed", platformCapabilities: [
+          { platform: "tiktok", draft: true, schedule: false, publish: true, reason: null },
+        ] },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.get(".post-preview--tiktok .tiktok-preview__stage")).toBeTruthy();
+    expect(wrapper.find(".post-preview--tiktok > p").exists()).toBe(false);
+    expect(wrapper.get(".tiktok-preview__caption").text()).toContain("Greetings Earthling");
+    expect(wrapper.find(".tiktok-preview__rail").exists()).toBe(true);
+    expect(wrapper.get(".tiktok-preview__stage video").attributes("controls")).toBeDefined();
+  });
 });

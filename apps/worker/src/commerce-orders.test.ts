@@ -115,6 +115,19 @@ describe("managed commerce orders", () => {
       .fn()
       .mockResolvedValueOnce(
         new Response(
+          JSON.stringify({
+            connected: true,
+            status: "active",
+            accountId: "acct_managed",
+            chargesEnabled: true,
+            payoutsEnabled: true,
+            requirementsDue: [],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
           JSON.stringify({ url: "https://checkout.stripe.test/session", sessionId: "cs_managed" }),
           { status: 200 },
         ),
@@ -136,7 +149,7 @@ describe("managed commerce orders", () => {
       "https://owner.example/api/shop/owner/clarity-kit/checkout-session",
     );
     const statusPayload = JSON.parse(
-      (fetchMock.mock.calls[0][1] as RequestInit).body as string,
+      (fetchMock.mock.calls[1][1] as RequestInit).body as string,
     );
     expect(statusPayload).toMatchObject({
       orderId: checkout.orderId,

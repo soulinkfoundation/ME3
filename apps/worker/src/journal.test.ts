@@ -20,9 +20,11 @@ type StoredJournalRow = {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  revision?: number;
 };
 
 function createJournalEnv(rows: StoredJournalRow[] = []) {
+  for (const row of rows) row.revision ??= 1;
   const db = {
     prepare(sql: string) {
       return {
@@ -54,19 +56,39 @@ function createJournalEnv(rows: StoredJournalRow[] = []) {
               return { results: results as T[] };
             },
             async run() {
-              if (sql.includes("UPDATE journal_entries")) {
-                const [archivedAt, updatedAt, userId, date] = values as string[];
+              if (sql.includes("UPDATE journal_entries") && sql.includes("SET title")) {
+                const [title, body, bodyFormat, updatedAt, userId, date, revision] = values;
                 const existing = rows.find(
                   (row) =>
                     row.user_id === userId &&
                     row.entry_date === date &&
-                    row.archived_at === null,
+                    row.archived_at === null &&
+                    row.revision === revision,
                 );
                 if (existing) {
-                  existing.archived_at = archivedAt;
-                  existing.updated_at = updatedAt;
+                  existing.title = (title as string | null) || null;
+                  existing.body = body as string;
+                  existing.body_format = bodyFormat as StoredJournalRow["body_format"];
+                  existing.updated_at = updatedAt as string;
+                  existing.revision = (existing.revision || 1) + 1;
                 }
-                return {};
+                return { meta: { changes: existing ? 1 : 0 } };
+              }
+              if (sql.includes("UPDATE journal_entries")) {
+                const [archivedAt, updatedAt, userId, date, revision] = values;
+                const existing = rows.find(
+                  (row) =>
+                    row.user_id === userId &&
+                    row.entry_date === date &&
+                    row.archived_at === null &&
+                    (revision === undefined || row.revision === revision),
+                );
+                if (existing) {
+                  existing.archived_at = archivedAt as string;
+                  existing.updated_at = updatedAt as string;
+                  existing.revision = (existing.revision || 1) + 1;
+                }
+                return { meta: { changes: existing ? 1 : 0 } };
               }
               if (!sql.includes("INSERT INTO journal_entries")) return {};
               const [id, userId, date, title, body, bodyFormat, createdAt, updatedAt] =
@@ -85,13 +107,33 @@ function createJournalEnv(rows: StoredJournalRow[] = []) {
                 created_at: createdAt,
                 updated_at: updatedAt,
                 archived_at: null,
+                revision: 1,
               };
               if (existingIndex >= 0) {
-                rows[existingIndex] = { ...rows[existingIndex], ...nextRow };
+                if (sql.includes("WHERE journal_entries.archived_at IS NOT NULL")) {
+                  if (rows[existingIndex].archived_at === null) {
+                    return { meta: { changes: 0 } };
+                  }
+                  rows[existingIndex] = {
+                    ...rows[existingIndex],
+                    ...nextRow,
+                    id: rows[existingIndex].id,
+                    created_at: rows[existingIndex].created_at,
+                    revision: (rows[existingIndex].revision || 1) + 1,
+                  };
+                  return { meta: { changes: 1 } };
+                }
+                rows[existingIndex] = {
+                  ...rows[existingIndex],
+                  ...nextRow,
+                  id: rows[existingIndex].id,
+                  created_at: rows[existingIndex].created_at,
+                  revision: (rows[existingIndex].revision || 1) + 1,
+                };
               } else {
                 rows.push(nextRow);
               }
-              return {};
+              return { meta: { changes: 1 } };
             },
           };
         },
@@ -129,6 +171,65 @@ describe("Journal plugin entries", () => {
         body: "<p>Remember this.</p>",
       },
     });
+  });
+
+  it("atomically rejects stale saves and deletes by revision", async () => {
+    const env = createJournalEnv();
+    const created = await updateJournalDay(
+      env,
+      "owner",
+      "2026-06-02",
+      { title: "First", body: "one", bodyFormat: "markdown" },
+      null,
+    );
+    expect(created.entry.revision).toBe(1);
+
+    await expect(
+      updateJournalDay(
+        env,
+        "owner",
+        "2026-06-02",
+        { title: "Stale create", body: "lost", bodyFormat: "markdown" },
+        null,
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+
+    const updated = await updateJournalDay(
+      env,
+      "owner",
+      "2026-06-02",
+      { title: "Second", body: "two", bodyFormat: "markdown" },
+      1,
+    );
+    expect(updated.entry.revision).toBe(2);
+
+    await expect(
+      updateJournalDay(
+        env,
+        "owner",
+        "2026-06-02",
+        { title: "Stale", body: "must not win", bodyFormat: "markdown" },
+        1,
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(deleteJournalDay(env, "owner", "2026-06-02", 1)).rejects.toMatchObject({
+      status: 409,
+    });
+    await expect(getJournalDay(env, "owner", "2026-06-02")).resolves.toMatchObject({
+      entry: { title: "Second", body: "two", revision: 2 },
+    });
+
+    await expect(deleteJournalDay(env, "owner", "2026-06-02", 2)).resolves.toEqual({
+      ok: true,
+    });
+    const recreated = await updateJournalDay(
+      env,
+      "owner",
+      "2026-06-02",
+      { title: "Recreated", body: "four", bodyFormat: "markdown" },
+      null,
+    );
+    expect(recreated.entry).toMatchObject({ title: "Recreated", body: "four", revision: 4 });
   });
 
   it("lists non-empty archive entries newest first", async () => {

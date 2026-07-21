@@ -480,6 +480,7 @@ function closeFromBackdrop() {
   position: relative;
   display: grid;
   width: min(460px, 100%);
+  min-width: 0;
   max-height: min(720px, calc(100vh - 48px));
   gap: 14px;
   overflow: auto;
@@ -501,6 +502,7 @@ function closeFromBackdrop() {
 
 .task-detail-modal--fullscreen {
   width: 100%;
+  max-width: 100%;
   min-height: 100dvh;
   height: auto;
   max-height: none;
@@ -704,12 +706,15 @@ function closeFromBackdrop() {
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .task-note-body-field__editor :deep(.editor-toolbar) {
+  box-sizing: border-box;
   position: static;
   width: 100%;
-  margin: 0;
+  margin-inline: 0;
   padding: 0 0 10px;
   border: 0;
   border-radius: 0;
@@ -719,6 +724,13 @@ function closeFromBackdrop() {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+}
+
+/* Keep the editor toolbar inside a task detail pane rather than full-bleed. */
+.task-note-body-field__editor
+  :deep(.tiptap-editor--workspace .editor-toolbar) {
+  width: 100%;
+  margin-inline: 0;
 }
 
 .task-note-body-field__editor :deep(.editor-toolbar)::-webkit-scrollbar {
@@ -744,9 +756,11 @@ function closeFromBackdrop() {
 }
 
 .task-note-body-field__editor :deep(.ProseMirror) {
+  min-width: 0;
   min-height: 308px;
   font: inherit;
   font-weight: 400;
+  overflow-wrap: anywhere;
 }
 
 .task-detail-modal--fullscreen

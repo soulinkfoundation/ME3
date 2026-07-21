@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { getManagedCommerceBridgeConfig } from "./commerce-bridge";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createManagedCommerceOnboardingLink,
+  getManagedCommerceBridgeConfig,
+  getManagedCommerceConnectionStatus,
+} from "./commerce-bridge";
 import type { Env } from "./types";
 
 function createEnv(
@@ -25,6 +29,8 @@ function createEnv(
     ...overrides,
   } as Env;
 }
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("managed commerce bridge configuration", () => {
   it("preserves explicit bridge bearer credentials", async () => {
@@ -77,5 +83,51 @@ describe("managed commerce bridge configuration", () => {
     );
 
     expect(config).toBeNull();
+  });
+
+  it("reports whether the managed Stripe account is payment-ready", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      connected: true,
+      status: "active",
+      accountId: "acct_123",
+      chargesEnabled: true,
+      payoutsEnabled: true,
+      requirementsDue: [],
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const status = await getManagedCommerceConnectionStatus(createEnv({}, {
+      ME3_COMMERCE_BRIDGE_ORIGIN: "https://commerce.example",
+      ME3_COMMERCE_BRIDGE_TOKEN: "bridge-token",
+    }));
+
+    expect(status).toMatchObject({ status: "active", chargesEnabled: true, payoutsEnabled: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://commerce.example/v1/commerce/connect/status",
+      { headers: { Authorization: "Bearer bridge-token" } },
+    );
+  });
+
+  it("creates onboarding links through the managed bridge", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      url: "https://connect.stripe.test/setup",
+      accountId: "acct_123",
+      mode: "onboard",
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const link = await createManagedCommerceOnboardingLink(createEnv({}, {
+      ME3_COMMERCE_BRIDGE_ORIGIN: "https://commerce.example",
+      ME3_COMMERCE_BRIDGE_TOKEN: "bridge-token",
+    }), {
+      country: "ie",
+      returnUrl: "https://core.example/settings?section=payments",
+    });
+
+    expect(link.url).toBe("https://connect.stripe.test/setup");
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      country: "IE",
+      returnUrl: "https://core.example/settings?section=payments",
+    });
   });
 });

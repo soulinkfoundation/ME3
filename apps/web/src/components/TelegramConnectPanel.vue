@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import QRCode from "qrcode";
 import { api } from "../api";
+import { useAppToast } from "../composables/useAppToast";
 import Button from "./Button.vue";
 import UiIcon from "./UiIcon.vue";
 
@@ -68,6 +69,7 @@ const emit = defineEmits<{
 }>();
 
 const router = useRouter();
+const { toastSuccess } = useAppToast();
 const qrCanvas = ref<HTMLCanvasElement | null>(null);
 
 const loading = ref(false);
@@ -96,7 +98,6 @@ const webhookUrl = ref<string | null>(null);
 const startUrl = ref<string | null>(null);
 const connection = ref<TelegramConnectionRecord | null>(null);
 const error = ref<string | null>(null);
-const notice = ref<string | null>(null);
 const botUsernameInput = ref("");
 const botTokenInput = ref("");
 const webhookSecretInput = ref("");
@@ -245,7 +246,6 @@ async function saveTelegramSettings() {
   if (telegramWebhookSyncDisabled.value) return;
   settingsSaving.value = true;
   error.value = null;
-  notice.value = null;
 
   try {
     const response = await api.put<TelegramStatusResponse & { ok: boolean }>(
@@ -257,7 +257,7 @@ async function saveTelegramSettings() {
       },
     );
     syncStatus(response);
-    notice.value = "Telegram settings saved.";
+    toastSuccess("Telegram settings saved.");
   } catch (err: unknown) {
     error.value =
       err instanceof Error ? err.message : "Failed to save Telegram settings";
@@ -276,7 +276,6 @@ async function saveAndSyncTelegramWebhook() {
 
   webhookSyncing.value = true;
   error.value = null;
-  notice.value = null;
 
   try {
     const response = await api.post<
@@ -291,10 +290,11 @@ async function saveAndSyncTelegramWebhook() {
       await setupTelegram();
     }
     if (!error.value) {
-      notice.value =
+      toastSuccess(
         connection.value?.status === "active"
           ? "Telegram webhook set."
-          : "Telegram webhook set. Open the setup link to finish.";
+          : "Telegram webhook set. Open the setup link to finish.",
+      );
     }
   } catch (err: unknown) {
     error.value =
@@ -578,7 +578,6 @@ defineExpose({
     </div>
 
     <p v-if="error" class="error">{{ error }}</p>
-    <p v-if="notice" class="success">{{ notice }}</p>
   </div>
 </template>
 

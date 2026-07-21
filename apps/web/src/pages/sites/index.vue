@@ -176,7 +176,6 @@ onBeforeUnmount(() => {
         <RouterLink class="sites-button" to="/start">Create profile</RouterLink>
       </section>
 
-      <div v-if="sites.loading" class="sites-loading" role="status">Loading sites…</div>
     </main>
   </div>
 </template>
@@ -344,8 +343,7 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
-.sites-message,
-.sites-loading {
+.sites-message {
   padding: 16px;
   border-radius: var(--ui-radius-md, 12px);
   background: var(--ui-surface-muted, var(--color-bg-subtle));

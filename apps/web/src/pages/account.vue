@@ -11,6 +11,7 @@ import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import TelegramConnectPanel from "../components/TelegramConnectPanel.vue";
 import UiIcon from "../components/UiIcon.vue";
+import { useAppToast } from "../composables/useAppToast";
 import { useTheme, type ThemePreference } from "../composables/useTheme";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
@@ -30,6 +31,12 @@ import {
   type PluginRecord,
   type PluginsResponse,
 } from "../utils/plugins";
+import {
+  STRIPE_CONNECT_COUNTRIES,
+  getInitialStripeConnectCountry,
+  persistStripeConnectCountry,
+  type CommerceSettingsResponse,
+} from "../utils/commerce";
 
 definePage({
   alias: ["/settings"],
@@ -331,29 +338,17 @@ type CoreStorageStatusResponse = {
   r2ActivationUrl: string;
 };
 
-type CommerceSettingsResponse = {
-  encryptionConfigured: boolean;
-  defaultCurrency: string;
-  stripe: {
-    configured: boolean;
-    source: "environment" | "stored" | "managed" | "not_configured";
-    keyHint: string | null;
-    keyUpdatedAt: string | null;
-    mode: "direct" | "managed";
-  };
-};
-
 const auth = useAuthStore();
 const sites = useSitesStore();
 const { themePreference, setThemePreference } = useTheme();
 const route = useRoute();
 const router = useRouter();
+const { toastSuccess } = useAppToast();
 
 const loading = ref(false);
 const saving = ref(false);
 const timezoneInput = ref("");
 const savedTimezoneInput = ref("");
-const message = ref<string | null>(null);
 const error = ref<string | null>(null);
 const supportedTimeZones = listSupportedTimeZones();
 const mailboxLoading = ref(false);
@@ -365,7 +360,6 @@ const mailboxAliasInput = ref("");
 const emailAddressInput = ref("");
 const mailboxForwardingEnabled = ref(false);
 const mailboxForwardingEmail = ref("");
-const mailboxMessage = ref<string | null>(null);
 const mailboxError = ref<string | null>(null);
 const pluginsLoading = ref(false);
 const plugins = ref<PluginRecord[]>([]);
@@ -383,7 +377,6 @@ const aiRoutes = ref<AiRouteRecord[]>([]);
 const aiEncryptionConfigured = ref(false);
 const aiProviderKeyInputs = ref<Record<string, string>>({});
 const aiRouteInputs = ref<AiRouteInputs>(createEmptyAiRouteInputs());
-const aiSettingsMessage = ref<string | null>(null);
 const aiSettingsError = ref<string | null>(null);
 const aiDeploymentMode = ref<"managed" | "self_hosted" | null>(null);
 const managedAiBilling = ref<ManagedAiBillingSettings | null>(null);
@@ -413,20 +406,17 @@ const localPasswordFormOpen = ref(false);
 const localPasswordSaving = ref(false);
 const localPasswordInput = ref("");
 const localPasswordConfirmationInput = ref("");
-const localPasswordMessage = ref<string | null>(null);
 const localPasswordError = ref<string | null>(null);
 const coreGithubLoading = ref(false);
 const coreGithubSaving = ref<"connect" | "update" | null>(null);
 const coreGithubStatus = ref<CoreGithubStatusResponse | null>(null);
 const coreGithubLatestVersion = ref<string | null>(null);
 const coreGithubLastRunUrl = ref<string | null>(null);
-const coreGithubMessage = ref<string | null>(null);
 const coreGithubError = ref<string | null>(null);
 const storageLoading = ref(false);
 const storageSaving = ref(false);
 const storageModalOpen = ref(route.query.section === "storage");
 const storageStatus = ref<CoreStorageStatusResponse | null>(null);
-const storageMessage = ref<string | null>(null);
 const storageError = ref<string | null>(null);
 const storageActivationRunUrl = ref<string | null>(null);
 const storagePolling = ref(false);
@@ -434,13 +424,14 @@ let storagePollTimer: number | null = null;
 let storagePollCount = 0;
 const commerceLoading = ref(false);
 const commerceSaving = ref(false);
+const commerceConnecting = ref(false);
 const commerceSettings = ref<CommerceSettingsResponse | null>(null);
 const stripeSecretInput = ref("");
 const showStripeSecret = ref(false);
 const defaultCurrencyInput = ref("USD");
 const savedDefaultCurrencyInput = ref("USD");
-const commerceMessage = ref<string | null>(null);
 const commerceError = ref<string | null>(null);
+const stripeConnectCountry = ref(getInitialStripeConnectCountry());
 
 const commerceCurrencyOptions = [
   { value: "EUR", label: "EUR - Euro" },
@@ -842,6 +833,48 @@ const commerceClearDisabled = computed(
   () => commerceSaving.value || commerceLoading.value,
 );
 
+const managedStripeStatusLabel = computed(() => {
+  const status = commerceSettings.value?.stripe.connectionStatus;
+  if (status === "active") return "Stripe connected";
+  if (status === "restricted") return "Action required";
+  if (status === "pending") return "Setup incomplete";
+  if (status === "unavailable") return "Status unavailable";
+  return "Not connected";
+});
+
+const managedStripeStatusTone = computed(() => {
+  const status = commerceSettings.value?.stripe.connectionStatus;
+  if (status === "active") return "active";
+  if (status === "pending") return "pending";
+  if (status === "restricted" || status === "unavailable") return "failed";
+  return "disconnected";
+});
+
+const managedStripeDescription = computed(() => {
+  const status = commerceSettings.value?.stripe.connectionStatus;
+  if (status === "active") {
+    return "Stripe can accept payments and send payouts for your published offers.";
+  }
+  if (status === "restricted") {
+    return "Stripe needs more information before payments and payouts are ready.";
+  }
+  if (status === "pending") {
+    return "Continue Stripe setup before publishing paid bookings or products.";
+  }
+  if (status === "unavailable") {
+    return "ME3 could not check Stripe right now. Try again before publishing paid offers.";
+  }
+  return "Connect a Stripe Express account before publishing paid bookings or products.";
+});
+
+const managedStripeActionLabel = computed(() => {
+  const status = commerceSettings.value?.stripe.connectionStatus;
+  if (commerceConnecting.value) return "Opening Stripe...";
+  if (status === "active") return "Review Stripe account";
+  if (status === "pending" || status === "restricted") return "Continue Stripe setup";
+  return "Connect Stripe";
+});
+
 const me3ConnectionStatusLabel = computed(() => {
   if (appConnectionsLoading.value) return "Loading";
   return me3Connection.value?.connected ? "Connected" : "Not connected";
@@ -1132,14 +1165,12 @@ function detectTimezoneValue() {
     return;
   }
   timezoneInput.value = detected;
-  message.value = null;
   error.value = null;
 }
 
 async function saveSettings() {
   if (saveDisabled.value) return;
   saving.value = true;
-  message.value = null;
   error.value = null;
   try {
     const response = await api.put<AccountResponse>("/account", {
@@ -1147,7 +1178,7 @@ async function saveSettings() {
       locale: null,
     });
     syncAccount(response);
-    message.value = "Regional settings updated.";
+    toastSuccess("Regional settings updated.");
   } catch (e: any) {
     error.value = e.message || "Failed to save regional settings";
   } finally {
@@ -1218,7 +1249,6 @@ async function saveUnifiedEmailSettings() {
 
   mailboxSaving.value = true;
   emailProviderSaving.value = true;
-  mailboxMessage.value = null;
   mailboxError.value = null;
   emailProviderError.value = null;
 
@@ -1262,7 +1292,7 @@ async function saveUnifiedEmailSettings() {
     );
     syncEmailProviderSettings(providerResponse);
     emailAddressInput.value = emailAddress;
-    mailboxMessage.value = "Email settings saved.";
+    toastSuccess("Email settings saved.");
   } catch (e: any) {
     const message = e.message || "Failed to save email settings";
     mailboxError.value = message;
@@ -1277,7 +1307,6 @@ async function sendEmailProviderTest() {
   if (emailProviderTesting.value || !emailAddressIsValid.value) return;
 
   emailProviderTesting.value = true;
-  mailboxMessage.value = null;
   mailboxError.value = null;
   emailProviderError.value = null;
 
@@ -1290,9 +1319,9 @@ async function sendEmailProviderTest() {
       providerId: selectedEmailProviderId.value,
       to: emailAddressNormalized.value,
     });
-    mailboxMessage.value = response.providerMessageId
+    toastSuccess(response.providerMessageId
       ? `Test email sent to ${response.sentTo}. Provider message ${response.providerMessageId}.`
-      : `Test email accepted for ${response.sentTo}.`;
+      : `Test email accepted for ${response.sentTo}.`);
     await loadEmailProviderSettings();
   } catch (e: any) {
     emailProviderError.value = e.message || "Failed to send test email";
@@ -1555,7 +1584,6 @@ async function loadAiSettings() {
 async function saveManagedAiBillingSettings() {
   if (managedAiBillingSaveDisabled.value) return;
   aiSettingsSaving.value = true;
-  aiSettingsMessage.value = null;
   aiSettingsError.value = null;
   try {
     const response = await api.put<ManagedAiBillingSettings>(
@@ -1567,9 +1595,9 @@ async function saveManagedAiBillingSettings() {
       },
     );
     syncManagedAiBilling(response);
-    aiSettingsMessage.value = response.overagesEnabled
+    toastSuccess(response.overagesEnabled
       ? `AI settings saved with a ${formatManagedAiCents(response.monthlyMaximumCents)} monthly maximum.`
-      : "AI settings saved. Additional usage is off.";
+      : "AI settings saved. Additional usage is off.");
   } catch (e: any) {
     aiSettingsError.value = e.message || "Failed to save AI overage settings";
   } finally {
@@ -1589,7 +1617,6 @@ async function saveAiSettings() {
   if (aiSettingsSaveDisabled.value) return;
 
   aiSettingsSaving.value = true;
-  aiSettingsMessage.value = null;
   aiSettingsError.value = null;
 
   const providers = Object.entries(aiProviderKeyInputs.value)
@@ -1612,7 +1639,7 @@ async function saveAiSettings() {
       defaults,
     });
     syncAiSettings(response);
-    aiSettingsMessage.value = "AI provider settings saved.";
+    toastSuccess("AI provider settings saved.");
   } catch (e: any) {
     aiSettingsError.value = e.message || "Failed to save AI provider settings";
   } finally {
@@ -1717,11 +1744,56 @@ async function loadCommerceSettings() {
   }
 }
 
+async function startManagedStripeOnboarding(
+  mode: "onboard" | "refresh" = "onboard",
+) {
+  if (commerceConnecting.value) return;
+  commerceConnecting.value = true;
+  commerceError.value = null;
+
+  try {
+    persistStripeConnectCountry(stripeConnectCountry.value);
+    const response = await api.post<{ url: string }>(
+      `/commerce/connect/${mode}`,
+      { country: stripeConnectCountry.value },
+    );
+    window.location.assign(response.url);
+  } catch (e: any) {
+    commerceError.value = e.message || "Failed to open Stripe setup";
+    commerceConnecting.value = false;
+  }
+}
+
+function clearStripeConnectQuery() {
+  const query = { ...route.query };
+  delete query.stripe_connect;
+  void router.replace({ path: route.path, query, hash: route.hash });
+}
+
+async function completeStripeConnectReturn() {
+  const result = readRouteQueryString(route.query.stripe_connect);
+  if (!result) {
+    await loadCommerceSettings();
+    return;
+  }
+
+  openSection.value.payments = true;
+  if (result === "refresh") {
+    await startManagedStripeOnboarding("refresh");
+    return;
+  }
+
+  await loadCommerceSettings();
+  clearStripeConnectQuery();
+  if (commerceSettings.value?.stripe.connectionStatus === "active") {
+    toastSuccess("Stripe is connected and ready for payments.");
+  }
+}
+
 async function saveCommerceSettings() {
   if (commerceSaveDisabled.value) return;
 
   commerceSaving.value = true;
-  commerceMessage.value = null;
   commerceError.value = null;
   const hasStripeSecret = Boolean(stripeSecretInput.value.trim());
 
@@ -1736,9 +1808,9 @@ async function saveCommerceSettings() {
       payload,
     );
     syncCommerceSettings(response);
-    commerceMessage.value = hasStripeSecret
+    toastSuccess(hasStripeSecret
       ? "Payment settings saved."
-      : "Default currency saved.";
+      : "Default currency saved.");
   } catch (e: any) {
     commerceError.value = e.message || "Failed to save payment settings";
   } finally {
@@ -1748,7 +1820,6 @@ async function saveCommerceSettings() {
 
 async function clearCommerceStripeKey() {
   commerceSaving.value = true;
-  commerceMessage.value = null;
   commerceError.value = null;
 
   try {
@@ -1759,7 +1830,7 @@ async function clearCommerceStripeKey() {
       },
     );
     syncCommerceSettings(response);
-    commerceMessage.value = "Stored Stripe key removed.";
+    toastSuccess("Stored Stripe key removed.");
   } catch (e: any) {
     commerceError.value = e.message || "Failed to remove Stripe key";
   } finally {
@@ -1795,7 +1866,6 @@ async function loadAppConnections() {
 async function saveLocalPassword() {
   if (localPasswordSaveDisabled.value) return;
   localPasswordSaving.value = true;
-  localPasswordMessage.value = null;
   localPasswordError.value = null;
 
   try {
@@ -1807,8 +1877,7 @@ async function saveLocalPassword() {
     localPasswordConfirmationInput.value = "";
     localPasswordConfigured.value = true;
     localPasswordFormOpen.value = false;
-    localPasswordMessage.value =
-      "Local password verified. This installation is ready to export.";
+    toastSuccess("Local password verified. This installation is ready to export.");
     await loadAppConnections();
   } catch (e: any) {
     localPasswordError.value = e.message || "Failed to save local password";
@@ -1823,7 +1892,6 @@ function toggleLocalPasswordForm() {
     localPasswordConfirmationInput.value = "";
     localPasswordError.value = null;
   } else {
-    localPasswordMessage.value = null;
     localPasswordError.value = null;
   }
   localPasswordFormOpen.value = !localPasswordFormOpen.value;
@@ -1912,7 +1980,6 @@ async function connectCoreGithubUpdater() {
   }
 
   coreGithubSaving.value = "connect";
-  coreGithubMessage.value = null;
   coreGithubError.value = null;
 
   try {
@@ -1936,7 +2003,6 @@ async function updateCoreFromGithub() {
   if (coreGithubSaving.value) return;
 
   coreGithubSaving.value = "update";
-  coreGithubMessage.value = null;
   coreGithubError.value = null;
 
   try {
@@ -1944,7 +2010,7 @@ async function updateCoreFromGithub() {
       "/core/github/update",
     );
     coreGithubLastRunUrl.value = readCoreGithubActionUrl(response);
-    coreGithubMessage.value = "Core update started.";
+    toastSuccess("Core update started.");
     await loadCoreGithubUpdater();
   } catch (e: any) {
     coreGithubError.value = e.message || "Failed to start Core update";
@@ -1966,9 +2032,6 @@ async function loadCoreStorageStatus(silent = false) {
     storageStatus.value = status;
     if (status.r2Available) {
       stopStoragePolling();
-      if (storageMessage.value?.startsWith("Waiting")) {
-        storageMessage.value = "Storage is active.";
-      }
     }
   } catch (e: any) {
     storageError.value = e.message || "Failed to load storage status";
@@ -1985,7 +2048,6 @@ async function activateCoreStorage() {
   }
 
   storageSaving.value = true;
-  storageMessage.value = null;
   storageError.value = null;
 
   try {
@@ -1994,8 +2056,7 @@ async function activateCoreStorage() {
       { bucketName: storageBucketName.value },
     );
     storageActivationRunUrl.value = readCoreGithubActionUrl(response);
-    storageMessage.value =
-      "Storage activation started. Waiting for Cloudflare to redeploy.";
+    toastSuccess("Storage activation started. Waiting for Cloudflare to redeploy.");
     await loadCoreStorageStatus(true);
     if (!storageStatus.value?.r2Available) startStoragePolling();
   } catch (e: any) {
@@ -2008,7 +2069,7 @@ async function activateCoreStorage() {
 async function copyStorageBucketName() {
   try {
     await navigator.clipboard.writeText(storageBucketName.value);
-    storageMessage.value = "Bucket name copied.";
+    toastSuccess("Bucket name copied.");
   } catch {
     storageError.value = "Copy failed. Select the bucket name and copy it manually.";
   }
@@ -2075,7 +2136,6 @@ async function completeCoreGithubInstallFromRoute() {
   if (!installationId) return false;
 
   coreGithubSaving.value = "connect";
-  coreGithubMessage.value = null;
   coreGithubError.value = null;
 
   try {
@@ -2089,7 +2149,7 @@ async function completeCoreGithubInstallFromRoute() {
         readRouteQueryString(route.query.repositorySelection),
       state: readRouteQueryString(route.query.state),
     });
-    coreGithubMessage.value = "GitHub updater connected.";
+    toastSuccess("GitHub updater connected.");
   } catch (e: any) {
     coreGithubError.value = e.message || "Failed to complete GitHub install";
   } finally {
@@ -2128,7 +2188,7 @@ onMounted(async () => {
     if (!completed) void loadCoreGithubUpdater();
   });
   void loadCoreStorageStatus();
-  void loadCommerceSettings();
+  void completeStripeConnectReturn();
   if (
     route.query.section === "connections" ||
     route.query.section === "app-connections"
@@ -2311,12 +2371,6 @@ onBeforeUnmount(() => {
                 Latest run
               </a>
             </div>
-            <p
-              v-if="coreGithubMessage"
-              class="core-update-callout__message"
-            >
-              {{ coreGithubMessage }}
-            </p>
             <p v-if="coreGithubError" class="core-update-callout__error">
               {{ coreGithubError }}
             </p>
@@ -2712,9 +2766,6 @@ onBeforeUnmount(() => {
                   </div>
                 </details>
 
-                <p v-if="mailboxMessage" class="success">
-                  {{ mailboxMessage }}
-                </p>
                 <p v-if="mailboxError" class="error">{{ mailboxError }}</p>
                 <p v-if="emailProviderError" class="error">
                   {{ emailProviderError }}
@@ -2960,14 +3011,6 @@ onBeforeUnmount(() => {
                   </form>
 
                   <p
-                    v-if="localPasswordMessage"
-                    class="connection-line__message"
-                    role="status"
-                    aria-live="polite"
-                  >
-                    {{ localPasswordMessage }}
-                  </p>
-                  <p
                     v-if="localPasswordError"
                     class="connection-line__error"
                     role="alert"
@@ -3156,9 +3199,6 @@ onBeforeUnmount(() => {
                     Latest run
                   </a>
                 </div>
-                <p v-if="storageMessage" class="connection-line__message">
-                  {{ storageMessage }}
-                </p>
                 <p v-if="storageError" class="connection-line__error">
                   {{ storageError }}
                 </p>
@@ -3375,14 +3415,6 @@ onBeforeUnmount(() => {
                       </Button>
                     </div>
 
-                    <p
-                      v-if="aiSettingsMessage"
-                      class="success"
-                      role="status"
-                      aria-live="polite"
-                    >
-                      {{ aiSettingsMessage }}
-                    </p>
                   </div>
                 </template>
 
@@ -3473,14 +3505,6 @@ onBeforeUnmount(() => {
 
                 </template>
 
-                <p
-                  v-if="aiSettingsMessage"
-                  class="success"
-                  role="status"
-                  aria-live="polite"
-                >
-                  {{ aiSettingsMessage }}
-                </p>
               </template>
             </div>
           </div>
@@ -3518,6 +3542,64 @@ onBeforeUnmount(() => {
               />
 
               <template v-else>
+                <div
+                  v-if="commerceSettings?.stripe.mode === 'managed'"
+                  class="managed-stripe-panel"
+                >
+                  <div class="managed-stripe-panel__header">
+                    <div>
+                      <h3>Stripe payments</h3>
+                      <p>{{ managedStripeDescription }}</p>
+                    </div>
+                    <StatusBadge :tone="managedStripeStatusTone">
+                      {{ managedStripeStatusLabel }}
+                    </StatusBadge>
+                  </div>
+
+                  <p
+                    v-if="commerceSettings.stripe.requirementsDue.length"
+                    class="managed-stripe-panel__requirements"
+                    role="status"
+                  >
+                    {{ commerceSettings.stripe.requirementsDue.length }} Stripe
+                    {{ commerceSettings.stripe.requirementsDue.length === 1 ? "requirement" : "requirements" }}
+                    still {{ commerceSettings.stripe.requirementsDue.length === 1 ? "needs" : "need" }} attention.
+                  </p>
+
+                  <div class="managed-stripe-panel__actions">
+                    <label
+                      v-if="!commerceSettings.stripe.connected"
+                      class="field managed-stripe-panel__country"
+                      for="stripe-connect-country"
+                    >
+                      <span>Business country</span>
+                      <select
+                        id="stripe-connect-country"
+                        v-model="stripeConnectCountry"
+                        class="input"
+                      >
+                        <option
+                          v-for="country in STRIPE_CONNECT_COUNTRIES"
+                          :key="country.value"
+                          :value="country.value"
+                        >
+                          {{ country.label }}
+                        </option>
+                      </select>
+                    </label>
+
+                    <Button
+                      color="primary"
+                      size="compact"
+                      type="button"
+                      :disabled="commerceConnecting"
+                      @click="startManagedStripeOnboarding(commerceSettings.stripe.connected ? 'refresh' : 'onboard')"
+                    >
+                      {{ managedStripeActionLabel }}
+                    </Button>
+                  </div>
+                </div>
+
                 <div class="commerce-settings-row">
                   <label class="field commerce-settings-row__field">
                     <span>Default currency</span>
@@ -3584,13 +3666,6 @@ onBeforeUnmount(() => {
                 </div>
 
                 <p
-                  v-if="commerceSettings?.stripe.source === 'managed'"
-                  class="field-hint"
-                >
-                  Payments are connected through the managed ME3 commerce service.
-                </p>
-
-                <p
                   v-if="
                     commerceSettings?.stripe.source === 'environment' &&
                     commerceSettings?.stripe.keyHint
@@ -3622,9 +3697,6 @@ onBeforeUnmount(() => {
                   Remove stored key
                 </Button>
 
-                <p v-if="commerceMessage" class="success">
-                  {{ commerceMessage }}
-                </p>
                 <p v-if="commerceError" class="error">{{ commerceError }}</p>
               </template>
             </div>
@@ -3695,7 +3767,6 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <p v-if="message" class="success">{{ message }}</p>
               <p v-if="error" class="error">{{ error }}</p>
             </div>
           </div>
@@ -4018,16 +4089,6 @@ onBeforeUnmount(() => {
           >
             Connect ME3 Updater to activate storage from here. You can still
             complete the Cloudflare R2 steps first.
-          </p>
-          <p v-if="storageMessage" class="storage-guide-status">
-            {{ storageMessage }}
-            <a
-              v-if="storageActivationRunUrl"
-              :href="storageActivationRunUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              >View run</a
-            >
           </p>
           <p v-if="storageError" class="storage-guide-error">
             {{ storageError }}
@@ -5484,6 +5545,53 @@ h1 {
   margin-bottom: 12px;
 }
 
+.managed-stripe-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 12px);
+  background: var(--ui-surface, var(--color-bg));
+}
+
+.managed-stripe-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.managed-stripe-panel__header h3 {
+  margin: 0 0 4px;
+  color: var(--ui-text, var(--color-text));
+  font-size: 15px;
+}
+
+.managed-stripe-panel__header p,
+.managed-stripe-panel__requirements {
+  margin: 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.managed-stripe-panel__requirements {
+  color: var(--ui-danger, #c62828);
+}
+
+.managed-stripe-panel__actions {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.managed-stripe-panel__country {
+  width: min(280px, 100%);
+  margin: 0;
+}
+
 .commerce-settings-row__field {
   flex: 1;
   min-width: 0;
@@ -5961,6 +6069,16 @@ h1 {
 
   .commerce-settings-row {
     grid-template-columns: 1fr;
+  }
+
+  .managed-stripe-panel__header,
+  .managed-stripe-panel__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .managed-stripe-panel__country {
+    width: 100%;
   }
 
   .timezone-row__actions {

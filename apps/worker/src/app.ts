@@ -67,11 +67,6 @@ import {
   getOrCreateInstallSessionSecret,
 } from "./install-secrets";
 import {
-  CommerceSettingsInputError,
-  getCommerceSettings,
-  updateCommerceSettings,
-} from "./commerce-settings";
-import {
   TelegramSettingsInputError,
   getTelegramSettings,
   resolveTelegramBotToken,
@@ -583,30 +578,8 @@ app.get("/api/core/version", (c) => {
   return c.json(getCoreVersionInfo());
 });
 
-app.get("/api/commerce/status", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  return c.json({
-    ok: true,
-    ...(await getCommerceSettings(c.env, ownerId)),
-  });
-});
-
-app.put("/api/commerce/settings", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  const body = await c.req.json().catch(() => ({}));
-  try {
-    return c.json(await updateCommerceSettings(c.env, ownerId, body));
-  } catch (error) {
-    return commerceSettingsErrorResponse(c, error);
-  }
-});
-
 registerBookingRoutes(app);
-registerCommerceRoutes(app);
+registerCommerceRoutes(app, { requireOwner, unauthorized, getCoreWebOrigin });
 registerUsernameRoutes(app);
 
 app.post("/api/auth/me3/start", async (c) => {
@@ -1612,13 +1585,6 @@ function isOwnerSurfaceRequest(c: AppContext, pathname: string): boolean {
     hostsMatch(requestHost, getAdminHost(c.env, c.req.url)) ||
     hostsMatch(requestHost, getApiHost(c.env, c.req.url))
   );
-}
-
-function commerceSettingsErrorResponse(c: AppContext, error: unknown) {
-  if (error instanceof CommerceSettingsInputError) {
-    return c.json({ ok: false, error: error.message }, error.status as any);
-  }
-  throw error;
 }
 
 function localDateKey(): string {

@@ -3,7 +3,11 @@ import {
   getOrCreateInstallEncryptionKey,
   hasInstallEncryptionKey,
 } from "./install-secrets";
-import { getManagedCommerceBridgeConfig } from "./commerce-bridge";
+import {
+  getManagedCommerceBridgeConfig,
+  getManagedCommerceConnectionStatus,
+  type ManagedCommerceConnectionStatus,
+} from "./commerce-bridge";
 
 type CommerceSettingsRow = {
   user_id: string;
@@ -24,6 +28,11 @@ export type CommerceSettingsResponse = {
     keyHint: string | null;
     keyUpdatedAt: string | null;
     mode: "direct" | "managed";
+    connectionStatus: ManagedCommerceConnectionStatus["status"] | "unavailable" | null;
+    connected: boolean;
+    chargesEnabled: boolean;
+    payoutsEnabled: boolean;
+    requirementsDue: string[];
   };
 };
 
@@ -49,12 +58,24 @@ export async function getCommerceSettings(
   const hasEnvKey = Boolean(envKey);
   const hasStoredKey = Boolean(row?.encrypted_stripe_secret_key);
   const hasManagedBridge = Boolean(await getManagedCommerceBridgeConfig(env));
+  let managedStatus: ManagedCommerceConnectionStatus | null = null;
+  let managedStatusUnavailable = false;
+  if (!hasEnvKey && !hasStoredKey && hasManagedBridge) {
+    try {
+      managedStatus = await getManagedCommerceConnectionStatus(env);
+    } catch (error) {
+      managedStatusUnavailable = true;
+      console.error("Managed Stripe connection status failed:", error);
+    }
+  }
+  const managedReady = managedStatus?.connected === true && managedStatus.status === "active" &&
+    managedStatus.chargesEnabled && managedStatus.payoutsEnabled;
 
   return {
     encryptionConfigured: await hasInstallEncryptionKey(env),
     defaultCurrency: await resolveDefaultCurrency(env, ownerId, row),
     stripe: {
-      configured: hasEnvKey || hasStoredKey || hasManagedBridge,
+      configured: hasEnvKey || hasStoredKey || managedReady,
       source: hasEnvKey
         ? "environment"
         : hasStoredKey
@@ -67,8 +88,21 @@ export async function getCommerceSettings(
         : row?.stripe_key_hint || null,
       keyUpdatedAt: hasEnvKey ? null : row?.stripe_key_updated_at || null,
       mode: hasEnvKey || hasStoredKey ? "direct" : hasManagedBridge ? "managed" : "direct",
+      connectionStatus: hasManagedBridge
+        ? managedStatusUnavailable
+          ? "unavailable"
+          : managedStatus?.status || "not_connected"
+        : null,
+      connected: managedStatus?.connected === true,
+      chargesEnabled: managedStatus?.chargesEnabled === true,
+      payoutsEnabled: managedStatus?.payoutsEnabled === true,
+      requirementsDue: managedStatus?.requirementsDue || [],
     },
   };
+}
+
+export async function isCommerceReady(env: Env, ownerId: string): Promise<boolean> {
+  return (await getCommerceSettings(env, ownerId)).stripe.configured;
 }
 
 export async function updateCommerceSettings(

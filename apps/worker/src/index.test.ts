@@ -8070,6 +8070,58 @@ describe("ME3 Worker auth", () => {
     });
   });
 
+  it("starts managed Stripe onboarding from owner payment settings", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.ME3_COMMERCE_BRIDGE_ORIGIN = "https://commerce.me3.example";
+    env.ME3_COMMERCE_BRIDGE_TOKEN = "bridge-token";
+    env.CORE_WEB_ORIGIN = "https://core.example";
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        connected: false,
+        status: "not_connected",
+      })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        url: "https://connect.stripe.test/onboard",
+        accountId: "acct_123",
+        mode: "onboard",
+      })));
+
+    const statusResponse = await app.fetch(
+      new Request("http://localhost/api/commerce/status", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    expect(await statusResponse.json()).toMatchObject({
+      stripe: {
+        configured: false,
+        source: "managed",
+        mode: "managed",
+        connectionStatus: "not_connected",
+      },
+    });
+
+    const onboardResponse = await app.fetch(
+      new Request("http://localhost/api/commerce/connect/onboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({ country: "IE" }),
+      }),
+      env,
+    );
+    expect(onboardResponse.status).toBe(200);
+    expect(await onboardResponse.json()).toMatchObject({
+      url: "https://connect.stripe.test/onboard",
+      accountId: "acct_123",
+    });
+    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
+      country: "IE",
+      returnUrl: "https://core.example/settings?section=payments",
+    });
+    fetchMock.mockRestore();
+  });
+
   describe("public booking routes", () => {
     beforeEach(() => {
       vi.useFakeTimers();

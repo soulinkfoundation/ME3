@@ -36,6 +36,7 @@ import {
 import { isCorePluginEnabled } from "../plugins";
 import { generateSiteHtml, type Me3SiteProfile } from "@me3-core/site-renderer";
 import { buildPublicMe3Profile } from "../public-me-profile";
+import { getProfileCommercePublishBlockReason } from "../commerce-readiness";
 import {
   createEmptyPublishManifest,
   deleteSiteFile,
@@ -1371,6 +1372,25 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     }
 
     draft = assistantSiteDraftForPublish(draft);
+    const profile = parseSiteProfile(draft.sourceFiles["me.json"] || "{}", site.username);
+    const commerceError = await getProfileCommercePublishBlockReason(env, ownerId, profile);
+    if (commerceError) {
+      return {
+        specialist: "core.sites.publish",
+        replyText: `I have the draft, but I cannot publish it yet: ${commerceError}`,
+        siteAction: {
+          kind: "approval_status",
+          siteId: site.id,
+          username: site.username,
+          pending: true,
+          published: false,
+          files: assistantSiteDraftChangedFiles(draft),
+          postTitle: draft.changes.postTitle || null,
+          url: getAssistantSiteDraftReviewUrl(env, site, draft, requestUrl),
+          message: commerceError,
+        },
+      };
+    }
     site = await publishAssistantSiteDraft(env, site, draft);
     return {
       specialist: "core.sites.publish",

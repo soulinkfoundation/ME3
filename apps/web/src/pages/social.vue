@@ -7,6 +7,7 @@ import SocialAccountsPanel from "../components/SocialAccountsPanel.vue";
 import UiIcon from "../components/UiIcon.vue";
 import WorkspaceTabs from "../components/WorkspaceTabs.vue";
 import { API_BASE } from "../api";
+import { useAppToast } from "../composables/useAppToast";
 import { socialPlatformIconPath } from "../utils/social-platform-icons";
 import { resolveLocalDateTimeToUtc } from "../utils/timezone";
 import { useSitesStore } from "../stores/sites";
@@ -51,7 +52,6 @@ const editorAccountId = ref("");
 const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
-const notice = ref("");
 const showAccounts = ref(false);
 const instagramPreviewIndex = ref(0);
 const showMediaPicker = ref(false);
@@ -77,6 +77,7 @@ const libraryPublishedFrom = ref("");
 const libraryPublishedTo = ref("");
 const libraryResults = ref<PostLibraryItem[] | null>(null);
 const librarySearching = ref(false);
+const { toastSuccess } = useAppToast();
 
 const currentSite = computed(
   () => sites.sites.find((site) => site.id === selectedSiteId.value) || null,
@@ -486,7 +487,6 @@ async function saveDraft() {
   if (!editorDirty.value && !titleDirty.value) return;
   saving.value = true;
   error.value = "";
-  notice.value = "";
   try {
     if (titleDirty.value) {
       replacePost(
@@ -504,7 +504,7 @@ async function saveDraft() {
         }),
       );
     }
-    notice.value = "Draft saved. Approval was removed if its content changed.";
+    toastSuccess("Draft saved. Approval was removed if its content changed.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to save this Version");
     error.value = social.error || "Failed to save this Version";
@@ -562,7 +562,7 @@ async function createDraft() {
     posts.value = [detail, ...posts.value];
     activeMode.value = "drafts";
     selectPost(detail);
-    notice.value = "New draft added. Give it a title and replace the starter text.";
+    toastSuccess("New draft added. Give it a title and replace the starter text.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to create a draft");
     error.value = social.error || "Failed to create a draft";
@@ -576,14 +576,13 @@ async function loadLocalDemo() {
   if (!site || !localDemoAvailable.value || saving.value) return;
   saving.value = true;
   error.value = "";
-  notice.value = "";
   try {
     const detail = await social.createLocalSocialDemo(site.id);
     posts.value = [detail, ...posts.value.filter((item) => item.post.id !== detail.post.id)];
     accounts.value = await social.fetchSocialAccounts();
     activeMode.value = "drafts";
     selectPost(detail);
-    notice.value = "Local demo loaded. It is safe to edit, approve, schedule, and delete.";
+    toastSuccess("Local demo loaded. It is safe to edit, approve, schedule, and delete.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to load the local Social demo");
     error.value = social.error || "Failed to load the local Social demo";
@@ -598,14 +597,13 @@ async function deleteDraft() {
   if (!window.confirm(`Delete “${post.post.ideaText}”? This cannot be undone.`)) return;
   saving.value = true;
   error.value = "";
-  notice.value = "";
   try {
     await social.deleteSocialPost(post.post.id, post.post.updatedAt);
     posts.value = posts.value.filter((detail) => detail.post.id !== post.post.id);
     selectedPostId.value = null;
     selectVersion(null);
     ensureVisibleSelection();
-    notice.value = "Draft deleted.";
+    toastSuccess("Draft deleted.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to delete this draft");
     error.value = social.error || "Failed to delete this draft";
@@ -731,9 +729,9 @@ async function attachSelectedMedia() {
     ].map((asset, index) => ({ ...asset, assetIndex: index }));
     replaceVersion(await social.updatePostVersion(version.id, { assetManifest }));
     showMediaPicker.value = false;
-    notice.value = selectedVideo
+    toastSuccess(selectedVideo
       ? "Video attached."
-      : files.length === 1 ? "Image attached." : `${files.length} images attached in selection order.`;
+      : files.length === 1 ? "Image attached." : `${files.length} images attached in selection order.`);
   } catch (value) {
     social.setErrorFromApi(value, "Failed to attach images");
     mediaError.value = social.error || "Failed to attach images";
@@ -764,7 +762,7 @@ async function moveMedia(fromIndex: number, offset: -1 | 1) {
         assetManifest: assetManifest.map((asset, index) => ({ ...asset, assetIndex: index })),
       }),
     );
-    notice.value = "Media order updated.";
+    toastSuccess("Media order updated.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to reorder media");
     error.value = social.error || "Failed to reorder media";
@@ -784,7 +782,7 @@ async function removeMedia(assetUrl: string) {
         assetManifest: version.assetManifest.filter((asset) => asset.url !== assetUrl),
       }),
     );
-    notice.value = "Image removed.";
+    toastSuccess("Image removed.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to remove this image");
     error.value = social.error || "Failed to remove this image";
@@ -834,7 +832,7 @@ async function schedulePost() {
       publicationStatus: publication.status,
     });
     showSchedule.value = false;
-    notice.value = "Post scheduled.";
+    toastSuccess("Post scheduled.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to schedule this post");
     scheduleError.value = social.error || "Failed to schedule this post";
@@ -858,9 +856,9 @@ async function publishNow() {
       publishedAt: publication.publishedAt,
     });
     showSchedule.value = false;
-    notice.value = version.platform === "tiktok"
+    toastSuccess(version.platform === "tiktok"
       ? "TikTok draft queued. You’ll receive an inbox notification in TikTok to finish editing and post it."
-      : "Post queued to publish now.";
+      : "Post queued to publish now.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to publish this post");
     scheduleError.value = social.error || "Failed to publish this post";
@@ -898,9 +896,6 @@ function currentQueryParam(name: string): string | null {
     <main class="social-main">
       <h1 class="sr-only">Social Publishing</h1>
       <div v-if="error" class="state-banner state-banner--error" role="alert">{{ error }}</div>
-      <div v-if="notice" class="state-banner" role="status" aria-live="polite">
-        {{ notice }}
-      </div>
 
       <header class="social-toolbar">
         <form class="social-toolbar__search" role="search" @submit.prevent="searchLibrary">
@@ -1169,107 +1164,186 @@ function currentQueryParam(name: string): string | null {
             </div>
 
             <aside :class="['post-preview', `post-preview--${selectedVersion.platform}`]" aria-label="Post preview">
-              <div class="preview-platform-bar">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="platformIconPath(selectedVersion.platform)" /></svg>
-                <span>{{ platformLabel(selectedVersion.platform) }}</span>
-              </div>
-              <div class="preview-profile">
-                <span class="preview-avatar">{{ previewAccountName(selectedVersion).slice(0, 1).toUpperCase() }}</span>
-                <span><strong>{{ previewAccountName(selectedVersion) }}</strong><small>{{ previewAccountHandle(selectedVersion) }} · now</small></span>
-                <UiIcon name="Ellipsis" :size="18" aria-hidden="true" />
-              </div>
-              <p>{{ editorBody || 'Your Post preview will appear here.' }}</p>
-              <div
-                v-if="selectedVersion.assetManifest.length"
-                :class="[
-                  'preview-media',
-                  {
-                    'preview-media--gallery':
-                      selectedVersion.assetManifest.length > 1 &&
-                      selectedVersion.platform !== 'instagram' &&
-                      selectedVersion.platform !== 'instagram_business',
-                  },
-                ]"
-              >
-                <template v-if="(selectedVersion.platform === 'instagram' || selectedVersion.platform === 'instagram_business') && selectedVersion.assetManifest.length > 1">
-                  <div class="instagram-preview-carousel" aria-label="Instagram image carousel">
-                    <div class="instagram-preview-carousel__track" :style="{ transform: `translateX(-${instagramPreviewIndex * 100}%)` }">
-                      <div v-for="(asset, index) in selectedVersion.assetManifest" :key="`${asset.url}-${index}`" class="instagram-preview-carousel__slide">
-                        <video
-                          v-if="isVideoAsset(asset)"
-                          :src="asset.url"
-                          controls
-                          muted
-                          preload="metadata"
-                          :aria-label="asset.altText || asset.filename || 'Post video'"
+              <template v-if="selectedVersion.platform === 'tiktok'">
+                <div class="tiktok-preview__platform-bar">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="platformIconPath(selectedVersion.platform)" /></svg>
+                  <span>TikTok preview</span>
+                </div>
+                <div class="tiktok-preview__stage">
+                  <template v-if="selectedVersion.assetManifest.length">
+                    <video
+                      v-if="isVideoAsset(selectedVersion.assetManifest[0]!)"
+                      :src="selectedVersion.assetManifest[0]!.url"
+                      controls
+                      muted
+                      playsinline
+                      preload="metadata"
+                      class="tiktok-preview__media"
+                      :aria-label="selectedVersion.assetManifest[0]!.altText || selectedVersion.assetManifest[0]!.filename || 'TikTok video preview'"
+                    />
+                    <img
+                      v-else
+                      :src="selectedVersion.assetManifest[0]!.url"
+                      :alt="selectedVersion.assetManifest[0]!.altText || selectedVersion.assetManifest[0]!.filename || 'TikTok post preview'"
+                      class="tiktok-preview__media"
+                    />
+                  </template>
+                  <div v-else class="tiktok-preview__empty">
+                    <UiIcon name="Play" :size="28" aria-hidden="true" />
+                    <span>Add a video to preview your TikTok</span>
+                  </div>
+
+                  <div class="tiktok-preview__topbar" aria-hidden="true">
+                    <span class="tiktok-preview__back">‹</span>
+                    <span class="tiktok-preview__search-pill">
+                      <UiIcon name="Search" :size="14" />
+                      <span>Find related content</span>
+                      <strong>Search</strong>
+                    </span>
+                  </div>
+                  <span class="tiktok-preview__draft-toast" aria-hidden="true">Draft saved</span>
+
+                  <div class="tiktok-preview__rail" aria-hidden="true">
+                    <span class="tiktok-preview__profile-avatar">{{ previewAccountName(selectedVersion).slice(0, 1).toUpperCase() }}</span>
+                    <span class="tiktok-preview__rail-action">
+                      <UiIcon name="Heart" :size="25" />
+                      <strong>22</strong>
+                    </span>
+                    <span class="tiktok-preview__rail-action">
+                      <UiIcon name="MessageCircle" :size="25" />
+                      <strong>Add 1st</strong>
+                    </span>
+                    <span class="tiktok-preview__rail-action">
+                      <UiIcon name="Bookmark" :size="25" />
+                      <strong>0</strong>
+                    </span>
+                    <span class="tiktok-preview__rail-action">
+                      <UiIcon name="Ellipsis" :size="25" />
+                    </span>
+                  </div>
+
+                  <div class="tiktok-preview__bottom-fade" aria-hidden="true" />
+                  <div class="tiktok-preview__caption">
+                    <div class="tiktok-preview__caption-author">
+                      <strong>{{ previewAccountHandle(selectedVersion) }}</strong>
+                      <span>· now</span>
+                    </div>
+                    <p>{{ editorBody || 'Your TikTok caption will appear here.' }}</p>
+                    <span class="tiktok-preview__sound">♫ Original sound</span>
+                  </div>
+
+                  <div class="tiktok-preview__progress" aria-hidden="true">
+                    <span />
+                  </div>
+                </div>
+                <div class="tiktok-preview__footer" aria-hidden="true">
+                  <span>First-time boost? More followers await!</span>
+                  <UiIcon name="ChevronRight" :size="17" />
+                </div>
+              </template>
+              <template v-else>
+                <div class="preview-platform-bar">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="platformIconPath(selectedVersion.platform)" /></svg>
+                  <span>{{ platformLabel(selectedVersion.platform) }}</span>
+                </div>
+                <div class="preview-profile">
+                  <span class="preview-avatar">{{ previewAccountName(selectedVersion).slice(0, 1).toUpperCase() }}</span>
+                  <span><strong>{{ previewAccountName(selectedVersion) }}</strong><small>{{ previewAccountHandle(selectedVersion) }} · now</small></span>
+                  <UiIcon name="Ellipsis" :size="18" aria-hidden="true" />
+                </div>
+                <p>{{ editorBody || 'Your Post preview will appear here.' }}</p>
+                <div
+                  v-if="selectedVersion.assetManifest.length"
+                  :class="[
+                    'preview-media',
+                    {
+                      'preview-media--gallery':
+                        selectedVersion.assetManifest.length > 1 &&
+                        selectedVersion.platform !== 'instagram' &&
+                        selectedVersion.platform !== 'instagram_business',
+                    },
+                  ]"
+                >
+                  <template v-if="(selectedVersion.platform === 'instagram' || selectedVersion.platform === 'instagram_business') && selectedVersion.assetManifest.length > 1">
+                    <div class="instagram-preview-carousel" aria-label="Instagram image carousel">
+                      <div class="instagram-preview-carousel__track" :style="{ transform: `translateX(-${instagramPreviewIndex * 100}%)` }">
+                        <div v-for="(asset, index) in selectedVersion.assetManifest" :key="`${asset.url}-${index}`" class="instagram-preview-carousel__slide">
+                          <video
+                            v-if="isVideoAsset(asset)"
+                            :src="asset.url"
+                            controls
+                            muted
+                            preload="metadata"
+                            :aria-label="asset.altText || asset.filename || 'Post video'"
+                          />
+                          <img v-else :src="asset.url" :alt="asset.altText || asset.filename || 'Post image'" />
+                        </div>
+                      </div>
+                      <div class="instagram-preview-carousel__dots" role="tablist" aria-label="Choose carousel image">
+                        <button
+                          v-for="(_, index) in selectedVersion.assetManifest"
+                          :key="index"
+                          type="button"
+                          :class="{ 'is-active': instagramPreviewIndex === index }"
+                          :aria-label="`Show image ${index + 1} of ${selectedVersion.assetManifest.length}`"
+                          :aria-selected="instagramPreviewIndex === index"
+                          role="tab"
+                          @click="setInstagramPreview(index)"
                         />
-                        <img v-else :src="asset.url" :alt="asset.altText || asset.filename || 'Post image'" />
                       </div>
                     </div>
-                    <div class="instagram-preview-carousel__dots" role="tablist" aria-label="Choose carousel image">
-                      <button
-                        v-for="(_, index) in selectedVersion.assetManifest"
-                        :key="index"
-                        type="button"
-                        :class="{ 'is-active': instagramPreviewIndex === index }"
-                        :aria-label="`Show image ${index + 1} of ${selectedVersion.assetManifest.length}`"
-                        :aria-selected="instagramPreviewIndex === index"
-                        role="tab"
-                        @click="setInstagramPreview(index)"
-                      />
-                    </div>
-                  </div>
-                </template>
-                <template v-else>
-                  <template v-for="(asset, index) in selectedVersion.assetManifest" :key="`${asset.url}-${index}`">
-                  <video
-                    v-if="isVideoAsset(asset)"
-                    :src="asset.url"
-                    controls
-                    muted
-                    preload="metadata"
-                    :aria-label="asset.altText || asset.filename || 'Post video'"
-                  />
-                  <img
-                    v-else
-                    :src="asset.url"
-                    :alt="asset.altText || asset.filename || 'Post image'"
-                  />
                   </template>
-                </template>
-                <span v-if="selectedVersion.assetManifest.length > 1 && selectedVersion.platform !== 'instagram' && selectedVersion.platform !== 'instagram_business'" class="preview-media__count">
-                  <UiIcon name="Copy" :size="14" aria-hidden="true" />
-                  {{ selectedVersion.assetManifest.length }}
-                </span>
-              </div>
-              <a
-                v-if="previewLinkUrl(editorBody)"
-                class="preview-link-card"
-                :href="previewLinkUrl(editorBody)!"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <span class="preview-link-card__eyebrow">{{ previewLinkHost(editorBody) }}</span>
-                <strong>{{ previewLinkUrl(editorBody) }}</strong>
-              </a>
-              <a v-if="selectedVersion.platformPostUrl" :href="selectedVersion.platformPostUrl" target="_blank" rel="noopener noreferrer">
-                View published Post
-              </a>
-              <div class="preview-actions" aria-hidden="true">
-                <template v-if="selectedVersion.platform === 'instagram' || selectedVersion.platform === 'instagram_business'">
-                  <UiIcon name="Heart" :size="20" />
-                  <UiIcon name="MessageCircle" :size="20" />
-                  <UiIcon name="Redo" :size="20" />
-                  <UiIcon name="Send" :size="20" />
-                  <UiIcon name="Bookmark" class="preview-actions__bookmark" :size="20" />
-                </template>
-                <template v-else>
-                  <UiIcon name="MessageCircle" :size="17" />
-                  <UiIcon name="Redo" :size="17" />
-                  <UiIcon name="Heart" :size="17" />
-                  <UiIcon name="Send" :size="17" />
-                </template>
-              </div>
+                  <template v-else>
+                    <template v-for="(asset, index) in selectedVersion.assetManifest" :key="`${asset.url}-${index}`">
+                    <video
+                      v-if="isVideoAsset(asset)"
+                      :src="asset.url"
+                      controls
+                      muted
+                      preload="metadata"
+                      :aria-label="asset.altText || asset.filename || 'Post video'"
+                    />
+                    <img
+                      v-else
+                      :src="asset.url"
+                      :alt="asset.altText || asset.filename || 'Post image'"
+                    />
+                    </template>
+                  </template>
+                  <span v-if="selectedVersion.assetManifest.length > 1 && selectedVersion.platform !== 'instagram' && selectedVersion.platform !== 'instagram_business'" class="preview-media__count">
+                    <UiIcon name="Copy" :size="14" aria-hidden="true" />
+                    {{ selectedVersion.assetManifest.length }}
+                  </span>
+                </div>
+                <a
+                  v-if="previewLinkUrl(editorBody)"
+                  class="preview-link-card"
+                  :href="previewLinkUrl(editorBody)!"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <span class="preview-link-card__eyebrow">{{ previewLinkHost(editorBody) }}</span>
+                  <strong>{{ previewLinkUrl(editorBody) }}</strong>
+                </a>
+                <a v-if="selectedVersion.platformPostUrl" :href="selectedVersion.platformPostUrl" target="_blank" rel="noopener noreferrer">
+                  View published Post
+                </a>
+                <div class="preview-actions" aria-hidden="true">
+                  <template v-if="selectedVersion.platform === 'instagram' || selectedVersion.platform === 'instagram_business'">
+                    <UiIcon name="Heart" :size="20" />
+                    <UiIcon name="MessageCircle" :size="20" />
+                    <UiIcon name="Redo" :size="20" />
+                    <UiIcon name="Send" :size="20" />
+                    <UiIcon name="Bookmark" class="preview-actions__bookmark" :size="20" />
+                  </template>
+                  <template v-else>
+                    <UiIcon name="MessageCircle" :size="17" />
+                    <UiIcon name="Redo" :size="17" />
+                    <UiIcon name="Heart" :size="17" />
+                    <UiIcon name="Send" :size="17" />
+                  </template>
+                </div>
+              </template>
             </aside>
           </div>
 
@@ -2261,6 +2335,257 @@ input:focus {
   padding: 10px 14px;
   border-top: 1px solid #e5e7eb;
   color: #64748b;
+}
+
+/* TikTok keeps the video primary: the caption and social chrome live on the
+   lower edge of a portrait stage instead of above the media like a feed post. */
+.post-preview--tiktok {
+  width: min(100%, 380px);
+  justify-self: center;
+  border-color: #0f0f0f;
+  border-radius: 18px;
+  background: #000;
+  color: #fff;
+  box-shadow: 0 18px 38px rgb(15 23 42 / 16%);
+}
+
+.tiktok-preview__platform-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 13px;
+  border-bottom: 1px solid #2b2b2b;
+  background: #0f0f0f;
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.tiktok-preview__platform-bar svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.tiktok-preview__stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  overflow: hidden;
+  background: #121212;
+}
+
+.tiktok-preview__media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #121212;
+}
+
+.tiktok-preview__empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 9px;
+  padding: 28px;
+  color: rgb(255 255 255 / 72%);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.tiktok-preview__topbar {
+  position: absolute;
+  z-index: 4;
+  top: 12px;
+  right: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  pointer-events: none;
+}
+
+.tiktok-preview__back {
+  display: inline-flex;
+  width: 22px;
+  justify-content: center;
+  color: #fff;
+  font-size: 2rem;
+  font-weight: 300;
+  line-height: 1;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 45%);
+}
+
+.tiktok-preview__search-pill {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid rgb(255 255 255 / 88%);
+  border-radius: 10px;
+  background: rgb(24 24 24 / 16%);
+  color: #fff;
+  font-size: 0.68rem;
+  backdrop-filter: blur(7px);
+}
+
+.tiktok-preview__search-pill span {
+  overflow: hidden;
+  color: rgb(255 255 255 / 88%);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tiktok-preview__search-pill strong {
+  padding-left: 8px;
+  border-left: 1px solid rgb(255 255 255 / 38%);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.tiktok-preview__draft-toast {
+  position: absolute;
+  z-index: 4;
+  top: 64px;
+  left: 50%;
+  padding: 10px 18px;
+  border-radius: 15px;
+  background: rgb(78 87 102 / 82%);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 650;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.tiktok-preview__rail {
+  position: absolute;
+  z-index: 4;
+  right: 8px;
+  bottom: 104px;
+  display: grid;
+  justify-items: center;
+  gap: 13px;
+  width: 42px;
+  color: #fff;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 55%);
+}
+
+.tiktok-preview__profile-avatar {
+  display: grid;
+  width: 35px;
+  height: 35px;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #343434;
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.tiktok-preview__rail-action {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  font-size: 0.64rem;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.tiktok-preview__rail-action :deep(svg) {
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 42%));
+}
+
+.tiktok-preview__bottom-fade {
+  position: absolute;
+  z-index: 1;
+  inset: 52% 0 0;
+  background: linear-gradient(180deg, transparent 0%, rgb(0 0 0 / 14%) 36%, rgb(0 0 0 / 88%) 100%);
+  pointer-events: none;
+}
+
+.tiktok-preview__caption {
+  position: absolute;
+  z-index: 3;
+  right: 58px;
+  bottom: 48px;
+  left: 14px;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 60%);
+}
+
+.tiktok-preview__caption-author {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 0.78rem;
+}
+
+.tiktok-preview__caption-author span {
+  color: rgb(255 255 255 / 78%);
+  font-size: 0.68rem;
+}
+
+.tiktok-preview__caption p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 6px 0 5px;
+  color: #fff;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+}
+
+.tiktok-preview__sound {
+  display: block;
+  overflow: hidden;
+  color: rgb(255 255 255 / 90%);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tiktok-preview__progress {
+  position: absolute;
+  z-index: 5;
+  right: 8px;
+  bottom: 5px;
+  left: 8px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 42%);
+  pointer-events: none;
+}
+
+.tiktok-preview__progress span {
+  display: block;
+  width: 34%;
+  height: 100%;
+  border-radius: inherit;
+  background: #fff;
+}
+
+.tiktok-preview__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 12px 9px;
+  background: #151515;
+  color: rgb(255 255 255 / 88%);
+  font-size: 0.68rem;
+  line-height: 1.25;
 }
 
 .post-preview--linkedin .preview-platform-bar {

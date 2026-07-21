@@ -12,6 +12,7 @@ import { useSitesStore, type SitePageRevision } from "../../../../stores/sites";
 import { resolvePublicProfileUrl } from "../../../../utils/publicSiteUrl";
 import UiIcon from "../../../../components/UiIcon.vue";
 import { api } from "../../../../api";
+import { useAppToast } from "../../../../composables/useAppToast";
 
 definePage({
   meta: {
@@ -25,6 +26,7 @@ definePage({
 
 const route = useRoute();
 const sites = useSitesStore();
+const { toastSuccess } = useAppToast();
 const username = computed(() => route.params.username as string);
 const pageId = computed(() => route.params.pageId as string);
 const page = computed(() => sites.sitePages.find((candidate) => candidate.id === pageId.value));
@@ -34,7 +36,6 @@ const activeSectionId = ref("");
 const loading = ref(true);
 const busy = ref(false);
 const error = ref("");
-const notice = ref("");
 const liveUrl = ref("");
 const revisions = ref<SitePageRevision[]>([]);
 const bookingOffers = ref<Array<{ id: string; title: string; paid: boolean }>>([]);
@@ -117,7 +118,6 @@ async function save(options: { quiet?: boolean } = {}) {
   if (!draft.value || busy.value) return false;
   busy.value = true;
   error.value = "";
-  notice.value = "";
   draft.value.updatedAt = new Date().toISOString();
   const saved = await sites.saveSitePage(username.value, pageId.value, draft.value);
   busy.value = false;
@@ -127,7 +127,7 @@ async function save(options: { quiet?: boolean } = {}) {
   }
   draft.value = structuredClone(saved.document);
   await refreshPreview();
-  if (!options.quiet) notice.value = "Draft saved.";
+  if (!options.quiet) toastSuccess("Draft saved.");
   return true;
 }
 
@@ -144,7 +144,7 @@ async function publish() {
     error.value = sites.error || "Could not publish the page.";
     return;
   }
-  notice.value = "Page published.";
+  toastSuccess("Page published.");
   await loadRevisions();
 }
 
@@ -156,7 +156,7 @@ async function unpublish() {
     error.value = sites.error || "Could not unpublish the page.";
     return;
   }
-  notice.value = "Page unpublished. The draft is still here.";
+  toastSuccess("Page unpublished. The draft is still here.");
 }
 
 async function restore(revisionId: string) {
@@ -174,7 +174,7 @@ async function restore(revisionId: string) {
   draft.value = structuredClone(restored.document);
   activeSectionId.value = draft.value.content.sections[0]?.id || "";
   await refreshPreview();
-  notice.value = "Previous version restored as the current draft.";
+  toastSuccess("Previous version restored as the current draft.");
 }
 
 function setActionKind(kind: LandingPageActionKind) {
@@ -259,7 +259,7 @@ async function uploadHero(event: Event) {
   }
   draft.value.hero.image = uploaded.path;
   draft.value.assets.heroImage = uploaded.path;
-  notice.value = "Image ready. Save the draft to update the preview.";
+  toastSuccess("Image ready. Save the draft to update the preview.");
 }
 
 async function fetchWithTimeout(input: RequestInfo | URL, timeoutMs: number) {
@@ -276,7 +276,6 @@ async function useRandomHero() {
   if (!draft.value || randomImageBusy.value) return;
   randomImageBusy.value = true;
   error.value = "";
-  notice.value = "";
 
   const seed = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const imageUrl = `https://picsum.photos/seed/${encodeURIComponent(seed)}/1600/1000`;
@@ -296,7 +295,7 @@ async function useRandomHero() {
     }
     draft.value.hero.image = uploaded.path;
     draft.value.assets.heroImage = uploaded.path;
-    notice.value = "Random image ready. Save the draft to update the preview.";
+    toastSuccess("Random image ready. Save the draft to update the preview.");
   } catch (caught) {
     error.value =
       caught instanceof Error
@@ -470,7 +469,6 @@ onMounted(load);
           <ul><li v-for="message in validationErrors" :key="message">{{ message }}</li></ul>
         </div>
         <p v-if="error" class="message error" role="alert">{{ error }}</p>
-        <p class="message" role="status" aria-live="polite">{{ notice }}</p>
       </section>
 
       <aside class="preview-panel" aria-label="Page preview">

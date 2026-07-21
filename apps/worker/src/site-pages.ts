@@ -10,8 +10,7 @@ import {
   type LandingPageDocumentV3,
 } from "@me3-core/plugin-landing-pages";
 import type { DbSite, DbSitePage, DbSitePageRevision, Env } from "./types";
-import { getStripeSecretKey } from "./commerce-settings";
-import { hasManagedCommerceBridge } from "./commerce-bridge";
+import { isCommerceReady } from "./commerce-settings";
 import {
   deleteSiteFile,
   getR2SiteFile,
@@ -391,10 +390,7 @@ async function validatePageResources(
     }
   }
   const productIds = new Set((profile.products || []).map((product) => product.slug));
-  const paymentsReady = Boolean(
-    (await getStripeSecretKey(env, site.user_id)) ||
-      (await hasManagedCommerceBridge(env)),
-  );
+  const paymentsReady = await isCommerceReady(env, site.user_id);
   const errors: string[] = [];
   for (const action of page.actions) {
     if (action.kind === "booking" && !bookingIds.has(action.resourceId || "")) {

@@ -44,6 +44,7 @@ const configLoading = ref(true);
 const ownerAuthConfigured = ref(false);
 const ownerPasswordAuthConfigured = ref(false);
 const ownerMe3AuthConfigured = ref(false);
+const deploymentMode = ref<"managed" | "self_hosted" | "">("");
 const setupRequired = ref<string[]>([]);
 const resetMode = ref(false);
 const showAdvancedSetup = ref(false);
@@ -65,11 +66,13 @@ const isCustomPasswordSetupMode = computed(
 );
 const showAuthChoice = computed(
   () =>
-    !showAdvancedSetup.value &&
-    !isResetMode.value &&
-    (!ownerAuthConfigured.value ||
-      (ownerMe3AuthConfigured.value && !ownerPasswordAuthConfigured.value)),
+    deploymentMode.value === "managed" ||
+    (!showAdvancedSetup.value &&
+      !isResetMode.value &&
+      (!ownerAuthConfigured.value ||
+        (ownerMe3AuthConfigured.value && !ownerPasswordAuthConfigured.value))),
 );
+const isManagedInstall = computed(() => deploymentMode.value === "managed");
 const useBootstrapCodeInput = computed(
   () =>
     isSetupMode.value || isResetMode.value || isCustomPasswordSetupMode.value,
@@ -180,11 +183,13 @@ function navigateAfterLogin(target: string) {
 async function loadConfig() {
   try {
     const config = await api.get<{
+      deploymentMode?: "managed" | "self_hosted";
       ownerAuthConfigured?: boolean;
       ownerPasswordAuthConfigured?: boolean;
       ownerMe3AuthConfigured?: boolean;
       setupRequired?: string[];
     }>("/config");
+    deploymentMode.value = config.deploymentMode || "";
     ownerAuthConfigured.value = Boolean(config.ownerAuthConfigured);
     ownerPasswordAuthConfigured.value = Boolean(
       config.ownerPasswordAuthConfigured,
@@ -328,7 +333,11 @@ onMounted(loadConfig);
 
       <section v-if="showAuthChoice" class="cloud-claim">
         <p class="cloud-claim__copy">
-          For simple authentication sign in via ME3.app
+          {{
+            isManagedInstall
+              ? "Sign in with your ME3 account to open your managed installation."
+              : "For simple authentication sign in via ME3.app"
+          }}
         </p>
         <button
           type="button"
@@ -338,14 +347,19 @@ onMounted(loadConfig);
         >
           {{ me3SignInLoading ? "Opening ME3..." : "Sign in with ME3.app" }}
         </button>
-        <button type="button" class="text-button" @click="startAdvancedSetup">
+        <button
+          v-if="!isManagedInstall"
+          type="button"
+          class="text-button"
+          @click="startAdvancedSetup"
+        >
           Advanced setup for custom authentication
         </button>
         <p v-if="error" class="error">{{ error }}</p>
       </section>
 
       <form
-        v-if="!showAuthChoice"
+        v-if="!showAuthChoice && !isManagedInstall"
         class="login-form"
         @submit.prevent="submitAuth"
       >
