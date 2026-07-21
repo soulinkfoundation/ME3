@@ -234,7 +234,7 @@ describe("canonical social Post legacy bridge", () => {
 
   it("runs idempotently through the runtime migration ledger", async () => {
     await withLegacyDatabase(async (database) => {
-      sqliteExec(database, PREVIOUS_RUNTIME_MIGRATIONS);
+      sqliteExec(database, RUNTIME_MIGRATIONS_EXCEPT_0022);
       const env = { DB: sqliteD1(database) } as Env;
 
       await ensureCoreRuntimeMigrations(env);
@@ -366,7 +366,7 @@ function sqliteLiteral(value: unknown): string {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-const PREVIOUS_RUNTIME_MIGRATIONS = `
+const RUNTIME_MIGRATIONS_EXCEPT_0022 = `
   CREATE TABLE core_runtime_migrations (
     id TEXT PRIMARY KEY,
     checksum TEXT NOT NULL,
@@ -381,10 +381,18 @@ const PREVIOUS_RUNTIME_MIGRATIONS = `
     ('0014_mobile_pairing', '2026-07-06-mobile-pairing-v1'),
     ('0015_agent_runtime_idempotency', '2026-07-09-agent-runtime-idempotency-v2'),
     ('0016_social_content_packages', '2026-07-10-social-content-packages-v1'),
+    ('0017_site_pages_and_commerce', '2026-07-19-site-pages-and-commerce-v1'),
     ('0018_social_publication_idempotency', '2026-07-10-social-publication-idempotency-v1'),
     ('0019_owner_content_search', '2026-07-15-owner-content-search-v1'),
     ('0020_mailbox_thread_index', '2026-07-16-mailbox-thread-index-v1'),
-    ('0021_managed_email_inbound_deliveries', '2026-07-18-managed-email-inbound-deliveries-v1');
+    ('0021_managed_email_inbound_deliveries', '2026-07-18-managed-email-inbound-deliveries-v1'),
+    ('0023_social_publications_reusable', '2026-07-18-social-publications-reusable-v1'),
+    ('0024_social_suggestions', '2026-07-18-social-suggestions-v2'),
+    ('0025_social_posting_plans', '2026-07-18-social-posting-plans-v1'),
+    ('0026_social_carousels', '2026-07-18-social-carousels-v1'),
+    ('0027_managed_runtime_lifecycle', '2026-07-18-managed-runtime-lifecycle-v2'),
+    ('0029_social_media_delivery', '2026-07-21-social-media-delivery-v1'),
+    ('0030_social_youtube_tiktok', '2026-07-21-social-youtube-tiktok-v2');
 `;
 
 const LEGACY_SOCIAL_SCHEMA = `

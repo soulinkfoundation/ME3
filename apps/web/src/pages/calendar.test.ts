@@ -129,7 +129,7 @@ describe("Calendar Social Publishing source", () => {
 
     await openProjectedPublication(wrapper);
     const form = wrapper.get("#quick-create-panel-social");
-    await form.get('input[type="date"]').setValue("2026-07-21");
+    await form.get('input[type="date"]').setValue("2099-07-21");
     await form.get('input[type="time"]').setValue("10:30");
     await form.trigger("submit");
     await flushPromises();
@@ -137,7 +137,7 @@ describe("Calendar Social Publishing source", () => {
     expect(api.patch).toHaveBeenCalledWith(
       "/social/publications/publication-1",
       {
-        scheduledFor: "2026-07-21T09:30:00.000Z",
+        scheduledFor: "2099-07-21T09:30:00.000Z",
         timezone: "Europe/Dublin",
         expectedUpdatedAt: "2026-07-18T08:00:00.000Z",
         requestContext: { surface: "calendar", view: "month" },
@@ -180,7 +180,7 @@ describe("Calendar Social Publishing source", () => {
 
     await openProjectedPublication(wrapper);
     const form = wrapper.get("#quick-create-panel-social");
-    await form.get('input[type="date"]').setValue("2026-07-21");
+    await form.get('input[type="date"]').setValue("2099-07-21");
     await form.trigger("submit");
     await flushPromises();
 
@@ -253,7 +253,7 @@ describe("Calendar Social Publishing source", () => {
 
     wrapper
       .getComponent(CalendarMonthBoardStub)
-      .vm.$emit("select-day", "2026-11-01");
+      .vm.$emit("select-day", "2099-11-01");
     await flushPromises();
     const scheduleSocial = wrapper
       .findAll("button")
