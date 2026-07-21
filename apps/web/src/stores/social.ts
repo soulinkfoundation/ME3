@@ -2,7 +2,13 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import { api, API_BASE, ApiError } from "../api";
 
-export type SocialPlatform = "x" | "linkedin" | "instagram" | "instagram_business";
+export type SocialPlatform =
+  | "x"
+  | "linkedin"
+  | "instagram"
+  | "instagram_business"
+  | "youtube"
+  | "tiktok";
 
 export type SocialPlatformCapabilities = {
   platform: SocialPlatform;
@@ -22,6 +28,24 @@ export type SocialAccountRow = {
   lastVerifiedAt: string | null;
 };
 
+export type DriveFolder = {
+  id: string;
+  parentId: string | null;
+  name: string;
+  path: string;
+};
+
+export type DriveFile = {
+  id: string;
+  folderId: string | null;
+  filename: string;
+  mimeType: string;
+  size: number;
+  sha256: string | null;
+  status: "uploading" | "ready" | "trashed" | "failed";
+  previewKind: "image" | "pdf" | "text" | "markdown" | "csv" | "spreadsheet" | "download";
+};
+
 export type SocialStatus = {
   plugin: {
     status: string;
@@ -34,6 +58,7 @@ export type SocialStatus = {
     configured: boolean;
     platforms: string[];
   };
+  localDemo?: boolean;
 };
 
 export type SocialProviderSetting = {
@@ -49,10 +74,14 @@ export type SocialProviderSetting = {
 
 export type SocialMediaAsset = {
   url: string;
+  fileId?: string;
   filename?: string;
   mimeType?: string;
   kind?: "image" | "video";
   altText?: string;
+  contentHash?: string;
+  byteLength?: number;
+  assetIndex?: number;
 };
 
 export type PostVersion = {
@@ -312,6 +341,7 @@ export type CreateSocialPostInput = {
 export type PostVersionUpdate = {
   targetAccountId?: string | null;
   bodyText?: string;
+  assetManifest?: SocialMediaAsset[];
   approvalStatus?: PostVersion["approvalStatus"];
 };
 
@@ -522,6 +552,13 @@ export const useSocialStore = defineStore("social", () => {
     return data.post;
   }
 
+  async function createLocalSocialDemo(siteId: string): Promise<SocialPostDetail> {
+    error.value = null;
+    const data = await api.post<{ post: SocialPostDetail }>("/social/local-demo", { siteId });
+    if (!data.post) throw new Error("No local Social demo returned");
+    return data.post;
+  }
+
   async function fetchCarouselRenderSet(
     siteId: string,
     renderSetId: string,
@@ -601,7 +638,7 @@ export const useSocialStore = defineStore("social", () => {
 
   async function updateSocialPost(
     postId: string,
-    input: { tags: string[]; expectedUpdatedAt: string },
+    input: { title?: string; tags?: string[]; expectedUpdatedAt: string },
   ): Promise<SocialPostDetail> {
     error.value = null;
     const data = await api.patch<{ post: SocialPostDetail }>(
@@ -610,6 +647,26 @@ export const useSocialStore = defineStore("social", () => {
     );
     if (!data.post) throw new Error("No Social Post returned");
     return data.post;
+  }
+
+  async function deleteSocialPost(postId: string, expectedUpdatedAt: string): Promise<void> {
+    error.value = null;
+    await api.delete(
+      `/social/posts/${encodeURIComponent(postId)}?expectedUpdatedAt=${encodeURIComponent(expectedUpdatedAt)}`,
+    );
+  }
+
+  async function listDriveFolders(): Promise<DriveFolder[]> {
+    error.value = null;
+    const data = await api.get<{ folders: DriveFolder[] }>("/files/folders");
+    return data.folders || [];
+  }
+
+  async function listDriveFiles(folderId: string | null): Promise<DriveFile[]> {
+    error.value = null;
+    const query = folderId ? `?folderId=${encodeURIComponent(folderId)}` : "";
+    const data = await api.get<{ files: DriveFile[] }>(`/files/items${query}`);
+    return data.files || [];
   }
 
   async function fetchPreferredPostingTimes(
@@ -810,7 +867,7 @@ export const useSocialStore = defineStore("social", () => {
   }
 
   async function startSocialOAuth(
-    platform: SocialPlatform | "youtube",
+    platform: SocialPlatform,
     siteId: string,
     returnPath?: string,
     credentialSource?: "managed" | "byo",
@@ -847,7 +904,11 @@ export const useSocialStore = defineStore("social", () => {
     searchPostLibrary,
     fetchSocialSuggestions,
     createSocialPost,
+    createLocalSocialDemo,
     updateSocialPost,
+    deleteSocialPost,
+    listDriveFolders,
+    listDriveFiles,
     fetchPreferredPostingTimes,
     updatePreferredPostingTimes,
     createPostingPlan,

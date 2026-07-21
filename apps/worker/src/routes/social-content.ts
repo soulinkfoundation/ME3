@@ -8,6 +8,8 @@ import {
   confirmPostingPlan,
   createPostVersionPublication,
   createSocialPost,
+  ensureLocalSocialDemo,
+  deleteSocialPost,
   createSocialSuggestions,
   createPostingPlan,
   discardSocialSuggestion,
@@ -44,6 +46,20 @@ import {
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
 
 export function registerSocialContentRoutes(app: AppHono, deps: OwnerRouteDeps) {
+  app.post("/api/social/local-demo", async (c) => {
+    if (c.env.ENVIRONMENT !== "local") return c.notFound();
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const body: { siteId?: string } = await c.req.json<{ siteId?: string }>().catch(() => ({}));
+
+    try {
+      await requireSocialPublishing(c);
+      return c.json({ post: await ensureLocalSocialDemo(c.env, ownerId, body.siteId || "") });
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
   app.get("/api/social/posts", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
@@ -227,6 +243,25 @@ export function registerSocialContentRoutes(app: AppHono, deps: OwnerRouteDeps) 
       );
       if (!post) return c.json({ ok: false, error: "Social Post not found" }, 404);
       return c.json({ ok: true, post });
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
+  app.delete("/api/social/posts/:id", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      await requireSocialPublishing(c);
+      const deleted = await deleteSocialPost(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        c.req.query("expectedUpdatedAt"),
+      );
+      if (!deleted) return c.json({ ok: false, error: "Social Post not found" }, 404);
+      return c.json({ ok: true });
     } catch (error) {
       return socialContentErrorResponse(c, error);
     }

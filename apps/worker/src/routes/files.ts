@@ -1,25 +1,31 @@
 import {
   DriveInputError,
+  abortDriveMultipartUpload,
+  completeDriveMultipartUpload,
+  createDriveMultipartUpload,
   createDriveFolder,
   deleteDriveFile,
   deleteDriveFolder,
   getDriveFileContentResponse,
   getDriveFilePreview,
+  getDriveMultipartUpload,
   getDriveStatus,
   isMissingDriveTablesError,
   listDriveFolders,
   listDriveItems,
   updateDriveFile,
   updateDriveFolder,
+  uploadDriveMultipartPart,
   uploadDriveFiles,
 } from "../files";
+import { privateConditionalJson } from "../http/conditional-json";
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
 
 export function registerFilesRoutes(app: AppHono, deps: OwnerRouteDeps) {
   app.get("/api/files/status", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
-    return c.json(getDriveStatus(c.env));
+    return privateConditionalJson(c, getDriveStatus(c.env));
   });
 
   app.get("/api/files/folders", async (c) => {
@@ -27,7 +33,7 @@ export function registerFilesRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (!ownerId) return deps.unauthorized(c);
 
     try {
-      return c.json(await listDriveFolders(c.env, ownerId));
+      return privateConditionalJson(c, await listDriveFolders(c.env, ownerId));
     } catch (error) {
       return filesErrorResponse(c, error);
     }
@@ -81,7 +87,8 @@ export function registerFilesRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (!ownerId) return deps.unauthorized(c);
 
     try {
-      return c.json(
+      return privateConditionalJson(
+        c,
         await listDriveItems(c.env, ownerId, {
           folderId: c.req.query("folderId"),
           q: c.req.query("q"),
@@ -105,6 +112,80 @@ export function registerFilesRoutes(app: AppHono, deps: OwnerRouteDeps) {
     }
   });
 
+  app.post("/api/files/multipart", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      return c.json(
+        await createDriveMultipartUpload(c.env, ownerId, await c.req.json().catch(() => null)),
+        201,
+      );
+    } catch (error) {
+      return filesErrorResponse(c, error);
+    }
+  });
+
+  app.get("/api/files/multipart/:uploadId", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      return c.json(await getDriveMultipartUpload(c.env, ownerId, c.req.param("uploadId")));
+    } catch (error) {
+      return filesErrorResponse(c, error);
+    }
+  });
+
+  app.put("/api/files/multipart/:uploadId/parts/:partNumber", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      const body = c.req.raw.body;
+      if (!body) throw new DriveInputError("Upload part body is required.");
+      return c.json(
+        await uploadDriveMultipartPart(
+          c.env,
+          ownerId,
+          c.req.param("uploadId"),
+          c.req.param("partNumber"),
+          body,
+          {
+            contentLength: c.req.header("X-Upload-Part-Size") || c.req.header("Content-Length"),
+            contentRange: c.req.header("Content-Range"),
+          },
+        ),
+      );
+    } catch (error) {
+      return filesErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/files/multipart/:uploadId/complete", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      return c.json(
+        await completeDriveMultipartUpload(c.env, ownerId, c.req.param("uploadId")),
+      );
+    } catch (error) {
+      return filesErrorResponse(c, error);
+    }
+  });
+
+  app.delete("/api/files/multipart/:uploadId", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      return c.json(await abortDriveMultipartUpload(c.env, ownerId, c.req.param("uploadId")));
+    } catch (error) {
+      return filesErrorResponse(c, error);
+    }
+  });
+
   app.get("/api/files/:fileId/content", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
@@ -112,6 +193,7 @@ export function registerFilesRoutes(app: AppHono, deps: OwnerRouteDeps) {
     try {
       return await getDriveFileContentResponse(c.env, ownerId, c.req.param("fileId"), {
         download: c.req.query("download") === "1",
+        rangeHeader: c.req.header("Range"),
       });
     } catch (error) {
       return filesErrorResponse(c, error);

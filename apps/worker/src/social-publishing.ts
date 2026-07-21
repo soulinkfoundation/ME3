@@ -26,6 +26,8 @@ export {
   completeSocialOAuth,
   createPostVersionPublication,
   createSocialPost,
+  ensureLocalSocialDemo,
+  deleteSocialPost,
   createSocialSuggestions,
   createPostingPlan,
   discardSocialSuggestion,

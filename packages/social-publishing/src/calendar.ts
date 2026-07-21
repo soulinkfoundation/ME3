@@ -320,6 +320,8 @@ function platformLabel(platform: SocialPlatform): string {
   if (platform === "linkedin") return "LinkedIn";
   if (platform === "instagram_business") return "Instagram Business";
   if (platform === "instagram") return "Instagram";
+  if (platform === "youtube") return "YouTube";
+  if (platform === "tiktok") return "TikTok";
   return "X";
 }
 

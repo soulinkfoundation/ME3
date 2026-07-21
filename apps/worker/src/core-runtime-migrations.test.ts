@@ -47,6 +47,9 @@ describe("Core runtime migrations", () => {
       db.columns.get("managed_runtime_control_requests")?.has("expected_generation"),
     ).toBe(true);
     expect(db.tables.has("managed_runtime_write_leases")).toBe(true);
+    expect(db.tables.has("drive_multipart_uploads")).toBe(true);
+    expect(db.tables.has("drive_multipart_parts")).toBe(true);
+    expect(db.tables.has("social_media_delivery_grants")).toBe(true);
     expect(
       db.statements.some(
         (sql) =>
@@ -116,6 +119,20 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.get("0027_managed_runtime_lifecycle")).toBe(
       "2026-07-18-managed-runtime-lifecycle-v2",
     );
+    expect(db.migrations.get("0029_social_media_delivery")).toBe(
+      "2026-07-21-social-media-delivery-v1",
+    );
+    expect(db.migrations.get("0030_social_youtube_tiktok")).toBe(
+      "2026-07-21-social-youtube-tiktok-v1",
+    );
+    expect(
+      db.statements.some(
+        (sql) =>
+          sql.includes("social_accounts_0030_new") &&
+          sql.includes("'youtube'") &&
+          sql.includes("'tiktok'"),
+      ),
+    ).toBe(true);
     expect(
       db.statements.some(
         (sql) =>
@@ -247,6 +264,9 @@ class RuntimeMigrationDb {
     "mission_projects",
     "content_bank_items",
     "social_packages",
+    "social_accounts",
+    "social_oauth_states",
+    "social_provider_settings",
     "social_publication_events",
     "social_publications",
     "social_variants",
@@ -335,6 +355,11 @@ class RuntimeMigrationDb {
   prepare(sql: string) {
     return new RuntimeMigrationStatement(this, sql);
   }
+
+  async exec(sql: string) {
+    this.statements.push(sql);
+    return { count: 1, duration: 0 };
+  }
 }
 
 class RuntimeMigrationStatement {
@@ -353,7 +378,13 @@ class RuntimeMigrationStatement {
   async first<T>() {
     if (this.sql.includes("FROM sqlite_master")) {
       const tableName = this.values[0] as string;
-      return (this.db.tables.has(tableName) ? { name: tableName } : null) as T | null;
+      if (!this.db.tables.has(tableName)) return null as T | null;
+      if (this.sql.includes("SELECT sql")) {
+        return {
+          sql: `CREATE TABLE ${tableName} (platform TEXT CHECK (platform IN ('x', 'linkedin', 'instagram', 'instagram_business')))`,
+        } as T;
+      }
+      return { name: tableName } as T;
     }
     if (this.sql.includes("FROM core_runtime_migrations")) {
       const id = this.values[0] as string;

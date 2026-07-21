@@ -98,6 +98,8 @@ const SUPPORTED_PLATFORMS = new Set<SocialPlatform>([
   "linkedin",
   "instagram",
   "instagram_business",
+  "youtube",
+  "tiktok",
 ]);
 
 const STALE_CHOOSE_CLAIM_MS = 5 * 60_000;

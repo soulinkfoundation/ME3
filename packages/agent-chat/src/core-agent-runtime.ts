@@ -1211,6 +1211,8 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 function socialPlatformLabel(platform: string): string {
   if (platform === "x") return "X";
   if (platform === "linkedin") return "LinkedIn";
+  if (platform === "youtube") return "YouTube";
+  if (platform === "tiktok") return "TikTok";
   if (platform === "instagram_business") return "Instagram Business";
   return "Instagram";
 }

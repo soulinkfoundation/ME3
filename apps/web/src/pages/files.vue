@@ -77,6 +77,21 @@ type UploadResponse = {
   files: DriveFile[];
 };
 
+type MultipartUpload = {
+  id: string;
+  fileId: string;
+  filename: string;
+  mimeType: string;
+  partSize: number;
+  totalSize: number;
+  status: "uploading" | "completed" | "aborted" | "failed";
+  expiresAt: string;
+  uploadedParts: Array<{ partNumber: number; etag: string; size: number }>;
+};
+
+type MultipartUploadResponse = { ok: true; upload: MultipartUpload };
+type MultipartCompleteResponse = { ok: true; file: DriveFile };
+
 type PreviewResponse =
   | {
       ok: true;
@@ -109,6 +124,7 @@ const loading = ref(true);
 const itemsLoading = ref(false);
 const previewLoading = ref(false);
 const uploadBusy = ref(false);
+const uploadProgress = ref<{ filename: string; percent: number } | null>(null);
 const actionBusy = ref(false);
 const dropActive = ref(false);
 const error = ref("");
@@ -454,22 +470,171 @@ async function uploadFileList(list: FileList | File[] | null | undefined) {
   error.value = "";
   message.value = "";
   try {
-    const form = new FormData();
-    if (currentFolderId.value) form.append("folderId", currentFolderId.value);
-    for (const file of filesToUpload) form.append("files", file);
-    const response = await api.upload<UploadResponse>("/files/upload", form);
+    const uploadedFiles: DriveFile[] = [];
+    for (const file of filesToUpload) {
+      uploadProgress.value = { filename: file.name, percent: 0 };
+      uploadedFiles.push(
+        file.type.startsWith("video/") || file.size > 50 * 1024 * 1024
+          ? await uploadMultipartFile(file)
+          : await uploadSimpleFile(file),
+      );
+    }
     const uploadMessage =
-      response.files.length === 1
-        ? `${response.files[0]?.filename || "File"} uploaded.`
-        : `${response.files.length} files uploaded.`;
+      uploadedFiles.length === 1
+        ? `${uploadedFiles[0]?.filename || "File"} uploaded.`
+        : `${uploadedFiles.length} files uploaded.`;
     toastSuccess(uploadMessage);
-    if (response.files[0]) selected.value = { kind: "file", id: response.files[0].id };
+    if (uploadedFiles[0]) selected.value = { kind: "file", id: uploadedFiles[0].id };
     await refreshFoldersAndItems();
   } catch (e) {
-    error.value = apiErrorMessage(e, "Upload failed");
+    error.value = `${apiErrorMessage(e, "Upload failed")} Choose the same file again to resume.`;
   } finally {
     uploadBusy.value = false;
+    uploadProgress.value = null;
   }
+}
+
+async function uploadSimpleFile(file: File): Promise<DriveFile> {
+  const form = new FormData();
+  if (currentFolderId.value) form.append("folderId", currentFolderId.value);
+  form.append("files", file);
+  const response = await api.upload<UploadResponse>("/files/upload", form);
+  const uploaded = response.files[0];
+  if (!uploaded) throw new Error("The upload completed without a Files record.");
+  uploadProgress.value = { filename: file.name, percent: 100 };
+  return uploaded;
+}
+
+async function uploadMultipartFile(file: File): Promise<DriveFile> {
+  const storageKey = multipartStorageKey(file);
+  let upload = await resumeStoredMultipartUpload(storageKey, file);
+  if (!upload) {
+    const response = await requestFilesJson<MultipartUploadResponse>("/files/multipart", {
+      method: "POST",
+      body: JSON.stringify({
+        filename: file.name,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+        folderId: currentFolderId.value,
+      }),
+    });
+    upload = response.upload;
+    window.localStorage.setItem(storageKey, upload.id);
+  }
+
+  if (upload.status === "completed") {
+    const completed = await requestFilesJson<MultipartCompleteResponse>(
+      `/files/multipart/${encodeURIComponent(upload.id)}/complete`,
+      { method: "POST", body: "{}" },
+    );
+    window.localStorage.removeItem(storageKey);
+    uploadProgress.value = { filename: file.name, percent: 100 };
+    return completed.file;
+  }
+
+  const uploadedPartNumbers = new Set(upload.uploadedParts.map((part) => part.partNumber));
+  const partCount = Math.ceil(file.size / upload.partSize);
+  for (let partNumber = 1; partNumber <= partCount; partNumber += 1) {
+    const start = (partNumber - 1) * upload.partSize;
+    const end = Math.min(start + upload.partSize, file.size);
+    if (!uploadedPartNumbers.has(partNumber)) {
+      const part = file.slice(start, end, file.type || "application/octet-stream");
+      await uploadMultipartPartWithRetry(upload.id, partNumber, part, start, end, file.size);
+    }
+    uploadProgress.value = {
+      filename: file.name,
+      percent: Math.round((end / file.size) * 100),
+    };
+  }
+
+  const completed = await requestFilesJson<MultipartCompleteResponse>(
+    `/files/multipart/${encodeURIComponent(upload.id)}/complete`,
+    { method: "POST", body: "{}" },
+  );
+  window.localStorage.removeItem(storageKey);
+  return completed.file;
+}
+
+async function resumeStoredMultipartUpload(
+  storageKey: string,
+  file: File,
+): Promise<MultipartUpload | null> {
+  const uploadId = window.localStorage.getItem(storageKey);
+  if (!uploadId) return null;
+  try {
+    const response = await requestFilesJson<MultipartUploadResponse>(
+      `/files/multipart/${encodeURIComponent(uploadId)}`,
+    );
+    const upload = response.upload;
+    if (
+      (upload.status === "uploading" || upload.status === "completed") &&
+      upload.filename === file.name &&
+      upload.totalSize === file.size &&
+      (upload.status === "completed" || Date.parse(upload.expiresAt) > Date.now())
+    ) {
+      return upload;
+    }
+  } catch {
+    // A missing or expired session is replaced below.
+  }
+  window.localStorage.removeItem(storageKey);
+  return null;
+}
+
+async function uploadMultipartPartWithRetry(
+  uploadId: string,
+  partNumber: number,
+  part: Blob,
+  start: number,
+  end: number,
+  totalSize: number,
+): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await requestFilesJson(
+        `/files/multipart/${encodeURIComponent(uploadId)}/parts/${partNumber}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": part.type || "application/octet-stream",
+            "Content-Range": `bytes ${start}-${end - 1}/${totalSize}`,
+            "X-Upload-Part-Size": String(part.size),
+          },
+          body: part,
+        },
+      );
+      return;
+    } catch (errorValue) {
+      lastError = errorValue;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("A video upload part failed.");
+}
+
+async function requestFilesJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (typeof init.body === "string" && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
+  const body = await response.json().catch(() => ({})) as { error?: string };
+  if (!response.ok) throw new ApiError(body.error || "Upload request failed", response.status);
+  return body as T;
+}
+
+function multipartStorageKey(file: File): string {
+  return [
+    "me3:multipart-upload",
+    currentFolderId.value || "root",
+    file.name,
+    file.size,
+    file.lastModified,
+  ].join(":");
 }
 
 function handleDrop(event: DragEvent) {
@@ -664,8 +829,16 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
       @dragleave.prevent="dropActive = false"
       @drop.prevent="handleDrop"
     >
-      <div v-if="error || message" class="files-status-line">
-        <p v-if="error" class="files-status-line__error">{{ error }}</p>
+      <div v-if="error || message || uploadProgress" class="files-status-line" aria-live="polite">
+        <p v-if="error" class="files-status-line__error" role="alert">{{ error }}</p>
+        <div v-else-if="uploadProgress" class="files-upload-progress" role="status">
+          <span>
+            Uploading {{ uploadProgress.filename }} · {{ uploadProgress.percent }}%
+          </span>
+          <progress :value="uploadProgress.percent" max="100">
+            {{ uploadProgress.percent }}%
+          </progress>
+        </div>
         <p v-else class="files-status-line__message">{{ message }}</p>
       </div>
 
@@ -898,6 +1071,15 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
                   :src="contentUrl(selectedFile)"
                   :alt="selectedFile.filename"
                 />
+                <video
+                  v-else-if="selectedFile.mimeType.startsWith('video/')"
+                  class="files-video-preview"
+                  :src="contentUrl(selectedFile)"
+                  controls
+                  preload="metadata"
+                >
+                  Your browser cannot preview this video.
+                </video>
                 <iframe
                   v-else-if="preview.previewKind === 'pdf'"
                   class="files-pdf-preview"
@@ -1151,6 +1333,21 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
 
 .files-status-line__message {
   color: var(--ui-accent, var(--color-accent));
+}
+
+.files-upload-progress {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(120px, 280px);
+  align-items: center;
+  gap: 12px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+}
+
+.files-upload-progress progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--ui-accent, var(--color-accent));
 }
 
 .files-body {
@@ -1468,6 +1665,13 @@ button.files-icon-button {
   background: var(--ui-surface-muted, var(--color-bg-subtle));
 }
 
+.files-video-preview {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  background: #000;
+}
+
 .files-pdf-preview {
   display: block;
   width: 100%;
@@ -1665,6 +1869,11 @@ button.files-icon-button {
 }
 
 @media (max-width: 700px) {
+  .files-upload-progress {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
   .files-list__header {
     display: none;
   }

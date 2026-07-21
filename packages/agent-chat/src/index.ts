@@ -369,7 +369,7 @@ export type AgentSandboxDispatchResponse = {
   contentAction?: {
     kind: "saved";
     postId: string;
-    platforms: Array<"x" | "linkedin" | "instagram" | "instagram_business">;
+    platforms: Array<"x" | "linkedin" | "instagram" | "instagram_business" | "youtube" | "tiktok">;
   } | null;
   contactsChanged?: boolean;
   modelAttempts?: AgentChatModelAttemptTrace[] | null;

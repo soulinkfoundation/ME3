@@ -148,6 +148,7 @@ describe("Social Posts", () => {
     for (const publicSurface of publicSurfaces) {
       expect(publicSurface).toMatchObject({
         createSocialPost: expect.any(Function),
+        deleteSocialPost: expect.any(Function),
         updatePostVersion: expect.any(Function),
         createPostVersionPublication: expect.any(Function),
         listPostVersionPublications: expect.any(Function),
@@ -433,8 +434,8 @@ describe("Social Posts", () => {
     });
   });
 
-  it("rejects scheduling and publishing draft-only platform Versions", async () => {
-    for (const platform of ["x", "instagram"] as const) {
+  it("rejects scheduling and publishing draft-only X Versions", async () => {
+    for (const platform of ["x"] as const) {
       const { env, publishingEnv, publications, queueMessages } = createEnv();
       const platformLabel = platform === "x" ? "X" : "Instagram";
       const sourceText = `A human-authored Source for ${platformLabel}.`;

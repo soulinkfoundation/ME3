@@ -28,6 +28,8 @@ export {
   SOCIAL_POST_SOURCE_TYPES,
   SocialPostInputError,
   createSocialPost,
+  ensureLocalSocialDemo,
+  deleteSocialPost,
   getSocialPost,
   listSocialPosts,
   updateSocialPost,
@@ -197,8 +199,15 @@ export const SOCIAL_PUBLISHING_RUNTIME = {
   packageName: "@me3-core/plugin-social-publishing",
   bundled: true,
   runtimeStatus: "approval_first_publish_runtime",
-  supportedPlatforms: ["x", "linkedin", "instagram", "instagram_business"],
-  excludedProviders: ["youtube"],
+  supportedPlatforms: [
+    "x",
+    "linkedin",
+    "instagram",
+    "instagram_business",
+    "youtube",
+    "tiktok",
+  ],
+  excludedProviders: [],
   queuesAndCrons: [
     {
       id: "social.publish-queue",
@@ -260,6 +269,8 @@ export const SOCIAL_PLATFORMS = [
   "linkedin",
   "instagram",
   "instagram_business",
+  "youtube",
+  "tiktok",
 ] as const;
 
 export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
@@ -312,10 +323,13 @@ type ContentItemStatus =
 
 export type SocialMediaAsset = {
   url: string;
+  fileId?: string;
   filename?: string;
   mimeType?: string;
   kind?: "image" | "video";
   altText?: string;
+  contentHash?: string;
+  byteLength?: number;
   path?: string;
   assetIndex?: number;
 };
@@ -712,7 +726,7 @@ export async function listSocialPublishingAccounts(
             status, scopes_json, last_verified_at, created_at, updated_at
      FROM social_accounts
      WHERE user_id = ?
-       AND platform IN ('x', 'linkedin', 'instagram', 'instagram_business')
+       AND platform IN ('x', 'linkedin', 'instagram', 'instagram_business', 'youtube', 'tiktok')
      ORDER BY updated_at DESC`,
   )
     .bind(ownerId)
@@ -893,6 +907,12 @@ export async function startSocialOAuth(
   const useHostedOAuth =
     credentialSource === "managed" ||
     (credentialSource === null && Boolean(options.hostedOAuthOrigin));
+  if ((platform === "youtube" || platform === "tiktok") && !useHostedOAuth) {
+    throw new SocialPublishingInputError(
+      `${platformLabel(platform)} connects securely through ME3 Cloud`,
+      424,
+    );
+  }
   if (useHostedOAuth) {
     if (!options.hostedOAuthOrigin) {
       throw new SocialPublishingInputError("ME3 managed OAuth is not configured", 424);
@@ -1007,6 +1027,7 @@ export async function completeSocialOAuth(
   const clientSecret = await decryptSecret(setting.encrypted_client_secret, options.installKey);
   const token = await exchangeOAuthCode(platform, query.code, setting.client_id, clientSecret, stateRow.code_verifier, options);
   const profile = await fetchSocialProfile(platform, token.accessToken, options.fetch);
+  const publishingAccessToken = profile.accessToken || token.accessToken;
   const now = new Date().toISOString();
 
   await env.DB.prepare("DELETE FROM social_oauth_states WHERE id = ?")
@@ -1040,7 +1061,7 @@ export async function completeSocialOAuth(
       profile.id,
       profile.handle,
       profile.displayName,
-      await encryptSecret(token.accessToken, options.installKey),
+      await encryptSecret(publishingAccessToken, options.installKey),
       token.refreshToken ? await encryptSecret(token.refreshToken, options.installKey) : null,
       token.expiresAt,
       JSON.stringify(token.scopes),
@@ -2978,9 +2999,12 @@ export async function publishQueuedPublication(
     return;
   }
 
-  const assets = absolutizeContentAssets(env, normalizeMediaManifest(parseJsonArray(row.media_manifest_json)));
+  const manifestAssets = absolutizeContentAssets(
+    env,
+    normalizeMediaManifest(parseJsonArray(row.media_manifest_json)),
+  );
   const adapter = adapterFor(row.platform);
-  const validation = adapter.validateDraft({ bodyText: row.body, assets });
+  const validation = adapter.validateDraft({ bodyText: row.body, assets: manifestAssets });
   if (!validation.ok) {
     const failureClass = validation.error.includes("currently supports")
       ? "unsupported"
@@ -2990,6 +3014,26 @@ export async function publishQueuedPublication(
       row,
       `${failureClass}:validation_failed`,
       validation.error,
+      "publishing",
+    );
+    if (failed) await revokeSocialVariantApproval(env, row.variant_id);
+    return;
+  }
+
+  let assets: ContentMediaAsset[];
+  try {
+    assets = await resolveProviderMediaAssets(env, {
+      publicationId: row.publication_id,
+      ownerId: row.user_id,
+      platform: row.platform,
+      assets: manifestAssets,
+    });
+  } catch (error) {
+    const failed = await failContentPublication(
+      env,
+      row,
+      "rejected:media_unavailable",
+      error instanceof Error ? error.message : "Attached media is unavailable.",
       "publishing",
     );
     if (failed) await revokeSocialVariantApproval(env, row.variant_id);
@@ -3149,6 +3193,9 @@ export async function publishQueuedPublication(
     .bind(auditEventId, row.publication_id)
     .first<{ id: string }>();
   if (!auditEvent) return;
+  if (assets.some((asset) => asset.fileId)) {
+    await revokeProviderMediaGrants(env, row.publication_id);
+  }
   await syncContentItemStatusFromPublications(env, row.variant_id);
 }
 
@@ -3321,6 +3368,12 @@ async function buildAuthorizeUrl(
   codeVerifier: string | null,
   apiOrigin: string,
 ): Promise<string> {
+  if (platform === "youtube" || platform === "tiktok") {
+    throw new SocialPublishingInputError(
+      `${platformLabel(platform)} connects securely through ME3 Cloud`,
+      424,
+    );
+  }
   const redirectUri = `${apiOrigin.replace(/\/$/, "")}/api/social/${platform}/callback`;
   if (platform === "x") {
     if (!codeVerifier) throw new SocialPublishingInputError("X OAuth verifier is missing");
@@ -3362,7 +3415,13 @@ async function buildAuthorizeUrl(
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: ["pages_show_list", "pages_read_engagement", "business_management"].join(","),
+    scope: [
+      "pages_show_list",
+      "pages_read_engagement",
+      "business_management",
+      "instagram_basic",
+      "instagram_content_publish",
+    ].join(","),
     state,
   });
   return `https://www.facebook.com/v21.0/dialog/oauth?${params.toString()}`;
@@ -3376,6 +3435,12 @@ async function exchangeOAuthCode(
   codeVerifier: string | null,
   options: SocialCallbackOptions,
 ): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: string | null; scopes: string[] }> {
+  if (platform === "youtube" || platform === "tiktok") {
+    throw new SocialPublishingInputError(
+      `${platformLabel(platform)} OAuth must complete through ME3 Cloud`,
+      424,
+    );
+  }
   const redirectUri = `${options.apiOrigin.replace(/\/$/, "")}/api/social/${platform}/callback`;
   if (platform === "x") {
     const response = await options.fetch("https://api.twitter.com/2/oauth2/token", {
@@ -3427,11 +3492,41 @@ async function exchangeOAuthCode(
     }),
   });
   const body = await readJsonResponse<{ access_token?: string; refresh_token?: string; expires_in?: number }>(response);
+  if (platform === "instagram") {
+    if (!body.access_token) {
+      throw new SocialPublishingInputError("Social token response was invalid", 502);
+    }
+    const longLivedResponse = await options.fetch(
+      `https://graph.instagram.com/access_token?${new URLSearchParams({
+        grant_type: "ig_exchange_token",
+        client_secret: clientSecret,
+        access_token: body.access_token,
+      }).toString()}`,
+    );
+    const longLived = await readJsonResponse<{ access_token?: string; expires_in?: number }>(
+      longLivedResponse,
+    );
+    if (!longLived.access_token) {
+      throw new SocialPublishingInputError("Instagram long-lived token response was invalid", 502);
+    }
+    return {
+      accessToken: longLived.access_token,
+      refreshToken: longLived.access_token,
+      expiresAt: longLived.expires_in
+        ? new Date(Date.now() + longLived.expires_in * 1000).toISOString()
+        : null,
+      scopes: ["instagram_business_basic", "instagram_business_content_publish"],
+    };
+  }
   return normalizeToken(
     body,
-    platform === "instagram"
-      ? ["instagram_business_basic", "instagram_business_content_publish"]
-      : ["pages_show_list", "pages_read_engagement", "business_management"],
+    [
+      "pages_show_list",
+      "pages_read_engagement",
+      "business_management",
+      "instagram_basic",
+      "instagram_content_publish",
+    ],
   );
 }
 
@@ -3439,7 +3534,18 @@ async function fetchSocialProfile(
   platform: SocialPlatform,
   accessToken: string,
   fetcher: typeof fetch,
-): Promise<{ id: string; handle: string | null; displayName: string | null }> {
+): Promise<{
+  id: string;
+  handle: string | null;
+  displayName: string | null;
+  accessToken?: string;
+}> {
+  if (platform === "youtube" || platform === "tiktok") {
+    throw new SocialPublishingInputError(
+      `${platformLabel(platform)} profiles are resolved through ME3 Cloud`,
+      424,
+    );
+  }
   if (platform === "x") {
     const response = await fetcher("https://api.twitter.com/2/users/me?user.fields=username,name", {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -3456,6 +3562,35 @@ async function fetchSocialProfile(
     const body = await readJsonResponse<{ sub?: string; name?: string; given_name?: string }>(response);
     if (!body.sub) throw new SocialPublishingInputError("Social profile response was invalid", 502);
     return { id: body.sub, handle: null, displayName: body.name || body.given_name || null };
+  }
+
+  if (platform === "instagram_business") {
+    const response = await fetcher(
+      "https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,name}",
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    const body = await readJsonResponse<{
+      data?: Array<{
+        access_token?: string;
+        instagram_business_account?: { id?: string; username?: string; name?: string };
+      }>;
+    }>(response);
+    const page = body.data?.find(
+      (item) => item.access_token && item.instagram_business_account?.id,
+    );
+    const account = page?.instagram_business_account;
+    if (!page?.access_token || !account?.id) {
+      throw new SocialPublishingInputError(
+        "No Instagram professional account is connected to an accessible Facebook Page",
+        424,
+      );
+    }
+    return {
+      id: account.id,
+      handle: account.username || null,
+      displayName: account.name || account.username || null,
+      accessToken: page.access_token,
+    };
   }
 
   const response = await fetcher("https://graph.instagram.com/me?fields=id,username", {
@@ -3994,6 +4129,93 @@ function absolutizeContentAssets(
   });
 }
 
+async function resolveProviderMediaAssets(
+  env: SocialPublishingEnv,
+  input: {
+    publicationId: string;
+    ownerId: string;
+    platform: SocialPlatform;
+    assets: ContentMediaAsset[];
+  },
+): Promise<ContentMediaAsset[]> {
+  const origin = getPublicAssetOrigin(env);
+  if (!origin && input.assets.some((asset) => asset.fileId)) {
+    throw new SocialPublishingInputError(
+      "ME3 needs a public API origin before private Files media can be delivered.",
+      424,
+    );
+  }
+
+  const resolved: ContentMediaAsset[] = [];
+  for (const asset of input.assets) {
+    if (!asset.fileId) {
+      resolved.push(asset);
+      continue;
+    }
+    const file = await env.DB.prepare(
+      `SELECT id, size, sha256
+       FROM drive_files
+       WHERE id = ? AND owner_id = ? AND status = 'ready'
+       LIMIT 1`,
+    )
+      .bind(asset.fileId, input.ownerId)
+      .first<{ id: string; size: number | string; sha256: string | null }>();
+    if (!file) throw new SocialPublishingInputError("An attached Files item is no longer available.", 409);
+    if (asset.byteLength !== undefined && Number(file.size) !== asset.byteLength) {
+      throw new SocialPublishingInputError("An attached Files item changed after approval.", 409);
+    }
+    if (
+      asset.contentHash &&
+      file.sha256 &&
+      asset.contentHash !== `sha256:${file.sha256.toLowerCase()}`
+    ) {
+      throw new SocialPublishingInputError("An attached Files item changed after approval.", 409);
+    }
+
+    const token = randomToken("socmedia");
+    const tokenHash = await hashToken(token);
+    const expiresAt = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE social_media_delivery_grants
+         SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP)
+         WHERE publication_id = ? AND file_id = ? AND provider = ? AND revoked_at IS NULL`,
+      ).bind(input.publicationId, file.id, input.platform),
+      env.DB.prepare(
+        `INSERT INTO social_media_delivery_grants
+           (id, publication_id, file_id, owner_id, provider, token_hash, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        randomToken("socgrant"),
+        input.publicationId,
+        file.id,
+        input.ownerId,
+        input.platform,
+        tokenHash,
+        expiresAt,
+      ),
+    ]);
+    resolved.push({
+      ...asset,
+      url: `${origin}/api/social/media/${encodeURIComponent(token)}`,
+    });
+  }
+  return resolved;
+}
+
+async function revokeProviderMediaGrants(
+  env: SocialPublishingEnv,
+  publicationId: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE social_media_delivery_grants
+     SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP)
+     WHERE publication_id = ? AND revoked_at IS NULL`,
+  )
+    .bind(publicationId)
+    .run();
+}
+
 function getPublicAssetOrigin(env: SocialPublishingEnv): string | null {
   const origin =
     env.CORE_API_ORIGIN ||
@@ -4057,7 +4279,15 @@ async function resolvePublishingAccessToken(
     return decryptSecret(row.access_token_ciphertext, installKey);
   }
   if (!row.account_id || !row.refresh_token_ciphertext) return null;
-  if (row.platform !== "linkedin" && row.platform !== "x") return null;
+  if (
+    row.platform !== "linkedin" &&
+    row.platform !== "x" &&
+    row.platform !== "instagram" &&
+    row.platform !== "youtube" &&
+    row.platform !== "tiktok"
+  ) {
+    return null;
+  }
 
   try {
     const refreshToken = await decryptSecret(row.refresh_token_ciphertext, installKey);
@@ -4068,7 +4298,11 @@ async function resolvePublishingAccessToken(
       expiresAt: string | null;
     } | null;
     if (metadata.credentialSource === "hosted_oauth") {
-      token = await refreshHostedProviderToken(env, row.platform, refreshToken, fetcher);
+      token = row.platform === "instagram"
+        ? null
+        : await refreshHostedProviderToken(env, row.platform, refreshToken, fetcher);
+    } else if (row.platform === "youtube" || row.platform === "tiktok") {
+      token = null;
     } else {
       const setting = await getProviderSettingRow(env, row.user_id, row.platform);
       token = setting?.enabled && setting.client_id && setting.encrypted_client_secret
@@ -4106,7 +4340,7 @@ async function resolvePublishingAccessToken(
 
 async function refreshHostedProviderToken(
   env: SocialPublishingEnv,
-  platform: "linkedin" | "x",
+  platform: "linkedin" | "x" | "youtube" | "tiktok",
   refreshToken: string,
   fetcher: typeof fetch,
 ): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: string | null } | null> {
@@ -4165,12 +4399,30 @@ async function getHostedOAuthInstallationHeaders(
 }
 
 async function refreshProviderToken(
-  platform: "linkedin" | "x",
+  platform: "linkedin" | "x" | "instagram",
   refreshToken: string,
   clientId: string,
   clientSecret: string,
   fetcher: typeof fetch,
 ): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: string | null }> {
+  if (platform === "instagram") {
+    const response = await fetcher(
+      `https://graph.instagram.com/refresh_access_token?${new URLSearchParams({
+        grant_type: "ig_refresh_token",
+        access_token: refreshToken,
+      }).toString()}`,
+    );
+    if (!response.ok) throw new Error(`Instagram token refresh failed (${response.status})`);
+    const body = await response.json() as { access_token?: string; expires_in?: number };
+    if (!body.access_token) throw new Error("Instagram token refresh response was invalid");
+    return {
+      accessToken: body.access_token,
+      refreshToken: body.access_token,
+      expiresAt: body.expires_in
+        ? new Date(Date.now() + body.expires_in * 1000).toISOString()
+        : null,
+    };
+  }
   const response = await fetcher(
     platform === "linkedin"
       ? "https://www.linkedin.com/oauth/v2/accessToken"
@@ -4386,13 +4638,22 @@ export function normalizeSocialMediaAssets(value: unknown): SocialMediaAsset[] {
     if (!url) continue;
     assets.push({
       url,
+      fileId: typeof item.fileId === "string" ? item.fileId.trim() || undefined : undefined,
       filename: typeof item.filename === "string" ? item.filename.trim() || undefined : undefined,
       mimeType: typeof item.mimeType === "string" ? item.mimeType.trim() || undefined : undefined,
       kind: item.kind === "image" || item.kind === "video" ? item.kind : undefined,
       altText: typeof item.altText === "string" ? item.altText.trim() || undefined : undefined,
+      contentHash:
+        typeof item.contentHash === "string" && /^sha256:[a-f0-9]{64}$/i.test(item.contentHash.trim())
+          ? item.contentHash.trim().toLowerCase()
+          : undefined,
+      byteLength:
+        typeof item.byteLength === "number" && Number.isFinite(item.byteLength) && item.byteLength >= 0
+          ? Math.round(item.byteLength)
+          : undefined,
       path: typeof item.path === "string" ? item.path.trim() || undefined : undefined,
       assetIndex:
-        typeof item.assetIndex === "number" && Number.isFinite(item.assetIndex)
+        typeof item.assetIndex === "number" && Number.isFinite(item.assetIndex) && item.assetIndex >= 0
           ? Math.round(item.assetIndex)
           : undefined,
     });
@@ -4466,6 +4727,10 @@ function platformLabel(platform: SocialPlatform): string {
       return "Instagram";
     case "instagram_business":
       return "Instagram Business";
+    case "youtube":
+      return "YouTube";
+    case "tiktok":
+      return "TikTok";
   }
 }
 
@@ -4536,6 +4801,13 @@ function randomToken(prefix: string): string {
   const bytes = new Uint8Array(18);
   crypto.getRandomValues(bytes);
   return `${prefix}_${encodeBase64Url(bytes)}`;
+}
+
+async function hashToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function randomVerifier(): string {

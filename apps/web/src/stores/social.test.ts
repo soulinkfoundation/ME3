@@ -188,7 +188,7 @@ describe("social store Post workflow", () => {
     });
   });
 
-  it("searches the Post library and writes owner tags through canonical APIs", async () => {
+  it("searches the Post library and writes or deletes owner drafts through canonical APIs", async () => {
     const item = { postId: "post-1", versionId: "version-1" };
     const post = { post: { id: "post-1" }, versions: [] };
     vi.mocked(api.get).mockResolvedValue({ items: [item] });
@@ -207,13 +207,20 @@ describe("social store Post workflow", () => {
     );
 
     expect(await store.updateSocialPost("post one", {
+      title: "Launch update",
       tags: ["launch"],
       expectedUpdatedAt: "2026-07-18T08:00:00.000Z",
     })).toBe(post);
     expect(api.patch).toHaveBeenCalledWith("/social/posts/post%20one", {
+      title: "Launch update",
       tags: ["launch"],
       expectedUpdatedAt: "2026-07-18T08:00:00.000Z",
     });
+
+    await store.deleteSocialPost("post one", "2026-07-18T08:00:00.000Z");
+    expect(api.delete).toHaveBeenCalledWith(
+      "/social/posts/post%20one?expectedUpdatedAt=2026-07-18T08%3A00%3A00.000Z",
+    );
   });
 
   it("saves Preferred posting times and keeps plan proposal separate from explicit confirmation", async () => {

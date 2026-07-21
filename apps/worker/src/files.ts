@@ -44,6 +44,18 @@ export type DriveItems = {
   files: DriveFile[];
 };
 
+export type DriveMultipartUpload = {
+  id: string;
+  fileId: string;
+  filename: string;
+  mimeType: string;
+  partSize: number;
+  totalSize: number;
+  status: "uploading" | "completed" | "aborted" | "failed";
+  expiresAt: string;
+  uploadedParts: Array<{ partNumber: number; etag: string; size: number }>;
+};
+
 export type DrivePreview =
   | {
       ok: true;
@@ -98,7 +110,30 @@ type DriveFileRow = {
   updated_at: string;
 };
 
+type DriveMultipartUploadRow = {
+  id: string;
+  file_id: string;
+  owner_id: string;
+  filename: string;
+  mime_type: string;
+  storage_key: string;
+  r2_upload_id: string;
+  part_size: number | string;
+  total_size: number | string;
+  status: DriveMultipartUpload["status"];
+  expires_at: string;
+};
+
+type DriveMultipartPartRow = {
+  part_number: number | string;
+  etag: string;
+  size: number | string;
+};
+
 const MAX_DRIVE_UPLOAD_BYTES = 50 * 1024 * 1024;
+export const DRIVE_MULTIPART_PART_BYTES = 10 * 1024 * 1024;
+export const MAX_DRIVE_MULTIPART_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+const DRIVE_MULTIPART_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const MAX_PREVIEW_BYTES = 512 * 1024;
 const MAX_EXTRACTED_TEXT_CHARS = 80_000;
 const MAX_NAME_LENGTH = 160;
@@ -385,6 +420,247 @@ export async function uploadDriveFiles(
   return { ok: true, files: uploaded };
 }
 
+export async function createDriveMultipartUpload(
+  env: Env,
+  ownerId: string,
+  input: unknown,
+): Promise<{ ok: true; upload: DriveMultipartUpload }> {
+  if (!env.SITE_ASSETS) {
+    throw new DriveInputError("File storage is not configured.", 503);
+  }
+
+  const body = assertRecord(input, "Multipart upload payload is required");
+  const filename = normalizeFilename(body.filename);
+  const folderId = normalizeOptionalId(body.folderId);
+  const folder = folderId ? await requireActiveFolder(env, ownerId, folderId) : null;
+  const totalSize = normalizePositiveInteger(body.size, "File size");
+  if (totalSize > MAX_DRIVE_MULTIPART_UPLOAD_BYTES) {
+    throw new DriveInputError(
+      `${filename} is larger than ${formatByteLimit(MAX_DRIVE_MULTIPART_UPLOAD_BYTES)}.`,
+      413,
+    );
+  }
+  await assertFileNameAvailable(env, ownerId, folderId, filename);
+
+  const fileId = crypto.randomUUID();
+  const uploadId = crypto.randomUUID();
+  const mimeType = normalizeFileMimeType(
+    typeof body.mimeType === "string" ? body.mimeType : undefined,
+    filename,
+  );
+  const storageKey = buildDriveStorageKey(ownerId, folder?.path || "", fileId, filename);
+  const expiresAt = new Date(Date.now() + DRIVE_MULTIPART_EXPIRY_MS).toISOString();
+  const multipart = await env.SITE_ASSETS.createMultipartUpload(storageKey, {
+    httpMetadata: { contentType: mimeType },
+    customMetadata: {
+      ownerId,
+      folderId: folderId || "",
+      fileId,
+      filename,
+    },
+  });
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO drive_files
+           (id, owner_id, folder_id, filename, mime_type, size, storage_key, status,
+            preview_kind, metadata_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'uploading', ?, ?)`,
+      ).bind(
+        fileId,
+        ownerId,
+        folderId,
+        filename,
+        mimeType,
+        totalSize,
+        storageKey,
+        classifyPreviewKind(filename, mimeType),
+        JSON.stringify({
+          ownerId,
+          folderId: folderId || "",
+          filename,
+          source: "files-browser-multipart",
+        }),
+      ),
+      env.DB.prepare(
+        `INSERT INTO drive_multipart_uploads
+           (id, file_id, owner_id, storage_key, r2_upload_id, part_size, total_size,
+            status, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'uploading', ?)`,
+      ).bind(
+        uploadId,
+        fileId,
+        ownerId,
+        storageKey,
+        multipart.uploadId,
+        DRIVE_MULTIPART_PART_BYTES,
+        totalSize,
+        expiresAt,
+      ),
+    ]);
+  } catch (error) {
+    await multipart.abort().catch(() => undefined);
+    if (isUniqueConstraintError(error)) {
+      throw new DriveInputError("A file with that name already exists here.", 409);
+    }
+    throw error;
+  }
+
+  return {
+    ok: true,
+    upload: {
+      id: uploadId,
+      fileId,
+      filename,
+      mimeType,
+      partSize: DRIVE_MULTIPART_PART_BYTES,
+      totalSize,
+      status: "uploading",
+      expiresAt,
+      uploadedParts: [],
+    },
+  };
+}
+
+export async function getDriveMultipartUpload(
+  env: Env,
+  ownerId: string,
+  uploadIdInput: string,
+): Promise<{ ok: true; upload: DriveMultipartUpload }> {
+  const uploadId = normalizeRequiredId(uploadIdInput, "Upload id");
+  const row = await requireMultipartUploadRow(env, ownerId, uploadId);
+  return { ok: true, upload: await serializeMultipartUpload(env, row) };
+}
+
+export async function uploadDriveMultipartPart(
+  env: Env,
+  ownerId: string,
+  uploadIdInput: string,
+  partNumberInput: string,
+  body: ReadableStream,
+  options: { contentLength?: string | null; contentRange?: string | null },
+): Promise<{ ok: true; part: { partNumber: number; etag: string; size: number } }> {
+  if (!env.SITE_ASSETS) {
+    throw new DriveInputError("File storage is not configured.", 503);
+  }
+  const uploadId = normalizeRequiredId(uploadIdInput, "Upload id");
+  const partNumber = normalizePartNumber(partNumberInput);
+  const row = await requireActiveMultipartUploadRow(env, ownerId, uploadId);
+  const totalSize = Number(row.total_size);
+  const partSize = Number(row.part_size);
+  const expectedStart = (partNumber - 1) * partSize;
+  if (expectedStart >= totalSize) throw new DriveInputError("Upload part is outside the file.");
+  const expectedSize = Math.min(partSize, totalSize - expectedStart);
+  const contentLength = normalizePositiveInteger(options.contentLength, "Content-Length");
+  if (contentLength !== expectedSize) {
+    throw new DriveInputError(`Upload part ${partNumber} must contain ${expectedSize} bytes.`);
+  }
+  const expectedRange = `bytes ${expectedStart}-${expectedStart + expectedSize - 1}/${totalSize}`;
+  if (options.contentRange?.trim() !== expectedRange) {
+    throw new DriveInputError(`Content-Range must be ${expectedRange}.`);
+  }
+
+  const multipart = env.SITE_ASSETS.resumeMultipartUpload(row.storage_key, row.r2_upload_id);
+  const part = await multipart.uploadPart(partNumber, body);
+  await env.DB.prepare(
+    `INSERT INTO drive_multipart_parts (upload_id, part_number, etag, size)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(upload_id, part_number) DO UPDATE SET
+       etag = excluded.etag,
+       size = excluded.size,
+       updated_at = CURRENT_TIMESTAMP`,
+  )
+    .bind(uploadId, part.partNumber, part.etag, contentLength)
+    .run();
+  await env.DB.prepare(
+    `UPDATE drive_multipart_uploads SET updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND owner_id = ? AND status = 'uploading'`,
+  )
+    .bind(uploadId, ownerId)
+    .run();
+
+  return { ok: true, part: { partNumber: part.partNumber, etag: part.etag, size: contentLength } };
+}
+
+export async function completeDriveMultipartUpload(
+  env: Env,
+  ownerId: string,
+  uploadIdInput: string,
+): Promise<{ ok: true; file: DriveFile }> {
+  if (!env.SITE_ASSETS) {
+    throw new DriveInputError("File storage is not configured.", 503);
+  }
+  const uploadId = normalizeRequiredId(uploadIdInput, "Upload id");
+  const row = await requireMultipartUploadRow(env, ownerId, uploadId);
+  if (row.status === "completed") {
+    return { ok: true, file: serializeFile(await requireReadyFileRow(env, ownerId, row.file_id)) };
+  }
+  assertActiveMultipartUpload(row);
+  const parts = await listMultipartPartRows(env, uploadId);
+  const partSize = Number(row.part_size);
+  const totalSize = Number(row.total_size);
+  const expectedCount = Math.ceil(totalSize / partSize);
+  if (parts.length !== expectedCount) {
+    throw new DriveInputError(`Upload is incomplete (${parts.length} of ${expectedCount} parts).`, 409);
+  }
+  for (const [index, part] of parts.entries()) {
+    const expectedPartNumber = index + 1;
+    const expectedSize = Math.min(partSize, totalSize - index * partSize);
+    if (Number(part.part_number) !== expectedPartNumber || Number(part.size) !== expectedSize) {
+      throw new DriveInputError(`Upload part ${expectedPartNumber} is incomplete.`, 409);
+    }
+  }
+
+  const multipart = env.SITE_ASSETS.resumeMultipartUpload(row.storage_key, row.r2_upload_id);
+  let object: R2Object;
+  try {
+    object = await multipart.complete(
+      parts.map((part) => ({ partNumber: Number(part.part_number), etag: part.etag })),
+    );
+  } catch (error) {
+    const existing = await env.SITE_ASSETS.head(row.storage_key);
+    if (!existing || existing.size !== totalSize) throw error;
+    object = existing;
+  }
+  if (object.size !== totalSize) {
+    throw new DriveInputError("Completed upload size does not match the selected file.", 409);
+  }
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE drive_files
+       SET status = 'ready', etag = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND owner_id = ? AND status = 'uploading'`,
+    ).bind(object.httpEtag || object.etag || null, row.file_id, ownerId),
+    env.DB.prepare(
+      `UPDATE drive_multipart_uploads
+       SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND owner_id = ? AND status = 'uploading'`,
+    ).bind(uploadId, ownerId),
+  ]);
+
+  return { ok: true, file: serializeFile(await requireReadyFileRow(env, ownerId, row.file_id)) };
+}
+
+export async function abortDriveMultipartUpload(
+  env: Env,
+  ownerId: string,
+  uploadIdInput: string,
+): Promise<{ ok: true; uploadId: string }> {
+  if (!env.SITE_ASSETS) {
+    throw new DriveInputError("File storage is not configured.", 503);
+  }
+  const uploadId = normalizeRequiredId(uploadIdInput, "Upload id");
+  const row = await requireMultipartUploadRow(env, ownerId, uploadId);
+  if (row.status === "uploading") {
+    await env.SITE_ASSETS.resumeMultipartUpload(row.storage_key, row.r2_upload_id).abort();
+  }
+  await env.DB.prepare("DELETE FROM drive_files WHERE id = ? AND owner_id = ? AND status = 'uploading'")
+    .bind(row.file_id, ownerId)
+    .run();
+  return { ok: true, uploadId };
+}
+
 export async function updateDriveFile(
   env: Env,
   ownerId: string,
@@ -471,6 +747,14 @@ export async function deleteDriveFile(
   fileIdInput: string,
 ): Promise<{ ok: true; fileId: string }> {
   const fileId = normalizeRequiredId(fileIdInput, "File id");
+  const current = await requireReadyFileRow(env, ownerId, fileId);
+
+  if (!env.SITE_ASSETS) {
+    throw new DriveInputError("File storage is not configured.", 503);
+  }
+
+  await env.SITE_ASSETS.delete(current.storage_key);
+
   const result = await env.DB.prepare(
     `UPDATE drive_files
      SET status = 'trashed', updated_at = CURRENT_TIMESTAMP
@@ -537,7 +821,7 @@ export async function getDriveFileContentResponse(
   env: Env,
   ownerId: string,
   fileIdInput: string,
-  options: { download?: boolean } = {},
+  options: { download?: boolean; rangeHeader?: string | null } = {},
 ): Promise<Response> {
   if (!env.SITE_ASSETS) {
     throw new DriveInputError("File storage is not configured.", 503);
@@ -545,14 +829,33 @@ export async function getDriveFileContentResponse(
 
   const fileId = normalizeRequiredId(fileIdInput, "File id");
   const row = await requireReadyFileRow(env, ownerId, fileId);
-  const object = await env.SITE_ASSETS.get(row.storage_key);
+  const range = parseSingleByteRange(options.rangeHeader, Number(row.size || 0));
+  if (range === "invalid") {
+    return new Response(null, {
+      status: 416,
+      headers: {
+        "Accept-Ranges": "bytes",
+        "Content-Range": `bytes */${Number(row.size || 0)}`,
+        "Cache-Control": "private, max-age=300",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  }
+  const object = await env.SITE_ASSETS.get(
+    row.storage_key,
+    range ? { range: { offset: range.start, length: range.length } } : undefined,
+  );
   if (!object) throw new DriveInputError("File not found.", 404);
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set("Content-Type", headers.get("Content-Type") || row.mime_type);
-  headers.set("Content-Length", String(object.size));
+  headers.set("Content-Length", String(range?.length ?? object.size));
   headers.set("ETag", object.httpEtag);
+  headers.set("Accept-Ranges", "bytes");
+  if (range) {
+    headers.set("Content-Range", `bytes ${range.start}-${range.end}/${Number(row.size || 0)}`);
+  }
   headers.set("Cache-Control", "private, max-age=300");
   headers.set(
     "Content-Disposition",
@@ -560,7 +863,35 @@ export async function getDriveFileContentResponse(
   );
   headers.set("X-Content-Type-Options", "nosniff");
 
-  return new Response(object.body, { headers });
+  return new Response(object.body, { status: range ? 206 : 200, headers });
+}
+
+export function parseSingleByteRange(
+  value: string | null | undefined,
+  size: number,
+): { start: number; end: number; length: number } | "invalid" | null {
+  if (!value) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(value.trim());
+  if (!match || size <= 0) return "invalid";
+  const startText = match[1] || "";
+  const endText = match[2] || "";
+  if (!startText && !endText) return "invalid";
+
+  let start: number;
+  let end: number;
+  if (!startText) {
+    const suffixLength = Number(endText);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return "invalid";
+    start = Math.max(0, size - suffixLength);
+    end = size - 1;
+  } else {
+    start = Number(startText);
+    if (!Number.isSafeInteger(start) || start < 0 || start >= size) return "invalid";
+    end = endText ? Number(endText) : size - 1;
+    if (!Number.isSafeInteger(end) || end < start) return "invalid";
+    end = Math.min(end, size - 1);
+  }
+  return { start, end, length: end - start + 1 };
 }
 
 export function isMissingDriveTablesError(error: unknown): boolean {
@@ -641,6 +972,9 @@ function normalizeFileMimeType(rawType: string | undefined, filename: string): s
   if (extension === ".gif") return "image/gif";
   if (extension === ".webp") return "image/webp";
   if (extension === ".svg") return "image/svg+xml";
+  if (extension === ".mp4" || extension === ".m4v") return "video/mp4";
+  if (extension === ".mov") return "video/quicktime";
+  if (extension === ".webm") return "video/webm";
   if (extension === ".xlsx") {
     return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   }
@@ -771,6 +1105,83 @@ async function requireReadyFileRow(
   return row;
 }
 
+async function requireMultipartUploadRow(
+  env: Env,
+  ownerId: string,
+  uploadId: string,
+): Promise<DriveMultipartUploadRow> {
+  const row = await env.DB.prepare(
+    `SELECT upload.id, upload.file_id, upload.owner_id, file.filename, file.mime_type,
+            upload.storage_key, upload.r2_upload_id, upload.part_size, upload.total_size,
+            upload.status, upload.expires_at
+     FROM drive_multipart_uploads upload
+     JOIN drive_files file ON file.id = upload.file_id AND file.owner_id = upload.owner_id
+     WHERE upload.id = ? AND upload.owner_id = ?
+     LIMIT 1`,
+  )
+    .bind(uploadId, ownerId)
+    .first<DriveMultipartUploadRow>();
+  if (!row) throw new DriveInputError("Multipart upload not found.", 404);
+  return row;
+}
+
+async function requireActiveMultipartUploadRow(
+  env: Env,
+  ownerId: string,
+  uploadId: string,
+): Promise<DriveMultipartUploadRow> {
+  const row = await requireMultipartUploadRow(env, ownerId, uploadId);
+  assertActiveMultipartUpload(row);
+  return row;
+}
+
+function assertActiveMultipartUpload(row: DriveMultipartUploadRow): void {
+  if (row.status !== "uploading") {
+    throw new DriveInputError("Multipart upload is no longer active.", 409);
+  }
+  const expiresAt = Date.parse(row.expires_at);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    throw new DriveInputError("Multipart upload has expired. Start it again.", 410);
+  }
+}
+
+async function listMultipartPartRows(
+  env: Env,
+  uploadId: string,
+): Promise<DriveMultipartPartRow[]> {
+  const result = await env.DB.prepare(
+    `SELECT part_number, etag, size
+     FROM drive_multipart_parts
+     WHERE upload_id = ?
+     ORDER BY part_number ASC`,
+  )
+    .bind(uploadId)
+    .all<DriveMultipartPartRow>();
+  return result.results || [];
+}
+
+async function serializeMultipartUpload(
+  env: Env,
+  row: DriveMultipartUploadRow,
+): Promise<DriveMultipartUpload> {
+  const parts = await listMultipartPartRows(env, row.id);
+  return {
+    id: row.id,
+    fileId: row.file_id,
+    filename: row.filename,
+    mimeType: row.mime_type,
+    partSize: Number(row.part_size),
+    totalSize: Number(row.total_size),
+    status: row.status,
+    expiresAt: row.expires_at,
+    uploadedParts: parts.map((part) => ({
+      partNumber: Number(part.part_number),
+      etag: part.etag,
+      size: Number(part.size),
+    })),
+  };
+}
+
 async function assertFolderNameAvailable(
   env: Env,
   ownerId: string,
@@ -892,6 +1303,20 @@ function extensionForName(filename: string): string {
 
 function escapeSqlLike(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
+function normalizePositiveInteger(value: unknown, label: string): number {
+  const number = typeof value === "string" && value.trim() ? Number(value) : value;
+  if (typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0) {
+    throw new DriveInputError(`${label} must be a positive integer.`);
+  }
+  return number;
+}
+
+function normalizePartNumber(value: unknown): number {
+  const partNumber = normalizePositiveInteger(value, "Part number");
+  if (partNumber > 10_000) throw new DriveInputError("Part number is too large.");
+  return partNumber;
 }
 
 async function sha256Hex(buffer: ArrayBuffer): Promise<string> {

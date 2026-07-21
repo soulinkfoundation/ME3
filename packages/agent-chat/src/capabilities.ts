@@ -832,7 +832,7 @@ export const CORE_CHAT_CAPABILITIES = [
         platform: {
           type: "string",
           description: "Optional social platform.",
-          enum: ["linkedin", "x", "instagram", "instagram_business"],
+          enum: ["linkedin", "x", "instagram", "instagram_business", "youtube", "tiktok"],
         },
         accountId: { type: "string", description: "Optional stable social account ID." },
         approvalStatus: {

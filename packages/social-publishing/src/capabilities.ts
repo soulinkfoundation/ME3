@@ -26,16 +26,30 @@ const PLATFORM_CAPABILITIES: Record<SocialPlatform, SocialPlatformCapabilities> 
   instagram: {
     platform: "instagram",
     draft: true,
-    schedule: false,
-    publish: false,
-    reason: "Instagram Versions are draft-only until connection, scheduling, publishing, and recovery work end to end.",
+    schedule: true,
+    publish: true,
+    reason: null,
   },
   instagram_business: {
     platform: "instagram_business",
     draft: true,
+    schedule: true,
+    publish: true,
+    reason: null,
+  },
+  youtube: {
+    platform: "youtube",
+    draft: true,
     schedule: false,
     publish: false,
-    reason: "Instagram Business Versions are draft-only until connection, scheduling, publishing, and recovery work end to end.",
+    reason: "YouTube private video delivery is the next provider step after account connection.",
+  },
+  tiktok: {
+    platform: "tiktok",
+    draft: true,
+    schedule: false,
+    publish: true,
+    reason: null,
   },
 };
 
@@ -45,6 +59,8 @@ export function getSocialPlatformCapabilities(): SocialPlatformCapabilities[] {
     PLATFORM_CAPABILITIES.x,
     PLATFORM_CAPABILITIES.instagram,
     PLATFORM_CAPABILITIES.instagram_business,
+    PLATFORM_CAPABILITIES.youtube,
+    PLATFORM_CAPABILITIES.tiktok,
   ];
 }
 

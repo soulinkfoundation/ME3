@@ -46,11 +46,27 @@ const X_IMAGE_MIME_TYPES = new Set<CarouselRasterMimeType>([
 const LINKEDIN_MAX_CHARS = 3000;
 const LINKEDIN_VERSION = "202606";
 const INSTAGRAM_MAX_CHARS = 2200;
+const INSTAGRAM_CAROUSEL_MAX_ITEMS = 10;
+const INSTAGRAM_GRAPH_VERSION = "v21.0";
+const TIKTOK_UPLOAD_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/";
+const TIKTOK_STATUS_URL = "https://open.tiktokapis.com/v2/post/publish/status/fetch/";
+const TIKTOK_SINGLE_CHUNK_MAX_BYTES = 64 * 1024 * 1024;
+const TIKTOK_MULTI_CHUNK_BYTES = 32 * 1024 * 1024;
+const TIKTOK_MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024;
+const TIKTOK_STATUS_ATTEMPTS = 6;
+const TIKTOK_STATUS_POLL_MS = 2_000;
+const TIKTOK_VIDEO_MIME_TYPES = new Set([
+  "video/mp4",
+  "video/quicktime",
+  "video/webm",
+]);
 
 export function adapterFor(platform: SocialPlatform): SocialPublishAdapter {
   if (platform === "x") return xAdapter;
   if (platform === "linkedin") return linkedInAdapter;
-  return instagramAdapter;
+  if (platform === "tiktok") return tikTokAdapter;
+  if (platform === "youtube") return youtubeAdapter;
+  return createInstagramAdapter(platform);
 }
 
 function providerError(
@@ -95,6 +111,10 @@ function normalizeMimeType(value: string | null | undefined): string | null {
 
 function characterLength(value: string): number {
   return Array.from(value).length;
+}
+
+function describeFetchError(error: unknown): { message: string } {
+  return { message: error instanceof Error ? error.message : String(error) };
 }
 
 function xHeaders(accessToken: string): Record<string, string> {
@@ -591,114 +611,518 @@ const xAdapter: SocialPublishAdapter = {
   },
 };
 
-const instagramAdapter: SocialPublishAdapter = {
+function validateTikTokDraft(input: {
+  bodyText: string;
+  assets: SocialMediaAsset[];
+}): { ok: true } | { ok: false; error: string } {
+  if (input.assets.length !== 1 || input.assets[0]?.kind !== "video") {
+    return { ok: false, error: "TikTok draft upload requires exactly one video." };
+  }
+  const asset = input.assets[0];
+  if (!asset.url?.trim()) {
+    return { ok: false, error: "The TikTok video needs a delivery URL." };
+  }
+  const mimeType = normalizeMimeType(asset.mimeType);
+  if (!mimeType || !TIKTOK_VIDEO_MIME_TYPES.has(mimeType)) {
+    return { ok: false, error: "TikTok supports MP4, QuickTime, and WebM video uploads." };
+  }
+  const byteLength = asset.byteLength;
+  if (!Number.isSafeInteger(byteLength) || (byteLength ?? 0) <= 0) {
+    return { ok: false, error: "TikTok needs the video file size before it can upload the draft." };
+  }
+  if (byteLength! > TIKTOK_MAX_VIDEO_BYTES) {
+    return { ok: false, error: "The TikTok video is larger than 4 GB." };
+  }
+  return { ok: true };
+}
+
+function tikTokChunkPlan(byteLength: number): {
+  chunkSize: number;
+  totalChunkCount: number;
+  ranges: Array<{ start: number; end: number }>;
+} {
+  const chunkSize = byteLength <= TIKTOK_SINGLE_CHUNK_MAX_BYTES
+    ? byteLength
+    : TIKTOK_MULTI_CHUNK_BYTES;
+  const totalChunkCount = Math.max(1, Math.floor(byteLength / chunkSize));
+  const ranges = Array.from({ length: totalChunkCount }, (_, index) => {
+    const start = index * chunkSize;
+    const end = index === totalChunkCount - 1
+      ? byteLength - 1
+      : start + chunkSize - 1;
+    return { start, end };
+  });
+  return { chunkSize, totalChunkCount, ranges };
+}
+
+type TikTokApiResponse = {
+  data?: {
+    publish_id?: string;
+    upload_url?: string;
+    status?: string;
+    fail_reason?: string;
+    uploaded_bytes?: number;
+  };
+  error?: { code?: string; message?: string; log_id?: string };
+};
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+const tikTokAdapter: SocialPublishAdapter = {
+  validateDraft: validateTikTokDraft,
+
+  async publish(input) {
+    const validation = validateTikTokDraft(input);
+    if (!validation.ok) {
+      return providerError("tiktok_validation_failed", validation.error, undefined, "unsupported");
+    }
+
+    const asset = input.assets[0]!;
+    const byteLength = asset.byteLength!;
+    const mimeType = normalizeMimeType(asset.mimeType)!;
+    const plan = tikTokChunkPlan(byteLength);
+
+    await input.markProviderWriteStarted?.();
+    let initResponse: Response;
+    try {
+      initResponse = await input.fetcher(TIKTOK_UPLOAD_INIT_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.accessToken}`,
+          "Content-Type": "application/json; charset=UTF-8",
+        },
+        body: JSON.stringify({
+          source_info: {
+            source: "FILE_UPLOAD",
+            video_size: byteLength,
+            chunk_size: plan.chunkSize,
+            total_chunk_count: plan.totalChunkCount,
+          },
+        }),
+      });
+    } catch (error) {
+      return providerError(
+        "tiktok_init_outcome_unknown",
+        "TikTok did not confirm whether it initialized the draft upload. Check TikTok before trying again.",
+        describeFetchError(error),
+        "outcome_unknown",
+      );
+    }
+
+    const initialized = await readJson<TikTokApiResponse>(initResponse);
+    const apiError = initialized.error?.code?.trim();
+    if (!initResponse.ok || (apiError && apiError !== "ok")) {
+      return providerError(
+        apiError || "tiktok_upload_init",
+        initialized.error?.message || `TikTok could not initialize the draft upload (${initResponse.status}).`,
+        initialized,
+        failureClassForStatus(initResponse.status),
+      );
+    }
+
+    const publishId = initialized.data?.publish_id?.trim();
+    const uploadUrl = initialized.data?.upload_url?.trim();
+    if (!publishId || !uploadUrl) {
+      return providerError(
+        "tiktok_upload_init_incomplete",
+        "TikTok accepted the draft upload request without returning all upload details. Check TikTok before trying again.",
+        initialized,
+        "outcome_unknown",
+      );
+    }
+
+    for (const [index, range] of plan.ranges.entries()) {
+      const contentLength = range.end - range.start + 1;
+      let videoResponse: Response;
+      try {
+        videoResponse = await input.fetcher(asset.url, {
+          headers: { Range: `bytes=${range.start}-${range.end}` },
+        });
+      } catch (error) {
+        return providerError(
+          "tiktok_video_fetch",
+          `ME3 could not load video chunk ${index + 1} for TikTok.`,
+          { ...describeFetchError(error), publishId },
+          "outcome_unknown",
+        );
+      }
+      if (!videoResponse.ok || !videoResponse.body) {
+        return providerError(
+          "tiktok_video_fetch",
+          `ME3 could not load video chunk ${index + 1} for TikTok (${videoResponse.status}).`,
+          { publishId },
+          "outcome_unknown",
+        );
+      }
+
+      let uploadResponse: Response;
+      try {
+        uploadResponse = await input.fetcher(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": mimeType,
+            "Content-Length": String(contentLength),
+            "Content-Range": `bytes ${range.start}-${range.end}/${byteLength}`,
+          },
+          body: videoResponse.body,
+        });
+      } catch (error) {
+        return providerError(
+          "tiktok_video_upload_outcome_unknown",
+          "TikTok did not confirm whether it received the full video. Check TikTok before trying again.",
+          { ...describeFetchError(error), publishId, chunk: index + 1 },
+          "outcome_unknown",
+        );
+      }
+
+      const expectedStatus = index === plan.ranges.length - 1 ? 201 : 206;
+      if (uploadResponse.status !== expectedStatus) {
+        return providerError(
+          "tiktok_video_upload",
+          `TikTok did not accept video chunk ${index + 1} (${uploadResponse.status}).`,
+          {
+            publishId,
+            chunk: index + 1,
+            response: await uploadResponse.text().catch(() => ""),
+          },
+          "outcome_unknown",
+        );
+      }
+    }
+
+    let lastStatus: TikTokApiResponse | null = null;
+    for (let attempt = 0; attempt < TIKTOK_STATUS_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) await wait(TIKTOK_STATUS_POLL_MS);
+      let statusResponse: Response;
+      try {
+        statusResponse = await input.fetcher(TIKTOK_STATUS_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${input.accessToken}`,
+            "Content-Type": "application/json; charset=UTF-8",
+          },
+          body: JSON.stringify({ publish_id: publishId }),
+        });
+      } catch (error) {
+        return providerError(
+          "tiktok_status_outcome_unknown",
+          "TikTok received the video, but ME3 could not confirm whether the draft reached your inbox. Check TikTok before trying again.",
+          { ...describeFetchError(error), publishId },
+          "outcome_unknown",
+        );
+      }
+
+      lastStatus = await readJson<TikTokApiResponse>(statusResponse);
+      const statusError = lastStatus.error?.code?.trim();
+      if (!statusResponse.ok || (statusError && statusError !== "ok")) {
+        return providerError(
+          statusError || "tiktok_status_error",
+          lastStatus.error?.message || "TikTok received the video, but its draft status could not be confirmed.",
+          { publishId, status: lastStatus },
+          "outcome_unknown",
+        );
+      }
+
+      const status = lastStatus.data?.status?.trim();
+      if (status === "SEND_TO_USER_INBOX" || status === "PUBLISH_COMPLETE") {
+        return {
+          ok: true,
+          platformPostId: publishId,
+          providerResponse: {
+            delivery: "creator_draft",
+            creatorActionRequired: status !== "PUBLISH_COMPLETE",
+            publishId,
+            init: initialized,
+            status: lastStatus,
+          },
+        };
+      }
+      if (status === "FAILED") {
+        return providerError(
+          "tiktok_processing_failed",
+          lastStatus.data?.fail_reason
+            ? `TikTok could not prepare the draft: ${lastStatus.data.fail_reason}.`
+            : "TikTok could not prepare the draft.",
+          { publishId, status: lastStatus },
+          "rejected",
+        );
+      }
+    }
+
+    return providerError(
+      "tiktok_status_outcome_unknown",
+      "TikTok received the video, but the draft is still processing. Check your TikTok inbox before trying again.",
+      { publishId, status: lastStatus },
+      "outcome_unknown",
+    );
+  },
+};
+
+const youtubeAdapter: SocialPublishAdapter = {
   validateDraft(input) {
-    const body = input.bodyText.trim();
-    const imageAssets = input.assets.filter((asset) => asset.kind !== "video");
-    if (!body) return { ok: false, error: "This Instagram draft is empty." };
-    if (body.length > INSTAGRAM_MAX_CHARS) {
-      return {
-        ok: false,
-        error: `This Instagram draft is too long (max ${INSTAGRAM_MAX_CHARS} characters).`,
-      };
-    }
-    if (imageAssets.length === 0) {
-      return {
-        ok: false,
-        error: "Instagram publishing needs an image URL. Add an image before publishing.",
-      };
-    }
-    if (imageAssets.length > 1) {
-      return {
-        ok: false,
-        error: "Instagram Core publishing currently supports one image per post.",
-      };
+    if (input.assets.length !== 1 || input.assets[0]?.kind !== "video") {
+      return { ok: false, error: "YouTube upload requires exactly one video." };
     }
     return { ok: true };
   },
 
-  async publish(input) {
-    const imageUrl = input.assets.find((asset) => asset.kind !== "video")?.url;
-    if (!imageUrl) {
-      return providerError("instagram_missing_image", "Instagram publishing needs an image URL.");
-    }
+  async publish() {
+    return providerError(
+      "youtube_upload_not_ready",
+      "YouTube connection is ready, but private video upload is not enabled in this release.",
+      undefined,
+      "unsupported",
+    );
+  },
+};
 
-    let createResponse: Response;
-    try {
-      createResponse = await input.fetcher(
-        `https://graph.facebook.com/v21.0/${encodeURIComponent(input.accountId)}/media`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            image_url: imageUrl,
-            caption: input.bodyText,
-            access_token: input.accessToken,
-          }),
-        },
-      );
-    } catch (error) {
-      return providerError(
+function createInstagramAdapter(platform: "instagram" | "instagram_business"): SocialPublishAdapter {
+  return {
+    validateDraft: validateInstagramDraft,
+    publish: (input) => publishInstagram(platform, input),
+  };
+}
+
+function validateInstagramDraft(input: {
+  bodyText: string;
+  assets: SocialMediaAsset[];
+}): { ok: true } | { ok: false; error: string } {
+  const body = input.bodyText.trim();
+  const videos = input.assets.filter((asset) => asset.kind === "video");
+  const images = input.assets.filter((asset) => asset.kind !== "video");
+  if (!body) return { ok: false, error: "This Instagram draft is empty." };
+  if (body.length > INSTAGRAM_MAX_CHARS) {
+    return {
+      ok: false,
+      error: `This Instagram draft is too long (max ${INSTAGRAM_MAX_CHARS} characters).`,
+    };
+  }
+  if (input.assets.length === 0) {
+    return { ok: false, error: "Instagram publishing needs an image or video." };
+  }
+  if (input.assets.some((asset) => !asset.url?.trim())) {
+    return { ok: false, error: "Every Instagram media item needs a delivery URL." };
+  }
+  if (videos.length > 0 && (videos.length !== 1 || images.length > 0)) {
+    return { ok: false, error: "An Instagram Reel must contain one video and no images." };
+  }
+  if (images.length > INSTAGRAM_CAROUSEL_MAX_ITEMS) {
+    return {
+      ok: false,
+      error: `Instagram carousels support up to ${INSTAGRAM_CAROUSEL_MAX_ITEMS} images.`,
+    };
+  }
+  return { ok: true };
+}
+
+async function publishInstagram(
+  platform: "instagram" | "instagram_business",
+  input: Parameters<SocialPublishAdapter["publish"]>[0],
+): Promise<SocialPublishAdapterResult> {
+  const origin = platform === "instagram"
+    ? `https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}`
+    : `https://graph.facebook.com/${INSTAGRAM_GRAPH_VERSION}`;
+  const videos = input.assets.filter((asset) => asset.kind === "video");
+  const images = input.assets.filter((asset) => asset.kind !== "video");
+  const created: unknown[] = [];
+  let creationId: string;
+
+  if (videos.length === 1) {
+    const reel = await createInstagramMediaContainer(origin, input, {
+      media_type: "REELS",
+      video_url: videos[0]!.url,
+      caption: input.bodyText,
+      share_to_feed: "true",
+    });
+    if (!reel.ok) return reel.result;
+    creationId = reel.id;
+    created.push(reel.response);
+    const ready = await waitForInstagramContainer(origin, input, creationId);
+    if (!ready.ok) return ready.result;
+  } else if (images.length > 1) {
+    const children: string[] = [];
+    for (const image of images) {
+      const child = await createInstagramMediaContainer(origin, input, {
+        image_url: image.url,
+        is_carousel_item: "true",
+      });
+      if (!child.ok) return child.result;
+      children.push(child.id);
+      created.push(child.response);
+    }
+    const carousel = await createInstagramMediaContainer(origin, input, {
+      media_type: "CAROUSEL",
+      children: children.join(","),
+      caption: input.bodyText,
+    });
+    if (!carousel.ok) return carousel.result;
+    creationId = carousel.id;
+    created.push(carousel.response);
+    const ready = await waitForInstagramContainer(origin, input, creationId);
+    if (!ready.ok) return ready.result;
+  } else {
+    const image = images[0];
+    if (!image) return providerError("instagram_missing_media", "Instagram publishing needs media.");
+    const single = await createInstagramMediaContainer(origin, input, {
+      image_url: image.url,
+      caption: input.bodyText,
+    });
+    if (!single.ok) return single.result;
+    creationId = single.id;
+    created.push(single.response);
+  }
+
+  let publishResponse: Response;
+  await input.markProviderWriteStarted?.();
+  try {
+    publishResponse = await input.fetcher(
+      `${origin}/${encodeURIComponent(input.accountId)}/media_publish`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          creation_id: creationId,
+          access_token: input.accessToken,
+        }),
+      },
+    );
+  } catch (error) {
+    return providerError(
+      "instagram_outcome_unknown",
+      "Instagram did not confirm whether the post was published. Check Instagram before trying again.",
+      { message: error instanceof Error ? error.message : String(error), created },
+      "outcome_unknown",
+    );
+  }
+  const publishJson = await readJson<{ id?: string; error?: { message?: string } }>(publishResponse);
+  if (!publishResponse.ok) {
+    return providerError(
+      "instagram_media_publish",
+      publishJson.error?.message || `Instagram publish failed (${publishResponse.status}).`,
+      { created, publish: publishJson },
+      failureClassForStatus(publishResponse.status),
+    );
+  }
+  if (!publishJson.id) {
+    return providerError(
+      "instagram_missing_post_id",
+      "Instagram accepted the publish request but did not return a post id. Check Instagram before trying again.",
+      { created, publish: publishJson },
+      "outcome_unknown",
+    );
+  }
+  return {
+    ok: true,
+    platformPostId: publishJson.id,
+    providerResponse: { created, publish: publishJson },
+  };
+}
+
+async function createInstagramMediaContainer(
+  origin: string,
+  input: Parameters<SocialPublishAdapter["publish"]>[0],
+  parameters: Record<string, string>,
+): Promise<
+  | { ok: true; id: string; response: unknown }
+  | { ok: false; result: SocialPublishAdapterResult }
+> {
+  let response: Response;
+  try {
+    response = await input.fetcher(
+      `${origin}/${encodeURIComponent(input.accountId)}/media`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ ...parameters, access_token: input.accessToken }),
+      },
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      result: providerError(
         "instagram_media_create",
         "Instagram did not finish preparing the media. ME3 can safely try again.",
         { message: error instanceof Error ? error.message : String(error) },
         "retryable",
-      );
-    }
-    const createJson = await readJson<{ id?: string; error?: { message?: string } }>(createResponse);
-    if (!createResponse.ok || !createJson.id) {
-      return providerError(
+      ),
+    };
+  }
+  const json = await readJson<{ id?: string; error?: { message?: string } }>(response);
+  if (!response.ok || !json.id) {
+    return {
+      ok: false,
+      result: providerError(
         "instagram_media_create",
-        createJson.error?.message || `Instagram media creation failed (${createResponse.status}).`,
-        createJson,
-        failureClassForStatus(createResponse.status),
-      );
-    }
+        json.error?.message || `Instagram media creation failed (${response.status}).`,
+        json,
+        failureClassForStatus(response.status),
+      ),
+    };
+  }
+  return { ok: true, id: json.id, response: json };
+}
 
-    let publishResponse: Response;
-    await input.markProviderWriteStarted?.();
+async function waitForInstagramContainer(
+  origin: string,
+  input: Parameters<SocialPublishAdapter["publish"]>[0],
+  containerId: string,
+): Promise<{ ok: true } | { ok: false; result: SocialPublishAdapterResult }> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1_500));
+    let response: Response;
     try {
-      publishResponse = await input.fetcher(
-        `https://graph.facebook.com/v21.0/${encodeURIComponent(input.accountId)}/media_publish`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            creation_id: createJson.id,
-            access_token: input.accessToken,
-          }),
-        },
+      response = await input.fetcher(
+        `${origin}/${encodeURIComponent(containerId)}?fields=status_code,status&access_token=${encodeURIComponent(input.accessToken)}`,
       );
     } catch (error) {
-      return providerError(
-        "instagram_outcome_unknown",
-        "Instagram did not confirm whether the post was published. Check Instagram before trying again.",
-        { message: error instanceof Error ? error.message : String(error) },
-        "outcome_unknown",
-      );
+      return {
+        ok: false,
+        result: providerError(
+          "instagram_media_status",
+          "Instagram media processing could not be checked. ME3 can safely try again.",
+          { message: error instanceof Error ? error.message : String(error) },
+          "retryable",
+        ),
+      };
     }
-    const publishJson = await readJson<{ id?: string; error?: { message?: string } }>(publishResponse);
-    if (!publishResponse.ok) {
-      return providerError(
-        "instagram_media_publish",
-        publishJson.error?.message || `Instagram publish failed (${publishResponse.status}).`,
-        publishJson,
-        failureClassForStatus(publishResponse.status),
-      );
+    const json = await readJson<{
+      status_code?: string;
+      status?: string;
+      error?: { message?: string };
+    }>(response);
+    if (!response.ok) {
+      return {
+        ok: false,
+        result: providerError(
+          "instagram_media_status",
+          json.error?.message || `Instagram media status failed (${response.status}).`,
+          json,
+          failureClassForStatus(response.status),
+        ),
+      };
     }
-    if (!publishJson.id) {
-      return providerError(
-        "instagram_missing_post_id",
-        "Instagram accepted the publish request but did not return a post id. Check Instagram before trying again.",
-        { create: createJson, publish: publishJson },
-        "outcome_unknown",
-      );
+    if (json.status_code === "FINISHED" || json.status_code === "PUBLISHED") return { ok: true };
+    if (json.status_code === "ERROR" || json.status_code === "EXPIRED") {
+      return {
+        ok: false,
+        result: providerError(
+          "instagram_media_processing",
+          json.status || "Instagram could not process the attached media.",
+          json,
+          "rejected",
+        ),
+      };
     }
-
-    return {
-      ok: true,
-      platformPostId: publishJson.id,
-      providerResponse: { create: createJson, publish: publishJson },
-    };
-  },
-};
+  }
+  return {
+    ok: false,
+    result: providerError(
+      "instagram_media_processing_timeout",
+      "Instagram is still processing the media. ME3 can safely try again.",
+      undefined,
+      "retryable",
+    ),
+  };
+}

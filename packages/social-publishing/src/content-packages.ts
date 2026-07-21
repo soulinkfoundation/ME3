@@ -109,7 +109,8 @@ export type UpdatePostVersionInput = {
 };
 
 export type UpdateSocialPostInput = {
-  tags: unknown;
+  tags?: unknown;
+  title?: unknown;
   expectedUpdatedAt: unknown;
 };
 
@@ -594,6 +595,99 @@ export async function createSocialPost(
   }, options));
 }
 
+export async function ensureLocalSocialDemo(
+  env: SocialPostEnv,
+  ownerId: string,
+  siteIdInput: string,
+): Promise<SocialPostDetail> {
+  const siteId = requiredText(siteIdInput, "siteId is required");
+  const site = await env.DB.prepare("SELECT id FROM sites WHERE id = ? AND user_id = ?")
+    .bind(siteId, ownerId)
+    .first<{ id: string }>();
+  if (!site) throw new SocialPostInputError("Site not found", 404);
+
+  const now = new Date().toISOString();
+  const accounts = [
+    { id: `local-demo-${siteId}-linkedin`, platform: "linkedin" as const, name: "Kieran Butler", handle: "kieranbutler" },
+    { id: `local-demo-${siteId}-x`, platform: "x" as const, name: "Kieran Butler", handle: "kieranbutler" },
+    { id: `local-demo-${siteId}-instagram`, platform: "instagram" as const, name: "Kieran Butler", handle: "kieranbutler" },
+  ];
+  await env.DB.batch(accounts.map((account) => env.DB.prepare(
+    `INSERT INTO social_accounts (
+       id, user_id, site_id, platform, platform_account_id, platform_handle, display_name,
+       access_token_ciphertext, refresh_token_ciphertext, token_expires_at, scopes_json,
+       status, metadata_json, last_verified_at, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, '', NULL, NULL, '[]', 'active', ?, ?, ?, ?)
+     ON CONFLICT(site_id, platform, platform_account_id) DO NOTHING`,
+  ).bind(
+    account.id,
+    ownerId,
+    siteId,
+    account.platform,
+    `local-demo-${account.platform}`,
+    account.handle,
+    account.name,
+    JSON.stringify({ provider: account.platform, localDemo: true }),
+    now,
+    now,
+    now,
+  )));
+
+  const existing = await env.DB.prepare(
+    `SELECT p.id
+     FROM social_packages p
+     JOIN sites s ON s.id = p.site_id
+     WHERE p.site_id = ? AND p.source_ref = ? AND s.user_id = ?`,
+  )
+    .bind(siteId, "local-demo:social-workspace", ownerId)
+    .first<{ id: string }>();
+  if (existing) {
+    const detail = await getSocialPost(env, ownerId, existing.id);
+    if (detail) return detail;
+  }
+
+  const demoImages = ["teal", "blue", "coral"].map((color, index) => ({
+    url: `data:image/svg+xml,${encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200"><rect width="1200" height="1200" fill="${color === "teal" ? "#0f766e" : color === "blue" ? "#1d4ed8" : "#e11d48"}"/><text x="100" y="160" fill="white" font-family="Arial, sans-serif" font-size="72" font-weight="700">ME3</text><text x="100" y="1040" fill="white" font-family="Arial, sans-serif" font-size="54">Local preview ${index + 1}</text></svg>`,
+    )}`,
+    filename: `local-preview-${index + 1}.svg`,
+    mimeType: "image/svg+xml",
+    kind: "image" as const,
+    altText: `Local preview image ${index + 1}`,
+  }));
+
+  return createSocialPost(env, ownerId, {
+    siteId,
+    sourceType: "pasted",
+    sourceRef: "local-demo:social-workspace",
+    sourceTitle: "Local Social preview",
+    sourceSnapshot: "A local-only sample used to verify the Social Publishing workspace.",
+    sourceText: "A local-only sample used to verify the Social Publishing workspace.",
+    ideaText: "Build trust one useful detail at a time",
+    tags: ["local-demo"],
+    versions: [
+      {
+        platform: "linkedin",
+        targetAccountId: accounts[0].id,
+        bodyText: "The best systems make the next useful action obvious.\n\nA small, clear improvement compounds into trust. https://me3.app",
+        assetManifest: [demoImages[0]!],
+      },
+      {
+        platform: "x",
+        targetAccountId: accounts[1].id,
+        bodyText: "The best systems make the next useful action obvious.\n\nSmall clarity compounds into trust. https://me3.app",
+      },
+      {
+        platform: "instagram",
+        targetAccountId: accounts[2].id,
+        format: "carousel",
+        bodyText: "Build trust one useful detail at a time.\n\nSwipe through the local carousel preview. #ME3 #BuildInPublic",
+        assetManifest: demoImages,
+      },
+    ],
+  }, { postId: `local-demo-post-${siteId}` });
+}
+
 export async function getSocialPost(
   env: SocialPostEnv,
   ownerId: string,
@@ -626,26 +720,26 @@ export async function updateSocialPost(
       403,
     );
   }
-  const expectedUpdatedAt = requiredText(
-    input.expectedUpdatedAt,
-    "Refresh this Post before changing its tags",
-  );
+  const expectedUpdatedAt = requiredText(input.expectedUpdatedAt, "Refresh this Post before saving");
   if (existing.package.updatedAt !== expectedUpdatedAt) {
     throw new SocialPostInputError(
       "This Post changed after it was loaded. Refresh and try again.",
       409,
     );
   }
-  const tags = normalizeTags(input.tags);
+  const title = input.title === undefined
+    ? existing.package.ideaText
+    : requiredText(input.title, "Post title is required");
+  const tags = input.tags === undefined ? existing.package.tags : normalizeTags(input.tags);
   const now = monotonicUpdatedAt(existing.package.updatedAt);
   const updated = await env.DB.prepare(
     `UPDATE social_packages
-     SET tags_json = ?, updated_at = ?
+     SET post_title_snapshot = ?, idea_text = ?, tags_json = ?, updated_at = ?
      WHERE id = ? AND updated_at = ?
        AND EXISTS (SELECT 1 FROM sites WHERE sites.id = social_packages.site_id AND sites.user_id = ?)
      RETURNING id`,
   )
-    .bind(JSON.stringify(tags), now, postId, expectedUpdatedAt, ownerId)
+    .bind(title, title, JSON.stringify(tags), now, postId, expectedUpdatedAt, ownerId)
     .first<{ id: string }>();
   if (!updated) {
     throw new SocialPostInputError(
@@ -654,6 +748,56 @@ export async function updateSocialPost(
     );
   }
   return getSocialPost(env, ownerId, postId);
+}
+
+export async function deleteSocialPost(
+  env: SocialPostEnv,
+  ownerId: string,
+  postIdInput: string,
+  expectedUpdatedAtInput: unknown,
+): Promise<boolean> {
+  const postId = requiredText(postIdInput, "Post id is required");
+  const expectedUpdatedAt = requiredText(
+    expectedUpdatedAtInput,
+    "Refresh this Post before deleting it",
+  );
+  const existing = await getSocialContentPackage(env, ownerId, postId);
+  if (!existing) return false;
+  if (existing.package.sourceType === "legacy_content_bank_read_only") {
+    throw new SocialPostInputError("This imported Post is read-only.", 403);
+  }
+  if (existing.package.updatedAt !== expectedUpdatedAt) {
+    throw new SocialPostInputError(
+      "This Post changed after it was loaded. Refresh and try again.",
+      409,
+    );
+  }
+  if (existing.variants.some((version) =>
+    version.approvalStatus !== "draft" || version.scheduledFor || version.publicationStatus,
+  )) {
+    throw new SocialPostInputError(
+      "Only unscheduled draft Posts can be deleted.",
+      409,
+    );
+  }
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `DELETE FROM social_publication_events
+       WHERE variant_id IN (SELECT id FROM social_variants WHERE package_id = ?)`,
+    ).bind(postId),
+    env.DB.prepare(
+      `DELETE FROM social_publications
+       WHERE variant_id IN (SELECT id FROM social_variants WHERE package_id = ?)`,
+    ).bind(postId),
+    env.DB.prepare("DELETE FROM social_variants WHERE package_id = ?").bind(postId),
+    env.DB.prepare(
+      `DELETE FROM social_packages
+       WHERE id = ? AND updated_at = ?
+         AND EXISTS (SELECT 1 FROM sites WHERE sites.id = social_packages.site_id AND sites.user_id = ?)`,
+    ).bind(postId, expectedUpdatedAt, ownerId),
+  ]);
+  return true;
 }
 
 export async function updatePostVersion(

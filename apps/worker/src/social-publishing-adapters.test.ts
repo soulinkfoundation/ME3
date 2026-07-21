@@ -140,18 +140,25 @@ describe("X publishing adapter", () => {
   it("normalizes optional alt text without retaining unknown manifest fields", () => {
     expect(normalizeSocialMediaAssets([{
       url: "  https://cdn.example/image.png  ",
+      fileId: " file-1 ",
       mimeType: " image/png ",
       kind: "image",
       altText: "  A concise image description.  ",
+      contentHash: ` SHA256:${"A".repeat(64)} `,
+      byteLength: 42.4,
+      assetIndex: 1.2,
       ignored: "not part of the provider contract",
     }])).toEqual([{
       url: "https://cdn.example/image.png",
+      fileId: "file-1",
       filename: undefined,
       mimeType: "image/png",
       kind: "image",
       altText: "A concise image description.",
+      contentHash: `sha256:${"a".repeat(64)}`,
+      byteLength: 42,
       path: undefined,
-      assetIndex: undefined,
+      assetIndex: 1,
     }]);
   });
 
@@ -422,6 +429,260 @@ describe("X publishing adapter", () => {
       ok: false,
       failureClass: "outcome_unknown",
       errorCode: "x_missing_id",
+    });
+  });
+});
+
+describe("Instagram publishing adapter", () => {
+  it("creates ordered child containers and publishes an image carousel", async () => {
+    const mediaBodies: URLSearchParams[] = [];
+    const markProviderWriteStarted = vi.fn(async () => undefined);
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/ig-owner/media")) {
+        const body = init?.body as URLSearchParams;
+        mediaBodies.push(body);
+        return Response.json({ id: `container-${mediaBodies.length}` });
+      }
+      if (url.includes("/container-3?fields=status_code")) {
+        return Response.json({ status_code: "FINISHED" });
+      }
+      if (url.endsWith("/ig-owner/media_publish")) {
+        expect(String(init?.body)).toContain("creation_id=container-3");
+        return Response.json({ id: "instagram-post-1" });
+      }
+      throw new Error(`Unexpected Instagram request: ${url}`);
+    });
+
+    const result = await adapterFor("instagram").publish({
+      accessToken: "ig-token",
+      accountId: "ig-owner",
+      bodyText: "An ordered carousel.",
+      assets: [
+        { url: "https://media.example/one.jpg", kind: "image", assetIndex: 0 },
+        { url: "https://media.example/two.jpg", kind: "image", assetIndex: 1 },
+      ],
+      fetcher: fetcher as typeof fetch,
+      markProviderWriteStarted,
+    });
+
+    expect(result).toMatchObject({ ok: true, platformPostId: "instagram-post-1" });
+    expect(mediaBodies.map((body) => Object.fromEntries(body))).toEqual([
+      {
+        image_url: "https://media.example/one.jpg",
+        is_carousel_item: "true",
+        access_token: "ig-token",
+      },
+      {
+        image_url: "https://media.example/two.jpg",
+        is_carousel_item: "true",
+        access_token: "ig-token",
+      },
+      {
+        media_type: "CAROUSEL",
+        children: "container-1,container-2",
+        caption: "An ordered carousel.",
+        access_token: "ig-token",
+      },
+    ]);
+    expect(markProviderWriteStarted).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledWith(
+      expect.stringContaining("https://graph.instagram.com/v21.0/ig-owner/media"),
+      expect.any(Object),
+    );
+  });
+
+  it("waits for Reel processing before publishing", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/ig-owner/media")) {
+        expect(Object.fromEntries(init?.body as URLSearchParams)).toMatchObject({
+          media_type: "REELS",
+          video_url: "https://media.example/reel.mp4",
+          share_to_feed: "true",
+        });
+        return Response.json({ id: "reel-container" });
+      }
+      if (url.includes("/reel-container?fields=status_code")) {
+        return Response.json({ status_code: "FINISHED" });
+      }
+      if (url.endsWith("/ig-owner/media_publish")) {
+        return Response.json({ id: "instagram-reel-1" });
+      }
+      throw new Error(`Unexpected Instagram request: ${url}`);
+    });
+
+    await expect(adapterFor("instagram").publish({
+      accessToken: "ig-token",
+      accountId: "ig-owner",
+      bodyText: "A short Reel.",
+      assets: [{ url: "https://media.example/reel.mp4", kind: "video", mimeType: "video/mp4" }],
+      fetcher: fetcher as typeof fetch,
+    })).resolves.toMatchObject({ ok: true, platformPostId: "instagram-reel-1" });
+  });
+
+  it("rejects mixed Reel media and oversized carousels before delivery", () => {
+    expect(adapterFor("instagram").validateDraft({
+      bodyText: "Mixed media.",
+      assets: [
+        { url: "https://media.example/reel.mp4", kind: "video" },
+        { url: "https://media.example/image.jpg", kind: "image" },
+      ],
+    })).toEqual({ ok: false, error: "An Instagram Reel must contain one video and no images." });
+
+    expect(adapterFor("instagram").validateDraft({
+      bodyText: "Too many images.",
+      assets: Array.from({ length: 11 }, (_, index) => ({
+        url: `https://media.example/${index}.jpg`,
+        kind: "image" as const,
+      })),
+    })).toEqual({ ok: false, error: "Instagram carousels support up to 10 images." });
+  });
+});
+
+describe("TikTok draft upload adapter", () => {
+  it("initializes FILE_UPLOAD and streams a short video into the creator inbox", async () => {
+    const markProviderWriteStarted = vi.fn(async () => undefined);
+    const videoBytes = new Uint8Array([1, 2, 3, 4]);
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v2/post/publish/inbox/video/init/")) {
+        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer tiktok-token");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          source_info: {
+            source: "FILE_UPLOAD",
+            video_size: 4,
+            chunk_size: 4,
+            total_chunk_count: 1,
+          },
+        });
+        return Response.json({
+          data: {
+            publish_id: "v_inbox_file~demo-1",
+            upload_url: "https://open-upload.tiktokapis.com/video/?upload_id=demo-1",
+          },
+          error: { code: "ok", message: "", log_id: "log-1" },
+        });
+      }
+      if (url === "https://media.example/short.mp4") {
+        expect(new Headers(init?.headers).get("Range")).toBe("bytes=0-3");
+        return new Response(videoBytes, { status: 206 });
+      }
+      if (url.startsWith("https://open-upload.tiktokapis.com/video/")) {
+        const headers = new Headers(init?.headers);
+        expect(init?.method).toBe("PUT");
+        expect(headers.get("Content-Type")).toBe("video/mp4");
+        expect(headers.get("Content-Length")).toBe("4");
+        expect(headers.get("Content-Range")).toBe("bytes 0-3/4");
+        expect(new Uint8Array(await new Response(init?.body).arrayBuffer())).toEqual(videoBytes);
+        return new Response(null, { status: 201 });
+      }
+      if (url.endsWith("/v2/post/publish/status/fetch/")) {
+        expect(JSON.parse(String(init?.body))).toEqual({ publish_id: "v_inbox_file~demo-1" });
+        return Response.json({
+          data: { status: "SEND_TO_USER_INBOX", uploaded_bytes: 4 },
+          error: { code: "ok", message: "", log_id: "log-2" },
+        });
+      }
+      throw new Error(`Unexpected TikTok request: ${url}`);
+    });
+
+    const result = await adapterFor("tiktok").publish({
+      accessToken: "tiktok-token",
+      accountId: "creator-open-id",
+      bodyText: "Editable in TikTok.",
+      assets: [{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: videoBytes.byteLength,
+      }],
+      fetcher: fetcher as typeof fetch,
+      markProviderWriteStarted,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      platformPostId: "v_inbox_file~demo-1",
+      providerResponse: {
+        delivery: "creator_draft",
+        creatorActionRequired: true,
+      },
+    });
+    expect(markProviderWriteStarted).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
+  it("uses sequential chunks and merges trailing bytes into the final chunk", async () => {
+    const byteLength = 70 * 1024 * 1024;
+    const uploadStatuses = [206, 201];
+    const sourceRanges: string[] = [];
+    const uploadRanges: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v2/post/publish/inbox/video/init/")) {
+        expect(JSON.parse(String(init?.body)).source_info).toEqual({
+          source: "FILE_UPLOAD",
+          video_size: byteLength,
+          chunk_size: 32 * 1024 * 1024,
+          total_chunk_count: 2,
+        });
+        return Response.json({
+          data: { publish_id: "chunked", upload_url: "https://upload.example/chunked" },
+          error: { code: "ok" },
+        });
+      }
+      if (url === "https://media.example/large.mp4") {
+        sourceRanges.push(new Headers(init?.headers).get("Range")!);
+        return new Response(new Uint8Array([1]), { status: 206 });
+      }
+      if (url === "https://upload.example/chunked") {
+        uploadRanges.push(new Headers(init?.headers).get("Content-Range")!);
+        return new Response(null, { status: uploadStatuses.shift()! });
+      }
+      if (url.endsWith("/v2/post/publish/status/fetch/")) {
+        return Response.json({
+          data: { status: "SEND_TO_USER_INBOX", uploaded_bytes: byteLength },
+          error: { code: "ok" },
+        });
+      }
+      throw new Error(`Unexpected TikTok request: ${url}`);
+    });
+
+    await expect(adapterFor("tiktok").publish({
+      accessToken: "token",
+      accountId: "creator",
+      bodyText: "",
+      assets: [{
+        url: "https://media.example/large.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength,
+      }],
+      fetcher: fetcher as typeof fetch,
+    })).resolves.toMatchObject({ ok: true, platformPostId: "chunked" });
+
+    expect(sourceRanges).toEqual([
+      "bytes=0-33554431",
+      `bytes=33554432-${byteLength - 1}`,
+    ]);
+    expect(uploadRanges).toEqual([
+      `bytes 0-33554431/${byteLength}`,
+      `bytes 33554432-${byteLength - 1}/${byteLength}`,
+    ]);
+  });
+
+  it("rejects missing, mixed, or unsupported video manifests", () => {
+    expect(adapterFor("tiktok").validateDraft({ bodyText: "", assets: [] })).toEqual({
+      ok: false,
+      error: "TikTok draft upload requires exactly one video.",
+    });
+    expect(adapterFor("tiktok").validateDraft({
+      bodyText: "",
+      assets: [{ url: "https://media.example/video.avi", kind: "video", mimeType: "video/avi", byteLength: 12 }],
+    })).toEqual({
+      ok: false,
+      error: "TikTok supports MP4, QuickTime, and WebM video uploads.",
     });
   });
 });

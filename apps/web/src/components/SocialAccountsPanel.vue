@@ -14,7 +14,8 @@ type SupportedPlatform =
   | "linkedin"
   | "instagram"
   | "instagram_business"
-  | "youtube";
+  | "youtube"
+  | "tiktok";
 
 const props = defineProps<{
   siteId: string;
@@ -44,6 +45,8 @@ const platforms: {
   { id: "x", label: "X" },
   { id: "linkedin", label: "LinkedIn" },
   { id: "instagram", label: "Instagram" },
+  { id: "youtube", label: "YouTube" },
+  { id: "tiktok", label: "TikTok" },
 ];
 
 const siteAccounts = computed(() =>
@@ -66,6 +69,9 @@ const accountByPlatform = computed<
     ) || null,
   youtube:
     siteAccounts.value.find((account) => account.platform === "youtube") ||
+    null,
+  tiktok:
+    siteAccounts.value.find((account) => account.platform === "tiktok") ||
     null,
 }));
 
@@ -93,7 +99,10 @@ const oauthMessage = computed(() => {
     return "Instagram (Business) connected. It will now appear as a draft target.";
   }
   if (oauthConnected.value === "youtube") {
-    return "YouTube connected. It will now appear as a draft target.";
+    return "YouTube channel connected. Private video delivery is coming next.";
+  }
+  if (oauthConnected.value === "tiktok") {
+    return "TikTok connected. Short videos can now be sent to your TikTok inbox as drafts.";
   }
   return null;
 });
@@ -146,6 +155,9 @@ const hostedOAuthAvailable = computed(() => {
 });
 
 const ownAppReady = computed(() => Boolean(modalProviderSetting.value?.configured));
+const managedOnlyPlatform = computed(
+  () => connectModalPlatform.value === "youtube" || connectModalPlatform.value === "tiktok",
+);
 
 const modalSummary = computed(() => {
   if (connectModalPlatform.value === "x") {
@@ -160,6 +172,12 @@ const modalSummary = computed(() => {
     return hostedOAuthAvailable.value
       ? "Connect through ME3 Cloud without creating a LinkedIn developer app. Your social token is stored in this ME3 installation."
       : "Connect LinkedIn with your own app credentials. The app needs Share on LinkedIn access.";
+  }
+  if (connectModalPlatform.value === "youtube") {
+    return "Connect your YouTube channel through ME3. Google returns to ME3 Cloud, while the channel token remains encrypted in this installation.";
+  }
+  if (connectModalPlatform.value === "tiktok") {
+    return "Connect TikTok through ME3 to send short videos to your TikTok inbox for final editing and posting in the TikTok app.";
   }
   return "";
 });
@@ -388,6 +406,7 @@ watch(
               'social-connect-btn__icon-ring--instagram-business':
                 item.id === 'instagram_business',
               'social-connect-btn__icon-ring--youtube': item.id === 'youtube',
+              'social-connect-btn__icon-ring--tiktok': item.id === 'tiktok',
             }"
           >
             <!-- LinkedIn (same glyph as login OAuth) -->
@@ -424,6 +443,17 @@ watch(
               <path
                 fill="currentColor"
                 d="M23.5 6.2a3 3 0 0 0-2.11-2.12C19.53 3.6 12 3.6 12 3.6s-7.53 0-9.39.48A3 3 0 0 0 .5 6.2 31.2 31.2 0 0 0 0 12a31.2 31.2 0 0 0 .5 5.8 3 3 0 0 0 2.11 2.12c1.86.48 9.39.48 9.39.48s7.53 0 9.39-.48a3 3 0 0 0 2.11-2.12A31.2 31.2 0 0 0 24 12a31.2 31.2 0 0 0-.5-5.8zM9.6 15.6V8.4l6.3 3.6-6.3 3.6z"
+              />
+            </svg>
+            <svg
+              v-else-if="item.id === 'tiktok'"
+              class="social-connect-btn__brand"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path
+                fill="currentColor"
+                d="M16.7 1.9c.36 2.16 1.64 3.45 3.8 3.59v3.02a8.85 8.85 0 0 1-3.76-.87v7.04a7.1 7.1 0 1 1-6.12-7.04v3.1a4.05 4.05 0 1 0 3.02 3.94V1.9h3.06Z"
               />
             </svg>
             <!-- X (same glyph as login OAuth) -->
@@ -530,7 +560,19 @@ watch(
           </button>
         </div>
 
-        <details class="social-own-app" :open="!hostedOAuthAvailable">
+        <p
+          v-if="managedOnlyPlatform && !hostedOAuthAvailable"
+          class="social-connect-modal__status"
+          role="status"
+        >
+          Link this installation to ME3 Cloud before connecting this provider.
+        </p>
+
+        <details
+          v-if="!managedOnlyPlatform"
+          class="social-own-app"
+          :open="!hostedOAuthAvailable"
+        >
           <summary class="social-own-app__heading">
             <strong>{{ hostedOAuthAvailable ? "Advanced: use my own app" : "App credentials" }}</strong>
             <span v-if="ownAppReady">Configured</span>
@@ -788,6 +830,11 @@ watch(
 
 .social-connect-btn__icon-ring--youtube {
   background: #ff0033;
+  color: #fff;
+}
+
+.social-connect-btn__icon-ring--tiktok {
+  background: #111;
   color: #fff;
 }
 

@@ -10,8 +10,16 @@ const INSTAGRAM_ICON =
 const LINKEDIN_ICON =
   "M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z";
 
+const YOUTUBE_ICON =
+  "M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8ZM9.6 15.6V8.4l6.3 3.6-6.3 3.6Z";
+
+const TIKTOK_ICON =
+  "M19.6 5.4A5.4 5.4 0 0 1 16.4.1h-3.5v15.6a3.3 3.3 0 1 1-2.3-3.1V9a6.9 6.9 0 1 0 5.8 6.8V8.6a8.8 8.8 0 0 0 5.1 1.6V6.7a5.3 5.3 0 0 1-1.9-1.3Z";
+
 export function socialPlatformIconPath(platform: SocialPlatform): string {
   if (platform === "linkedin") return LINKEDIN_ICON;
   if (platform === "instagram" || platform === "instagram_business") return INSTAGRAM_ICON;
+  if (platform === "youtube") return YOUTUBE_ICON;
+  if (platform === "tiktok") return TIKTOK_ICON;
   return X_ICON;
 }

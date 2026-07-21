@@ -722,6 +722,93 @@ describe("reusable social Publications", () => {
     });
   });
 
+  it("publishes a private Files image through an opaque grant and revokes it after success", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    fixture.env.CORE_API_ORIGIN = "https://core.example";
+    fixture.db.run(
+      `INSERT INTO drive_files
+         (id, owner_id, filename, mime_type, size, storage_key, status)
+       VALUES ('file-private-1', 'owner', 'private.png', 'image/png', 4,
+               'drive/owner/file-private-1.png', 'ready')`,
+    );
+    fixture.db.run(
+      `UPDATE social_publications
+       SET asset_manifest_json_snapshot = ?
+       WHERE id = ?`,
+      JSON.stringify([{
+        url: "/api/files/file-private-1/content",
+        fileId: "file-private-1",
+        filename: "private.png",
+        mimeType: "image/png",
+        kind: "image",
+        byteLength: 4,
+      }]),
+      publication.id,
+    );
+
+    let providerMediaUrl = "";
+    const fetcher = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/userinfo")) {
+        return Response.json({ sub: "urn:li:person:owner" });
+      }
+      if (url.startsWith("https://core.example/api/social/media/socmedia_")) {
+        providerMediaUrl = url;
+        return new Response(new Uint8Array([1, 2, 3, 4]), {
+          headers: { "Content-Type": "image/png" },
+        });
+      }
+      if (url.includes("/rest/images?action=initializeUpload")) {
+        return Response.json({
+          value: {
+            uploadUrl: "https://linkedin-upload.example/image-1",
+            image: "urn:li:image:image-1",
+          },
+        });
+      }
+      if (url === "https://linkedin-upload.example/image-1") {
+        return new Response(null, { status: 201 });
+      }
+      if (url.endsWith("/rest/posts")) {
+        return Response.json({ id: "urn:li:share:private-media" }, { status: 201 });
+      }
+      throw new Error(`Unexpected LinkedIn request: ${url}`);
+    });
+
+    await publishQueuedPublication(
+      fixture.env as never,
+      publication.id,
+      fetcher as unknown as typeof fetch,
+    );
+
+    expect(providerMediaUrl).toMatch(
+      /^https:\/\/core\.example\/api\/social\/media\/socmedia_[A-Za-z0-9_-]+$/,
+    );
+    expect(providerMediaUrl).not.toContain("file-private-1");
+    expect(fixture.db.first<{
+      provider: string;
+      token_hash: string;
+      revoked_at: string | null;
+    }>(
+      `SELECT provider, token_hash, revoked_at
+       FROM social_media_delivery_grants
+       WHERE publication_id = ?`,
+      publication.id,
+    )).toEqual({
+      provider: "linkedin",
+      token_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      revoked_at: expect.any(String),
+    });
+    expect(fixture.db.first<{ status: string; platform_post_id: string }>(
+      "SELECT status, platform_post_id FROM social_publications WHERE id = ?",
+      publication.id,
+    )).toEqual({
+      status: "published",
+      platform_post_id: "urn:li:share:private-media",
+    });
+  });
+
   it("keeps an unmarked publishing claim leased when exception recovery fails, then safely reclaims it", async () => {
     const publication = await createPublication(fixture, "version-1");
     await enableProviderDelivery(fixture, publication.id);
@@ -1816,6 +1903,7 @@ function createFixture() {
       SOCIAL_PUBLISH_QUEUE: { send },
       TOKEN_ENCRYPTION_KEY: TEST_TOKEN_ENCRYPTION_KEY,
       ME3_SOCIAL_OAUTH_ORIGIN: undefined as string | undefined,
+      CORE_API_ORIGIN: undefined as string | undefined,
     },
     send,
     queueMessages,
@@ -2139,6 +2227,31 @@ const schemaSql = `
     event_type TEXT NOT NULL,
     payload_json TEXT,
     created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE drive_files (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    storage_key TEXT NOT NULL,
+    sha256 TEXT,
+    status TEXT NOT NULL
+  );
+
+  CREATE TABLE social_media_delivery_grants (
+    id TEXT PRIMARY KEY,
+    publication_id TEXT,
+    file_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    last_accessed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
   CREATE TABLE social_posting_plans (

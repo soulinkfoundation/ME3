@@ -485,9 +485,18 @@ function createEnv(): Env & {
         "content_bank_items",
         "financial_entries",
         "social_packages",
+        "social_accounts",
+        "social_oauth_states",
+        "social_provider_settings",
         "social_publication_events",
         "social_publications",
         "social_variants",
+        "sites",
+        "subscribers",
+        "bookings",
+        "managed_runtime_state",
+        "managed_runtime_control_requests",
+        "managed_runtime_write_leases",
       ]);
       return {
         async run() {
@@ -2591,7 +2600,13 @@ function createEnv(): Env & {
               }
               if (sql.includes("FROM sqlite_master")) {
                 const name = values[0] as string;
-                return runtimeTableNames.has(name) ? ({ name } as T) : null;
+                if (!runtimeTableNames.has(name)) return null;
+                if (sql.includes("SELECT sql")) {
+                  return {
+                    sql: `CREATE TABLE ${name} (platform TEXT CHECK (platform IN ('x', 'linkedin', 'instagram', 'instagram_business')))`,
+                  } as T;
+                }
+                return { name } as T;
               }
               if (sql.includes("FROM core_runtime_migrations")) {
                 return null;
@@ -10052,21 +10067,35 @@ describe("ME3 Worker auth", () => {
       {
         platform: "instagram",
         draft: true,
-        schedule: false,
-        publish: false,
-        reason: expect.any(String),
+        schedule: true,
+        publish: true,
+        reason: null,
       },
       {
         platform: "instagram_business",
+        draft: true,
+        schedule: true,
+        publish: true,
+        reason: null,
+      },
+      {
+        platform: "youtube",
         draft: true,
         schedule: false,
         publish: false,
         reason: expect.any(String),
       },
+      {
+        platform: "tiktok",
+        draft: true,
+        schedule: false,
+        publish: true,
+        reason: null,
+      },
     ]);
     expect(statusBody.hostedOAuth).toEqual({
       configured: true,
-      platforms: ["linkedin", "instagram"],
+      platforms: ["linkedin", "instagram", "youtube", "tiktok"],
     });
 
     const response = await app.fetch(
@@ -10265,7 +10294,7 @@ describe("ME3 Worker auth", () => {
     ]);
   });
 
-  it("rejects scheduling for draft-only X and Instagram Versions", async () => {
+  it("rejects scheduling for draft-only X Versions", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
     await app.fetch(
@@ -10276,7 +10305,7 @@ describe("ME3 Worker auth", () => {
       env,
     );
 
-    const draftOnlyPlatforms = ["x", "instagram", "instagram_business"] as const;
+    const draftOnlyPlatforms = ["x"] as const;
     for (const platform of draftOnlyPlatforms) {
       env.socialAccounts.push({
         id: `${platform}-account`,

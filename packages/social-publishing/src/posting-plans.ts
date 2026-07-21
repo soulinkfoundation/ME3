@@ -522,7 +522,14 @@ function validTimezone(value: unknown): string {
 function optionalPlatform(value: unknown): SocialPlatform | null {
   const platform = optionalText(value);
   if (!platform) return null;
-  if (platform === "x" || platform === "linkedin" || platform === "instagram" || platform === "instagram_business") {
+  if (
+    platform === "x" ||
+    platform === "linkedin" ||
+    platform === "instagram" ||
+    platform === "instagram_business" ||
+    platform === "youtube" ||
+    platform === "tiktok"
+  ) {
     return platform;
   }
   throw new SocialPostingPlanInputError("Choose a supported social platform");
@@ -1202,6 +1209,8 @@ function platformLabel(platform: SocialPlatform): string {
   if (platform === "linkedin") return "LinkedIn";
   if (platform === "instagram_business") return "Instagram Business";
   if (platform === "instagram") return "Instagram";
+  if (platform === "youtube") return "YouTube";
+  if (platform === "tiktok") return "TikTok";
   return "X";
 }
 

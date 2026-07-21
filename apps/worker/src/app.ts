@@ -118,6 +118,7 @@ import { registerSchedulingRoutes } from "./routes/scheduling";
 import { registerSocialContentRoutes } from "./routes/social-content";
 import { registerSocialAccountRoutes } from "./routes/social-accounts";
 import { registerSocialCarouselRoutes } from "./routes/social-carousels";
+import { registerSocialMediaDeliveryRoutes } from "./routes/social-media-delivery";
 import { registerPublicSiteRoutes, registerSiteRoutes } from "./routes/sites";
 import { registerUsernameRoutes } from "./routes/usernames";
 import {
@@ -1009,6 +1010,7 @@ registerPushNotificationRoutes(app, { requireOwner, unauthorized });
 registerSocialContentRoutes(app, { requireOwner, unauthorized });
 registerSocialAccountRoutes(app, { requireOwner, unauthorized });
 registerSocialCarouselRoutes(app, { requireOwner, unauthorized });
+registerSocialMediaDeliveryRoutes(app);
 app.get("/api/social/status", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -1018,8 +1020,11 @@ app.get("/api/social/status", async (c) => {
     plugin: await getSocialPublishingRuntimeStatus(c.env),
     hostedOAuth: {
       configured: Boolean(hostedOAuthOrigin),
-      platforms: hostedOAuthOrigin ? ["linkedin", "instagram"] : [],
+      platforms: hostedOAuthOrigin
+        ? ["linkedin", "instagram", "youtube", "tiktok"]
+        : [],
     },
+    localDemo: c.env.ENVIRONMENT === "local",
   });
 });
 
