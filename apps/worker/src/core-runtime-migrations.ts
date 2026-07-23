@@ -117,6 +117,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     apply: applyManagedRuntimeLifecycleMigration,
   },
   {
+    id: "0028_journal_entry_revision",
+    checksum: "2026-07-23-journal-entry-revision-v1",
+    apply: applyJournalEntryRevisionMigration,
+  },
+  {
     id: "0029_social_media_delivery",
     checksum: "2026-07-21-social-media-delivery-v1",
     apply: applySocialMediaDeliveryMigration,
@@ -1669,6 +1674,12 @@ async function applyManagedRuntimeLifecycleMigration(db: D1Database): Promise<vo
     "expected_generation",
     "INTEGER",
   );
+}
+
+async function applyJournalEntryRevisionMigration(db: D1Database): Promise<void> {
+  // The published D1 migration handles normal deploys; this compatibility
+  // repair covers installs that were upgraded without applying that migration.
+  await addColumnIfMissing(db, "journal_entries", "revision", "INTEGER NOT NULL DEFAULT 1");
 }
 
 async function applySocialMediaDeliveryMigration(db: D1Database): Promise<void> {
