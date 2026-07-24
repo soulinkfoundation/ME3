@@ -33,7 +33,7 @@
     "verify:local-boot": "node scripts/verify-local-boot.mjs",
     "build": "pnpm generate:llms && pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "db:migrations:apply": "wrangler d1 migrations apply DB --remote --config wrangler.toml",
+    "db:migrations:apply": "node scripts/prepare-d1-migrations.mjs && wrangler d1 migrations apply DB --remote --config wrangler.toml",
     "deploy": "pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
     "deploy:cloudflare": "pnpm deploy:prepare && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
     "deploy:cloudflare:d1-only": "pnpm deploy:cloudflare",
