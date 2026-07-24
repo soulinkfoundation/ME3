@@ -5,6 +5,22 @@ export interface LoginRedirectOptions {
   setupIncomplete?: boolean;
 }
 
+export interface ProfileSetupPathOptions {
+  sitesLoaded: boolean;
+  hasProfileSite: boolean;
+  defaultPath: string;
+  setupPath?: string;
+}
+
+export function resolveProfileSetupPath(
+  options: ProfileSetupPathOptions,
+): string {
+  if (!options.sitesLoaded || options.hasProfileSite) {
+    return options.defaultPath;
+  }
+  return options.setupPath || "/start";
+}
+
 export function isStartRedirectPath(pathname: string): boolean {
   return pathname === "/start" || pathname === "/start/";
 }

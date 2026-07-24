@@ -5,6 +5,7 @@ import { useSitesStore } from "./stores/sites";
 import { useWizardStore } from "./stores/wizard";
 import { updateFeatureFavicon } from "./utils/favicon";
 import { DEFAULT_APP_PATH } from "./utils/navigation";
+import { resolveProfileSetupPath } from "./utils/loginRedirect";
 import {
   invalidatePluginAccess,
   isPluginAccessEnabled,
@@ -54,7 +55,11 @@ async function resolveDefaultAppPathForSession(): Promise<string> {
   const sites = useSitesStore();
   try {
     await sites.ensureSites();
-    return sites.hasProfileSite ? DEFAULT_APP_PATH : "/start";
+    return resolveProfileSetupPath({
+      sitesLoaded: sites.loaded,
+      hasProfileSite: sites.hasProfileSite,
+      defaultPath: DEFAULT_APP_PATH,
+    });
   } catch {
     return DEFAULT_APP_PATH;
   }

@@ -13,6 +13,7 @@ import {
   isStartLoginRedirect,
   normalizeSafeLoginRedirect,
   resolveMe3OAuthRedirect,
+  resolveProfileSetupPath,
 } from "../utils/loginRedirect";
 import { detectBrowserTimeZone } from "../utils/timezone";
 
@@ -143,7 +144,11 @@ function deriveUsername() {
 async function resolveDefaultPostLoginRedirect(): Promise<string> {
   try {
     await sites.fetchSites();
-    return sites.hasProfileSite ? DEFAULT_APP_PATH : "/start";
+    return resolveProfileSetupPath({
+      sitesLoaded: sites.loaded,
+      hasProfileSite: sites.hasProfileSite,
+      defaultPath: DEFAULT_APP_PATH,
+    });
   } catch {
     return DEFAULT_APP_PATH;
   }
@@ -152,7 +157,12 @@ async function resolveDefaultPostLoginRedirect(): Promise<string> {
 async function resolveStartPostLoginRedirect(redirect: string): Promise<string> {
   try {
     await sites.fetchSites();
-    return sites.hasProfileSite ? DEFAULT_APP_PATH : redirect;
+    return resolveProfileSetupPath({
+      sitesLoaded: sites.loaded,
+      hasProfileSite: sites.hasProfileSite,
+      defaultPath: DEFAULT_APP_PATH,
+      setupPath: redirect,
+    });
   } catch {
     return DEFAULT_APP_PATH;
   }

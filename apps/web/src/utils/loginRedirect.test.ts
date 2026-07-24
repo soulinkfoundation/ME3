@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveMe3OAuthRedirect } from "./loginRedirect";
+import {
+  resolveMe3OAuthRedirect,
+  resolveProfileSetupPath,
+} from "./loginRedirect";
 
 const options = {
   origin: "https://core.example",
@@ -8,6 +11,49 @@ const options = {
 };
 
 describe("login redirects", () => {
+  it("only routes to setup after a successful empty site lookup", () => {
+    expect(
+      resolveProfileSetupPath({
+        sitesLoaded: false,
+        hasProfileSite: false,
+        defaultPath: "/mission-control",
+      }),
+    ).toBe("/mission-control");
+    expect(
+      resolveProfileSetupPath({
+        sitesLoaded: true,
+        hasProfileSite: true,
+        defaultPath: "/mission-control",
+      }),
+    ).toBe("/mission-control");
+    expect(
+      resolveProfileSetupPath({
+        sitesLoaded: true,
+        hasProfileSite: false,
+        defaultPath: "/mission-control",
+      }),
+    ).toBe("/start");
+  });
+
+  it("preserves an explicit setup path only for confirmed incomplete setup", () => {
+    expect(
+      resolveProfileSetupPath({
+        sitesLoaded: false,
+        hasProfileSite: false,
+        defaultPath: "/mission-control",
+        setupPath: "https://core.example/start",
+      }),
+    ).toBe("/mission-control");
+    expect(
+      resolveProfileSetupPath({
+        sitesLoaded: true,
+        hasProfileSite: false,
+        defaultPath: "/mission-control",
+        setupPath: "https://core.example/start",
+      }),
+    ).toBe("https://core.example/start");
+  });
+
   it("sends first ME3.app claims to start setup", () => {
     expect(
       resolveMe3OAuthRedirect(undefined, {
