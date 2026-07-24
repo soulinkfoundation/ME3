@@ -44,12 +44,14 @@ describe("sites store", () => {
         },
       ];
       store.loading = true;
+      store.loaded = true;
       store.error = "boom";
 
       store.resetSessionState();
 
       expect(store.sites).toEqual([]);
       expect(store.loading).toBe(false);
+      expect(store.loaded).toBe(false);
       expect(store.error).toBeNull();
     });
   });
@@ -127,6 +129,27 @@ describe("sites store", () => {
       expect(store.sites).toEqual([]);
       expect(store.loading).toBe(false);
       expect(store.error).toBe("Failed to load sites");
+    });
+
+    it("deduplicates and caches ensureSites requests", async () => {
+      vi.mocked(api.get).mockResolvedValue({ sites: [] });
+      const store = useSitesStore();
+
+      await Promise.all([store.ensureSites(), store.ensureSites()]);
+      await store.ensureSites();
+
+      expect(store.loaded).toBe(true);
+      expect(api.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("allows fetchSites to refresh an ensured result", async () => {
+      vi.mocked(api.get).mockResolvedValue({ sites: [] });
+      const store = useSitesStore();
+
+      await store.ensureSites();
+      await store.fetchSites();
+
+      expect(api.get).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -1,11 +1,14 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { routes } from "vue-router/auto-routes";
-import { api } from "./api";
 import { useAuthStore } from "./stores/auth";
 import { useSitesStore } from "./stores/sites";
 import { useWizardStore } from "./stores/wizard";
 import { updateFeatureFavicon } from "./utils/favicon";
 import { DEFAULT_APP_PATH } from "./utils/navigation";
+import {
+  invalidatePluginAccess,
+  isPluginAccessEnabled,
+} from "./utils/pluginAccess";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -13,18 +16,6 @@ const router = createRouter({
 });
 
 let syncedSessionUserId: string | null | undefined;
-
-async function isPluginEnabled(pluginId: string): Promise<boolean> {
-  const response = await api.get<{
-    plugins: Array<{ id: string; status: string; enabled: boolean }>;
-  }>("/plugins");
-  return response.plugins.some(
-    (plugin) =>
-      plugin.id === pluginId &&
-      plugin.enabled &&
-      plugin.status === "installed",
-  );
-}
 
 function updateMetaTag(name: string, content: string | undefined) {
   if (!content) return;
@@ -62,7 +53,7 @@ function updateLinkTag(rel: string, href: string | undefined) {
 async function resolveDefaultAppPathForSession(): Promise<string> {
   const sites = useSitesStore();
   try {
-    await sites.fetchSites();
+    await sites.ensureSites();
     return sites.hasProfileSite ? DEFAULT_APP_PATH : "/start";
   } catch {
     return DEFAULT_APP_PATH;
@@ -80,6 +71,7 @@ router.beforeEach(async (to, _from, next) => {
     const sites = useSitesStore();
     wizard.reconcileSession(currentSessionUserId);
     sites.resetSessionState();
+    invalidatePluginAccess();
     syncedSessionUserId = currentSessionUserId;
   }
 
@@ -243,28 +235,28 @@ router.beforeEach(async (to, _from, next) => {
     return;
   }
 
+  const [defaultAppPath, requiredPluginEnabled] = await Promise.all([
+    to.meta.requiresWorkspace
+      ? resolveDefaultAppPathForSession()
+      : Promise.resolve(DEFAULT_APP_PATH),
+    typeof to.meta.requiresPlugin === "string"
+      ? isPluginAccessEnabled(to.meta.requiresPlugin).catch(() => false)
+      : Promise.resolve(true),
+  ]);
+
   if (to.meta.requiresWorkspace) {
     if (!auth.isAuthenticated) {
       next({ path: "/login", query: { redirect: to.fullPath } });
       return;
     }
-    if ((await resolveDefaultAppPathForSession()) === "/start") {
+    if (defaultAppPath === "/start") {
       next({ path: "/start", replace: true });
       return;
     }
   }
 
   if (to.meta.requiresPlugin) {
-    try {
-      if (!(await isPluginEnabled(to.meta.requiresPlugin))) {
-        next({
-          path: "/settings",
-          query: { section: "plugins", blocked: to.meta.requiresPlugin },
-          replace: true,
-        });
-        return;
-      }
-    } catch {
+    if (!requiredPluginEnabled) {
       next({
         path: "/settings",
         query: { section: "plugins", blocked: to.meta.requiresPlugin },

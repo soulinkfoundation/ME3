@@ -6,6 +6,7 @@ import {
   ManagedRuntimeLifecycleError,
   applyManagedRuntimeAction,
   beginManagedRuntimeWriteLease,
+  getManagedRuntimeRequestMode,
   getManagedRuntimeStatus,
   releaseManagedRuntimeWriteLease,
   validateManagedRuntimeControlClaims,
@@ -205,6 +206,77 @@ describe("managed runtime lifecycle", () => {
     expect(db.staleLeaseMinutes.at(-1)).toBe(6 * 60);
 
     await releaseManagedRuntimeWriteLease(env, lease);
+  });
+
+  it("uses a single state read for steady-state managed requests", async () => {
+    const db = new LifecycleDb();
+    const env = createEnv(db);
+    await getManagedRuntimeStatus(env);
+    db.statements.splice(0);
+
+    await expect(getManagedRuntimeRequestMode(env)).resolves.toBe("active");
+    expect(db.statements).toHaveLength(1);
+    expect(db.statements[0]).toContain("FROM managed_runtime_state");
+  });
+
+  it("serves managed owner app assets without lifecycle database work", async () => {
+    const db = new LifecycleDb();
+    const env = createEnv(db);
+    env.CORE_WEB_ORIGIN = "https://tester.me3.app";
+    env.ASSETS = {
+      fetch: vi.fn(async () =>
+        new Response("export default true", {
+          headers: {
+            "Content-Type": "text/javascript",
+            "Cache-Control": "public, max-age=0, must-revalidate",
+          },
+        }),
+      ),
+    } as unknown as Fetcher;
+
+    const response = await app.fetch(
+      new Request("https://tester.me3.app/assets/index-AbCd1234.js"),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe(
+      "public, max-age=31536000, immutable",
+    );
+    expect(db.statements).toHaveLength(0);
+  });
+
+  it("avoids write leases for active GETs and still blocks them while quiesced", async () => {
+    const db = new LifecycleDb();
+    const env = createEnv(db);
+    await getManagedRuntimeStatus(env);
+    db.statements.splice(0);
+
+    const activeResponse = await app.fetch(
+      new Request("http://localhost/api/core/version"),
+      env,
+    );
+    expect(activeResponse.status).toBe(200);
+    expect(
+      db.statements.some((sql) =>
+        sql.includes("INSERT INTO managed_runtime_write_leases"),
+      ),
+    ).toBe(false);
+
+    await applyManagedRuntimeAction(env, {
+      installationId: INSTALLATION_ID,
+      requestId: QUIESCE_REQUEST_ID,
+      action: "quiesce",
+      expectedGeneration: 1,
+    });
+    const quiescedResponse = await app.fetch(
+      new Request("http://localhost/api/core/version"),
+      env,
+    );
+    expect(quiescedResponse.status).toBe(423);
+    await expect(quiescedResponse.json()).resolves.toMatchObject({
+      code: "managed_runtime_quiesced",
+    });
   });
 
   it("revokes access irreversibly and empties bound storage before marking it purged", async () => {
@@ -435,8 +507,10 @@ class LifecycleDb {
   readonly leases = new Map<string, string>();
   readonly credentialStatements: string[] = [];
   readonly staleLeaseMinutes: number[] = [];
+  readonly statements: string[] = [];
 
   prepare(sql: string) {
+    this.statements.push(sql);
     return new LifecycleStatement(this, sql);
   }
 

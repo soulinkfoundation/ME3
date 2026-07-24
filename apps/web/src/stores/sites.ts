@@ -328,15 +328,26 @@ export const useSitesStore = defineStore("sites", () => {
   const sites = ref<Site[]>([]);
   const sitePages = ref<SitePage[]>([]);
   const loading = ref(false);
+  const loaded = ref(false);
   const error = ref<string | null>(null);
+  let sessionGeneration = 0;
+  let activeSitesRequest:
+    | {
+        generation: number;
+        promise: Promise<void>;
+      }
+    | null = null;
   const hasProfileSite = computed(() =>
     sites.value.some((site) => (site.site_type || "profile") === "profile"),
   );
 
   function resetSessionState() {
+    sessionGeneration += 1;
+    activeSitesRequest = null;
     sites.value = [];
     sitePages.value = [];
     loading.value = false;
+    loaded.value = false;
     error.value = null;
   }
 
@@ -369,19 +380,44 @@ export const useSitesStore = defineStore("sites", () => {
     return candidate;
   }
 
-  async function fetchSites(): Promise<void> {
+  async function loadSites(force: boolean): Promise<void> {
+    if (!force && loaded.value) return;
+    if (activeSitesRequest?.generation === sessionGeneration) {
+      return activeSitesRequest.promise;
+    }
+
+    const generation = sessionGeneration;
     loading.value = true;
     error.value = null;
 
-    try {
-      const response = await api.get<{ sites: Site[] }>("/sites");
-      sites.value = response.sites;
-    } catch (e) {
-      error.value = "Failed to load sites";
-      console.error("Fetch sites error:", e);
-    } finally {
-      loading.value = false;
-    }
+    const promise = (async () => {
+      try {
+        const response = await api.get<{ sites: Site[] }>("/sites");
+        if (generation !== sessionGeneration) return;
+        sites.value = response.sites;
+        loaded.value = true;
+      } catch (e) {
+        if (generation !== sessionGeneration) return;
+        loaded.value = false;
+        error.value = "Failed to load sites";
+        console.error("Fetch sites error:", e);
+      } finally {
+        if (generation === sessionGeneration) loading.value = false;
+        if (activeSitesRequest?.generation === generation) {
+          activeSitesRequest = null;
+        }
+      }
+    })();
+    activeSitesRequest = { generation, promise };
+    return promise;
+  }
+
+  async function fetchSites(): Promise<void> {
+    return loadSites(true);
+  }
+
+  async function ensureSites(): Promise<void> {
+    return loadSites(false);
   }
 
   async function fetchPublishManifest(
@@ -1321,10 +1357,12 @@ export const useSitesStore = defineStore("sites", () => {
     sites,
     sitePages,
     loading,
+    loaded,
     error,
     hasProfileSite,
     resetSessionState,
     fetchSites,
+    ensureSites,
     fetchPublishManifest,
     claimUsername,
     uploadSite,

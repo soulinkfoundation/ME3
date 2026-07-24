@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
-import { api } from "../api";
 import UiIcon from "./UiIcon.vue";
 import {
   APP_FEATURE_ICONS,
   appFeatureForPath,
   type AppFeatureId,
 } from "../utils/appFeatures";
+import {
+  ensurePluginAccess,
+  invalidatePluginAccess,
+} from "../utils/pluginAccess";
 
 const route = useRoute();
 const sitesPath = "/sites";
@@ -36,12 +39,12 @@ function handleWindowKeydown(event: KeyboardEvent) {
 onMounted(async () => {
   void loadInstalledPluginNav();
   window.addEventListener("keydown", handleWindowKeydown);
-  window.addEventListener(pluginChangedEvent, loadInstalledPluginNav);
+  window.addEventListener(pluginChangedEvent, handlePluginChanged);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleWindowKeydown);
-  window.removeEventListener(pluginChangedEvent, loadInstalledPluginNav);
+  window.removeEventListener(pluginChangedEvent, handlePluginChanged);
   document.body.style.overflow = "";
 });
 
@@ -56,28 +59,26 @@ function rowActive(kind: AppFeatureId): boolean {
 
 async function loadInstalledPluginNav() {
   try {
-    const response = await api.get<{
-      plugins: Array<{ id: string; status: string; enabled: boolean }>;
-    }>("/plugins");
-    missionControlInstalled.value = response.plugins.some(
+    const plugins = await ensurePluginAccess();
+    missionControlInstalled.value = plugins.some(
       (plugin) =>
         plugin.id === "me3.mission-control" &&
         plugin.enabled &&
         plugin.status === "installed",
     );
-    calendarInstalled.value = response.plugins.some(
+    calendarInstalled.value = plugins.some(
       (plugin) =>
         plugin.id === "me3.calendar" &&
         plugin.enabled &&
         plugin.status === "installed",
     );
-    journalInstalled.value = response.plugins.some(
+    journalInstalled.value = plugins.some(
       (plugin) =>
         plugin.id === "me3.journal" &&
         plugin.enabled &&
         plugin.status === "installed",
     );
-    socialPublishingInstalled.value = response.plugins.some(
+    socialPublishingInstalled.value = plugins.some(
       (plugin) =>
         plugin.id === "me3.social-publishing" &&
         plugin.enabled &&
@@ -89,6 +90,11 @@ async function loadInstalledPluginNav() {
     calendarInstalled.value = false;
     socialPublishingInstalled.value = false;
   }
+}
+
+function handlePluginChanged() {
+  invalidatePluginAccess();
+  void loadInstalledPluginNav();
 }
 
 watch(

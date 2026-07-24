@@ -211,6 +211,7 @@ import {
   MANAGED_RUNTIME_CONTROL_PATH,
   beginManagedRuntimeWriteLease,
   getManagedInstallationId,
+  getManagedRuntimeRequestMode,
   getManagedRuntimeStatus,
   isManagedRuntime,
   releaseManagedRuntimeWriteLease,
@@ -433,9 +434,11 @@ app.use("*", async (c, next) => {
     );
   }
 
-  const runtime = await getManagedRuntimeStatus(c.env);
-  if (!runtime) return next();
-  if (runtime.state === "suspended") {
+  if (isManagedOwnerAppStaticAssetRequest(c, pathname)) return next();
+
+  const runtimeMode = await getManagedRuntimeRequestMode(c.env);
+  if (!runtimeMode) return next();
+  if (runtimeMode === "suspended") {
     return c.json(
       {
         ok: false,
@@ -447,9 +450,22 @@ app.use("*", async (c, next) => {
   }
 
   const method = c.req.method.toUpperCase();
+  if (
+    runtimeMode === "quiesced" &&
+    pathname.startsWith("/api/") &&
+    (method === "GET" || method === "HEAD")
+  ) {
+    return c.json(
+      {
+        ok: false,
+        code: "managed_runtime_quiesced",
+        error: "This managed ME3 installation is temporarily read-only for export",
+      },
+      423,
+    );
+  }
   const shouldLease =
-    method !== "OPTIONS" &&
-    (pathname.startsWith("/api/") || (method !== "GET" && method !== "HEAD"));
+    method !== "OPTIONS" && method !== "GET" && method !== "HEAD";
   if (!shouldLease) return next();
   const lease = await beginManagedRuntimeWriteLease(
     c.env,
@@ -1523,6 +1539,10 @@ async function applyResponseSecurityHeaders(c: AppContext) {
     setDefaultHeader(c, "Cache-Control", "no-store");
   }
 
+  if (isManagedOwnerAppFingerprintedAssetRequest(c, pathname)) {
+    c.header("Cache-Control", "public, max-age=31536000, immutable");
+  }
+
   if (!isPublicSiteResponse && isOwnerSurfaceRequest(c, pathname)) {
     setDefaultHeader(c, "X-Frame-Options", "DENY");
     setDefaultHeader(c, "Content-Security-Policy", "frame-ancestors 'none'");
@@ -1584,6 +1604,36 @@ function isOwnerSurfaceRequest(c: AppContext, pathname: string): boolean {
   return (
     hostsMatch(requestHost, getAdminHost(c.env, c.req.url)) ||
     hostsMatch(requestHost, getApiHost(c.env, c.req.url))
+  );
+}
+
+function isManagedOwnerAppStaticAssetRequest(
+  c: AppContext,
+  pathname: string,
+): boolean {
+  if (!isManagedRuntime(c.env) || !isOwnerSurfaceRequest(c, pathname)) {
+    return false;
+  }
+  return (
+    pathname.startsWith("/assets/") ||
+    pathname.startsWith("/icons/") ||
+    pathname === "/favicon.ico" ||
+    pathname === "/favicon.png" ||
+    pathname === "/manifest.webmanifest" ||
+    pathname === "/sw.js" ||
+    pathname === "/me3-logo-light.png" ||
+    pathname === "/me3-logo-dark.png"
+  );
+}
+
+function isManagedOwnerAppFingerprintedAssetRequest(
+  c: AppContext,
+  pathname: string,
+): boolean {
+  return (
+    isManagedRuntime(c.env) &&
+    pathname.startsWith("/assets/") &&
+    isOwnerSurfaceRequest(c, pathname)
   );
 }
 

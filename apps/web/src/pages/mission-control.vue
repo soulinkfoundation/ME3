@@ -830,7 +830,7 @@ async function saveDashboardLayout() {
 }
 
 onMounted(() => {
-  void sites.fetchSites();
+  void sites.ensureSites();
   void loadDashboard();
   dailyBriefingRefreshTimer = window.setInterval(
     refreshDailyBriefingWhenVisible,

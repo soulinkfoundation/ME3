@@ -162,6 +162,24 @@ export async function getManagedRuntimeStatus(env: Env): Promise<ManagedRuntimeS
   return readManagedRuntimeStatus(env, installationId);
 }
 
+export async function getManagedRuntimeRequestMode(
+  env: Env,
+): Promise<ManagedRuntimeMode | null> {
+  if (!isManagedRuntime(env)) return null;
+  const installationId = requireManagedInstallationId(env);
+  const row =
+    (await readManagedRuntimeState(env)) ||
+    (await ensureManagedRuntimeState(env, installationId));
+  if (row.installation_id !== installationId) {
+    throw new ManagedRuntimeLifecycleError(
+      "Managed runtime identity does not match persisted state",
+      "managed_runtime_identity_mismatch",
+      503,
+    );
+  }
+  return row.state;
+}
+
 export async function beginManagedRuntimeWriteLease(
   env: Env,
   method: string,
@@ -169,7 +187,7 @@ export async function beginManagedRuntimeWriteLease(
 ): Promise<ManagedRuntimeWriteLease | null> {
   if (!isManagedRuntime(env)) return null;
   const installationId = requireManagedInstallationId(env);
-  await ensureManagedRuntimeState(env, installationId);
+  if ((await getManagedRuntimeRequestMode(env)) !== "active") return null;
   const leaseId = crypto.randomUUID();
   const result = await env.DB.prepare(
     `INSERT INTO managed_runtime_write_leases
@@ -307,7 +325,10 @@ export async function applyManagedRuntimeAction(
   return status;
 }
 
-async function ensureManagedRuntimeState(env: Env, installationId: string): Promise<void> {
+async function ensureManagedRuntimeState(
+  env: Env,
+  installationId: string,
+): Promise<ManagedRuntimeStateRow> {
   await env.DB.prepare(
     `INSERT INTO managed_runtime_state
        (id, installation_id, state, generation, created_at, updated_at)
@@ -324,6 +345,7 @@ async function ensureManagedRuntimeState(env: Env, installationId: string): Prom
       503,
     );
   }
+  return row;
 }
 
 async function readManagedRuntimeState(env: Env): Promise<ManagedRuntimeStateRow | null> {

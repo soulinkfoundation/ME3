@@ -63,7 +63,7 @@ describe("Calendar Social Publishing source", () => {
       updated_at: "2026-07-18T08:00:00.000Z",
       published_at: "2026-07-01T08:00:00.000Z",
     }];
-    sites.fetchSites = vi.fn(async () => undefined) as never;
+    sites.ensureSites = vi.fn(async () => undefined) as never;
   });
 
   it("shows a toggleable source and manages the exact projected Publication", async () => {

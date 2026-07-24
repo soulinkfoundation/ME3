@@ -2926,7 +2926,7 @@ onMounted(async () => {
   window.addEventListener("click", handleWindowClick);
   window.addEventListener("scroll", handleWindowScroll, true);
   window.addEventListener("resize", handleWindowResize);
-  await sites.fetchSites();
+  await sites.ensureSites();
   if (sites.sites[0]) {
     newBookingForm.value.username = sites.sites[0].username;
   }

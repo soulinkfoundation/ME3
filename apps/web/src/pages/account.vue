@@ -2178,7 +2178,7 @@ async function scrollToRouteHash() {
 
 onMounted(async () => {
   await loadAccount();
-  void sites.fetchSites();
+  void sites.ensureSites();
   void loadMailbox();
   void loadAiSettings();
   void loadEmailProviderSettings();
