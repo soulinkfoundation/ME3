@@ -19,8 +19,10 @@ import {
   type DriveFile,
   type DriveFolder,
   type SocialAccountRow,
+  type SocialContentType,
   type SocialPlatform,
   type SocialPlatformCapabilities,
+  type SocialPlatformContentRule,
   type SocialPostDetail,
 } from "../stores/social";
 
@@ -46,6 +48,7 @@ const localDemoAvailable = ref(false);
 const activeMode = ref<WorkspaceMode>("drafts");
 const selectedPostId = ref<string | null>(null);
 const selectedVersionId = ref<string | null>(null);
+const editorScope = ref<"shared" | "platform">("platform");
 const editorTitle = ref("");
 const editorBody = ref("");
 const editorAccountId = ref("");
@@ -66,7 +69,13 @@ const scheduleDate = ref("");
 const scheduleTime = ref("09:00");
 const scheduleTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
 const scheduleError = ref("");
+const publishError = ref("");
 const scheduling = ref(false);
+const showDestinations = ref(false);
+const destinationMode = ref<"create" | "manage">("create");
+const destinationContentType = ref<SocialContentType>("short_video");
+const selectedDestinationAccountIds = ref<string[]>([]);
+const destinationError = ref("");
 const showLibraryFilters = ref(false);
 const libraryQuery = ref("");
 const librarySource = ref("");
@@ -77,7 +86,7 @@ const libraryPublishedFrom = ref("");
 const libraryPublishedTo = ref("");
 const libraryResults = ref<PostLibraryItem[] | null>(null);
 const librarySearching = ref(false);
-const { toastSuccess } = useAppToast();
+const { toast, toastError, toastSuccess } = useAppToast();
 
 const currentSite = computed(
   () => sites.sites.find((site) => site.id === selectedSiteId.value) || null,
@@ -151,18 +160,45 @@ const selectedVisibleVersions = computed(() =>
   selectedPost.value ? visibleVersionsFor(selectedPost.value) : [],
 );
 
+const includesYouTubeDestination = computed(() =>
+  selectedVisibleVersions.value.some((version) => version.platform === "youtube"),
+);
+
+const sharedEditor = computed(
+  () => editorScope.value === "shared" && selectedVisibleVersions.value.length > 1,
+);
+
+const editorVersions = computed(() =>
+  sharedEditor.value
+    ? selectedVisibleVersions.value
+    : selectedVersion.value ? [selectedVersion.value] : [],
+);
+
+const editorAssetManifest = computed(
+  () => selectedVersion.value?.assetManifest || [],
+);
+
+const sharedBodyMixed = computed(() => {
+  const [first, ...rest] = selectedVisibleVersions.value;
+  return Boolean(first && rest.some((version) => version.bodyText !== first.bodyText));
+});
+
+const sharedMediaMixed = computed(() => {
+  const [first, ...rest] = selectedVisibleVersions.value;
+  const firstManifest = JSON.stringify(first?.assetManifest || []);
+  return Boolean(first && rest.some(
+    (version) => JSON.stringify(version.assetManifest) !== firstManifest,
+  ));
+});
+
 const selectedPostReadOnly = computed(
   () => selectedPost.value?.post.sourceType === "legacy_content_bank_read_only",
 );
 
-const editorDirty = computed(() => {
-  const version = selectedVersion.value;
-  return Boolean(
-    version &&
-      (editorBody.value.trim() !== version.bodyText ||
-        (editorAccountId.value || null) !== version.targetAccountId),
-  );
-});
+const editorDirty = computed(() => editorVersions.value.some((version) =>
+  editorBody.value.trim() !== version.bodyText ||
+  (!sharedEditor.value && (editorAccountId.value || null) !== version.targetAccountId),
+));
 
 const titleDirty = computed(() =>
   Boolean(selectedPost.value && editorTitle.value.trim() !== selectedPost.value.post.ideaText),
@@ -181,41 +217,48 @@ const draftAccounts = computed(() => {
   });
 });
 
-const canPublish = computed(() =>
-  Boolean(
-    !selectedPostReadOnly.value &&
-      selectedVersion.value &&
-      editorBody.value.trim() &&
-      editorAccountId.value,
+const destinationAccounts = computed(() => draftAccounts.value.map((account) => {
+  const capability = capabilityFor(account.platform as SocialPlatform);
+  return {
+    account,
+    capability,
+    compatible: Boolean(
+      capability?.contentRules?.some((rule) => rule.contentType === destinationContentType.value),
+    ),
+  };
+}));
+
+const targetValidations = computed(() => selectedVisibleVersions.value.map((version) => ({
+  version,
+  ...validateVersion(
+    version,
+    editorVersions.value.some((candidate) => candidate.id === version.id)
+      ? editorBody.value
+      : version.bodyText,
+    sharedEditor.value && editorVersions.value.some((candidate) => candidate.id === version.id)
+      ? editorAssetManifest.value
+      : version.assetManifest,
   ),
-);
+})));
 
-const canSchedule = computed(() => {
-  const version = selectedVersion.value;
-  return Boolean(
-    version &&
-      canPublish.value &&
-      capabilities.value.find((item) => item.platform === version.platform)?.schedule,
-  );
-});
+const canPublish = computed(() => Boolean(
+  !selectedPostReadOnly.value &&
+  targetValidations.value.length > 0 &&
+  targetValidations.value.every((validation) => validation.contentValid && validation.accountValid),
+));
 
-const canPublishNow = computed(() => {
-  const version = selectedVersion.value;
-  return Boolean(
-    canPublish.value &&
-      capabilities.value.find((item) => item.platform === version?.platform)?.publish,
-  );
-});
+const canSchedule = computed(() => Boolean(
+  canPublish.value &&
+  targetValidations.value.every((validation) => validation.capability?.schedule),
+));
+
+const canPublishNow = computed(() => Boolean(
+  canPublish.value &&
+  targetValidations.value.every((validation) => validation.capability?.publish),
+));
 
 const canDeleteDraft = computed(() =>
-  Boolean(
-    selectedPost.value &&
-      !selectedPostReadOnly.value &&
-      selectedPost.value.versions.every(
-        (version) =>
-          version.approvalStatus === "draft" && !version.publicationStatus && !version.scheduledFor,
-      ),
-  ),
+  Boolean(selectedPost.value && canDeletePost(selectedPost.value)),
 );
 
 const advancedFiltersActive = computed(() =>
@@ -265,6 +308,159 @@ function accountInitials(version: PostVersion): string {
 function accountLabel(version: PostVersion): string {
   const account = accountForVersion(version);
   return `${platformLabel(version.platform)} · ${account?.displayName || account?.handle || "Connected account"}`;
+}
+
+function accountAvatarUrl(version: PostVersion): string | null {
+  return accountForVersion(version)?.avatarUrl || null;
+}
+
+function accountDisplayName(account: SocialAccountRow): string {
+  return account.displayName || account.handle || platformLabel(account.platform);
+}
+
+function accountInitialsForAccount(account: SocialAccountRow): string {
+  const parts = accountDisplayName(account).trim().split(/\s+/).filter(Boolean);
+  return (parts.length > 1
+    ? `${parts[0]![0]}${parts[parts.length - 1]![0]}`
+    : accountDisplayName(account).slice(0, 2)
+  ).toUpperCase();
+}
+
+function capabilityFor(platform: SocialPlatform): SocialPlatformCapabilities | null {
+  return capabilities.value.find((capability) => capability.platform === platform) || null;
+}
+
+function contentTypeFor(
+  capability: SocialPlatformCapabilities | null,
+  assets: PostVersion["assetManifest"],
+  format?: PostVersion["format"],
+): SocialContentType {
+  if (assets.some(isVideoAsset)) return "short_video";
+  if (assets.length > 1) return "carousel";
+  if (assets.length === 1) return "image";
+  if (format === "short_video" || format === "image" || format === "carousel") return format;
+  if (capability?.contentRules?.some((rule) => rule.contentType === "text")) return "text";
+  if (capability?.contentRules?.some((rule) => rule.contentType === destinationContentType.value)) {
+    return destinationContentType.value;
+  }
+  return capability?.contentRules?.[0]?.contentType || "text";
+}
+
+function mimeTypeAllowed(mimeType: string | undefined, allowed: string[]): boolean {
+  if (!mimeType) return false;
+  const normalized = mimeType.split(";", 1)[0]!.trim().toLowerCase();
+  return allowed.some((entry) =>
+    entry.endsWith("/*")
+      ? normalized.startsWith(entry.slice(0, -1))
+      : normalized === entry,
+  );
+}
+
+function validateVersion(
+  version: PostVersion,
+  bodyText = version.bodyText,
+  assets = version.assetManifest,
+): {
+  capability: SocialPlatformCapabilities | null;
+  rule: SocialPlatformContentRule | null;
+  contentType: SocialContentType;
+  contentValid: boolean;
+  accountValid: boolean;
+  issue: string | null;
+} {
+  const capability = capabilityFor(version.platform);
+  const contentType = contentTypeFor(capability, assets, version.format);
+  const rule = capability?.contentRules?.find((candidate) =>
+    candidate.contentType === contentType,
+  ) || null;
+  const account = accountForVersion(version);
+  const accountValid = Boolean(account && account.status === "active");
+  let issue: string | null = null;
+
+  if (version.platform === "youtube" && !editorTitle.value.trim()) {
+    issue = "Add a YouTube title.";
+  } else if (
+    version.platform === "youtube" &&
+    Array.from(editorTitle.value.trim()).length > 100
+  ) {
+    issue = "Shorten the YouTube title to 100 characters.";
+  } else if (!rule) {
+    issue = `${platformLabel(version.platform)} does not support this content type in ME3 yet.`;
+  } else if (rule.requiresText && !bodyText.trim()) {
+    issue = "Add post text.";
+  } else if (
+    rule.maxTextCharacters !== null &&
+    Array.from(bodyText.trim()).length > rule.maxTextCharacters
+  ) {
+    issue = `Shorten the text to ${rule.maxTextCharacters.toLocaleString()} characters.`;
+  } else if (assets.length < rule.minMediaItems) {
+    issue = rule.contentType === "short_video"
+      ? "Add one video."
+      : `Add at least ${rule.minMediaItems} image${rule.minMediaItems === 1 ? "" : "s"}.`;
+  } else if (assets.length > rule.maxMediaItems) {
+    issue = `Use no more than ${rule.maxMediaItems} media item${rule.maxMediaItems === 1 ? "" : "s"}.`;
+  } else {
+    for (const asset of assets) {
+      const kind = isVideoAsset(asset) ? "video" : "image";
+      if (!rule.allowedMediaKinds.includes(kind)) {
+        issue = `${rule.label} does not support ${kind} media.`;
+        break;
+      }
+      if (rule.allowedMimeTypes.length && !mimeTypeAllowed(asset.mimeType, rule.allowedMimeTypes)) {
+        issue = `Use a supported ${kind} file type.`;
+        break;
+      }
+      if (
+        rule.maxBytesPerItem !== null &&
+        asset.byteLength &&
+        asset.byteLength > rule.maxBytesPerItem
+      ) {
+        issue = `This ${kind} is too large for ${platformLabel(version.platform)}.`;
+        break;
+      }
+    }
+  }
+
+  if (!issue && !accountValid) {
+    issue = `Reconnect the ${platformLabel(version.platform)} account.`;
+  }
+  return {
+    capability,
+    rule,
+    contentType,
+    contentValid: !issue || (!accountValid && issue.startsWith("Reconnect")),
+    accountValid,
+    issue,
+  };
+}
+
+function canDeletePost(detail: SocialPostDetail): boolean {
+  if (detail.post.sourceType === "legacy_content_bank_read_only") return false;
+  return detail.versions.every((version) =>
+    !version.scheduledFor &&
+    version.publicationStatus !== "scheduled" &&
+    version.publicationStatus !== "queued" &&
+    version.publicationStatus !== "publishing" &&
+    version.publicationStatus !== "published",
+  );
+}
+
+function canRemoveVersion(version: PostVersion): boolean {
+  return selectedPost.value?.versions.length !== 1 &&
+    version.approvalStatus === "draft" &&
+    !version.scheduledFor &&
+    !version.publicationStatus;
+}
+
+function destinationVersion(account: SocialAccountRow): PostVersion | null {
+  return selectedPost.value?.versions.find(
+    (version) => version.platform === account.platform,
+  ) || null;
+}
+
+function destinationLocked(account: SocialAccountRow): boolean {
+  const version = destinationMode.value === "manage" ? destinationVersion(account) : null;
+  return Boolean(version && !canRemoveVersion(version));
 }
 
 function isVideoAsset(asset: PostVersion["assetManifest"][number]): boolean {
@@ -344,8 +540,12 @@ function setActiveMode(value: string) {
 
 function selectPost(detail: SocialPostDetail) {
   selectedPostId.value = detail.post.id;
-  const version = visibleVersionsFor(detail)[0] || null;
-  selectVersion(version);
+  const versions = visibleVersionsFor(detail);
+  if (versions.length > 1) {
+    selectSharedVersions(versions);
+  } else {
+    selectVersion(versions[0] || null);
+  }
 }
 
 async function searchLibrary() {
@@ -395,6 +595,7 @@ async function applyLibraryFilters() {
 }
 
 function selectVersion(version: PostVersion | null) {
+  editorScope.value = "platform";
   selectedVersionId.value = version?.id || null;
   instagramPreviewIndex.value = 0;
   editorTitle.value = selectedPost.value?.post.ideaText || "";
@@ -402,6 +603,16 @@ function selectVersion(version: PostVersion | null) {
   editorAccountId.value = version?.targetAccountId || activeAccounts.value.find(
     (account) => account.platform === version?.platform,
   )?.id || "";
+}
+
+function selectSharedVersions(versions = selectedVisibleVersions.value) {
+  const first = versions[0] || null;
+  editorScope.value = versions.length > 1 ? "shared" : "platform";
+  selectedVersionId.value = first?.id || null;
+  instagramPreviewIndex.value = 0;
+  editorTitle.value = selectedPost.value?.post.ideaText || "";
+  editorBody.value = first?.bodyText || "";
+  editorAccountId.value = first?.targetAccountId || "";
 }
 
 function setInstagramPreview(index: number) {
@@ -469,22 +680,31 @@ function replaceVersion(version: PostVersion) {
         }
       : detail,
   );
-  selectVersion(version);
+  if (!sharedEditor.value && selectedVersionId.value === version.id) {
+    selectVersion(version);
+  }
 }
 
 function replacePost(detail: SocialPostDetail) {
   posts.value = posts.value.map((item) => (item.post.id === detail.post.id ? detail : item));
   if (selectedPostId.value === detail.post.id) {
     const version = detail.versions.find((item) => item.id === selectedVersionId.value) || detail.versions[0] || null;
-    selectVersion(version);
+    if (sharedEditor.value && visibleVersionsFor(detail).length > 1) {
+      selectSharedVersions(visibleVersionsFor(detail));
+    } else {
+      selectVersion(version);
+    }
   }
 }
 
 async function saveDraft() {
   const post = selectedPost.value;
-  const version = selectedVersion.value;
-  if (!post || !version || selectedPostReadOnly.value || !editorBody.value.trim()) return;
+  const versions = [...editorVersions.value];
+  if (!post || versions.length === 0 || selectedPostReadOnly.value || !editorBody.value.trim()) return;
   if (!editorDirty.value && !titleDirty.value) return;
+  const wasShared = sharedEditor.value;
+  const selectedId = selectedVersionId.value;
+  const nextBodyText = editorBody.value.trim();
   saving.value = true;
   error.value = "";
   try {
@@ -497,26 +717,41 @@ async function saveDraft() {
       );
     }
     if (editorDirty.value) {
-      replaceVersion(
-        await social.updatePostVersion(version.id, {
-          bodyText: editorBody.value,
-          targetAccountId: editorAccountId.value || null,
-        }),
+      for (const version of versions) {
+        replaceVersion(await social.updatePostVersion(version.id, {
+          bodyText: nextBodyText,
+          ...(wasShared
+            ? {}
+            : { targetAccountId: editorAccountId.value || null }),
+        }));
+      }
+    }
+    const current = posts.value.find((detail) => detail.post.id === post.post.id);
+    if (current) {
+      if (wasShared) selectSharedVersions(visibleVersionsFor(current));
+      else selectVersion(
+        current.versions.find((version) => version.id === selectedId) || current.versions[0] || null,
       );
     }
-    toastSuccess("Draft saved. Approval was removed if its content changed.");
+    toastSuccess(wasShared && versions.length > 1
+      ? `Shared copy saved to ${versions.length} platforms.`
+      : "Draft saved. Approval was removed if its content changed.");
   } catch (value) {
-    social.setErrorFromApi(value, "Failed to save this Version");
-    error.value = social.error || "Failed to save this Version";
+    social.setErrorFromApi(value, "Failed to save this draft");
+    error.value = social.error || "Failed to save this draft";
   } finally {
     saving.value = false;
   }
 }
 
-async function prepareVersionForPublication(): Promise<PostVersion | null> {
+async function prepareVersionsForPublication(): Promise<PostVersion[]> {
   const post = selectedPost.value;
-  const version = selectedVersion.value;
-  if (!post || !version || selectedPostReadOnly.value || !canPublish.value) return null;
+  const versions = [...selectedVisibleVersions.value];
+  if (!post || versions.length === 0 || selectedPostReadOnly.value || !canPublish.value) return [];
+  const wasShared = sharedEditor.value;
+  const editedVersionIds = new Set(editorVersions.value.map((version) => version.id));
+  const selectedId = selectedVersionId.value;
+  const prepared: PostVersion[] = [];
 
   if (titleDirty.value) {
     replacePost(
@@ -526,23 +761,85 @@ async function prepareVersionForPublication(): Promise<PostVersion | null> {
       }),
     );
   }
-  if (editorDirty.value || version.approvalStatus !== "approved") {
+
+  for (const version of versions) {
     const publishable = await social.updatePostVersion(version.id, {
-      bodyText: editorBody.value,
-      targetAccountId: editorAccountId.value,
+      bodyText: editedVersionIds.has(version.id) ? editorBody.value.trim() : version.bodyText,
+      targetAccountId: !wasShared && version.id === selectedId
+        ? editorAccountId.value
+        : version.targetAccountId,
       approvalStatus: "approved",
     });
     replaceVersion(publishable);
-    return publishable;
+    prepared.push(publishable);
   }
-  return version;
+
+  const current = posts.value.find((detail) => detail.post.id === post.post.id);
+  if (current) {
+    if (wasShared) selectSharedVersions(visibleVersionsFor(current));
+    else selectVersion(
+      current.versions.find((version) => version.id === selectedId) || current.versions[0] || null,
+    );
+  }
+  return prepared;
+}
+
+function openCreateDraft() {
+  destinationMode.value = "create";
+  destinationContentType.value = "short_video";
+  selectedDestinationAccountIds.value = [];
+  destinationError.value = "";
+  showDestinations.value = true;
+}
+
+function openManageDestinations() {
+  const detail = selectedPost.value;
+  if (!detail || selectedPostReadOnly.value) return;
+  destinationMode.value = "manage";
+  const base = selectedVersion.value || detail.versions[0] || null;
+  destinationContentType.value = base
+    ? contentTypeFor(capabilityFor(base.platform), base.assetManifest, base.format)
+    : "short_video";
+  selectedDestinationAccountIds.value = detail.versions
+    .map((version) => version.targetAccountId)
+    .filter((accountId): accountId is string => Boolean(accountId));
+  destinationError.value = "";
+  showDestinations.value = true;
+}
+
+function toggleDestinationAccount(accountId: string) {
+  const option = destinationAccounts.value.find((item) => item.account.id === accountId);
+  if (!option?.compatible) return;
+  if (
+    destinationLocked(option.account) &&
+    selectedDestinationAccountIds.value.includes(accountId)
+  ) return;
+  selectedDestinationAccountIds.value = selectedDestinationAccountIds.value.includes(accountId)
+    ? selectedDestinationAccountIds.value.filter((id) => id !== accountId)
+    : [...selectedDestinationAccountIds.value, accountId];
+}
+
+async function saveDestinations() {
+  if (selectedDestinationAccountIds.value.length === 0) {
+    destinationError.value = "Choose at least one platform.";
+    return;
+  }
+  if (destinationMode.value === "create") {
+    await createDraft();
+  } else {
+    await updateDestinations();
+  }
 }
 
 async function createDraft() {
   const site = currentSite.value;
-  if (!site || draftAccounts.value.length === 0 || saving.value) return;
+  const selectedAccounts = draftAccounts.value.filter((account) =>
+    selectedDestinationAccountIds.value.includes(account.id),
+  );
+  if (!site || selectedAccounts.length === 0 || saving.value) return;
   const draftText = "Untitled draft";
   saving.value = true;
+  destinationError.value = "";
   error.value = "";
   try {
     const detail = await social.createSocialPost({
@@ -551,9 +848,10 @@ async function createDraft() {
       sourceSnapshot: draftText,
       sourceText: draftText,
       ideaText: draftText,
-      versions: draftAccounts.value.map((account) => {
+      versions: selectedAccounts.map((account) => {
         return {
           platform: account.platform as SocialPlatform,
+          format: destinationContentType.value === "text" ? "post" as const : destinationContentType.value,
           bodyText: draftText,
           targetAccountId: account.id,
         };
@@ -561,11 +859,60 @@ async function createDraft() {
     });
     posts.value = [detail, ...posts.value];
     activeMode.value = "drafts";
+    showDestinations.value = false;
     selectPost(detail);
-    toastSuccess("New draft added. Give it a title and replace the starter text.");
+    toastSuccess(`Draft created for ${selectedAccounts.length} platform${selectedAccounts.length === 1 ? "" : "s"}.`);
   } catch (value) {
     social.setErrorFromApi(value, "Failed to create a draft");
-    error.value = social.error || "Failed to create a draft";
+    destinationError.value = social.error || "Failed to create a draft";
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function updateDestinations() {
+  const detail = selectedPost.value;
+  const base = selectedVersion.value || detail?.versions[0] || null;
+  if (!detail || !base || saving.value) return;
+  const selectedAccounts = draftAccounts.value.filter((account) =>
+    selectedDestinationAccountIds.value.includes(account.id),
+  );
+  const selectedPlatforms = new Set(selectedAccounts.map((account) => account.platform));
+  const additions = selectedAccounts.filter((account) =>
+    !detail.versions.some((version) => version.platform === account.platform),
+  );
+  const removals = detail.versions.filter((version) =>
+    !selectedPlatforms.has(version.platform) && canRemoveVersion(version),
+  );
+
+  saving.value = true;
+  destinationError.value = "";
+  try {
+    let nextDetail = detail;
+    for (const account of additions) {
+      nextDetail = await social.addPostVersion(nextDetail.post.id, {
+        platform: account.platform as SocialPlatform,
+        targetAccountId: account.id,
+        format: destinationContentType.value === "text" ? "post" : destinationContentType.value,
+        bodyText: editorBody.value.trim() || base.bodyText,
+        assetManifest: editorAssetManifest.value,
+      });
+      posts.value = posts.value.map((item) =>
+        item.post.id === nextDetail.post.id ? nextDetail : item,
+      );
+    }
+    for (const version of removals) {
+      nextDetail = await social.deletePostVersion(version.id);
+      posts.value = posts.value.map((item) =>
+        item.post.id === nextDetail.post.id ? nextDetail : item,
+      );
+    }
+    showDestinations.value = false;
+    selectPost(nextDetail);
+    toastSuccess("Publishing platforms updated.");
+  } catch (value) {
+    social.setErrorFromApi(value, "Failed to update publishing platforms");
+    destinationError.value = social.error || "Failed to update publishing platforms";
   } finally {
     saving.value = false;
   }
@@ -591,19 +938,27 @@ async function loadLocalDemo() {
   }
 }
 
-async function deleteDraft() {
-  const post = selectedPost.value;
-  if (!post || !canDeleteDraft.value || saving.value) return;
-  if (!window.confirm(`Delete “${post.post.ideaText}”? This cannot be undone.`)) return;
+async function deleteDraft(detail = selectedPost.value) {
+  if (!detail || !canDeletePost(detail) || saving.value) return;
+  const hasFailedHistory = detail.versions.some((version) =>
+    version.publicationStatus === "failed" || version.publicationStatus === "cancelled",
+  );
+  if (!window.confirm(
+    hasFailedHistory
+      ? `Remove “${detail.post.ideaText}” from Drafts? Its failed delivery history will be retained.`
+      : `Delete “${detail.post.ideaText}”? This cannot be undone.`,
+  )) return;
   saving.value = true;
   error.value = "";
   try {
-    await social.deleteSocialPost(post.post.id, post.post.updatedAt);
-    posts.value = posts.value.filter((detail) => detail.post.id !== post.post.id);
-    selectedPostId.value = null;
-    selectVersion(null);
-    ensureVisibleSelection();
-    toastSuccess("Draft deleted.");
+    await social.deleteSocialPost(detail.post.id, detail.post.updatedAt);
+    posts.value = posts.value.filter((postDetail) => postDetail.post.id !== detail.post.id);
+    if (selectedPostId.value === detail.post.id) {
+      selectedPostId.value = null;
+      selectVersion(null);
+      ensureVisibleSelection();
+    }
+    toastSuccess(hasFailedHistory ? "Draft removed. Failed delivery history was retained." : "Draft deleted.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to delete this draft");
     error.value = social.error || "Failed to delete this draft";
@@ -640,7 +995,7 @@ async function loadMediaFiles() {
 }
 
 async function openMediaPicker() {
-  if (!selectedVersion.value || selectedPostReadOnly.value) return;
+  if (editorVersions.value.length === 0 || selectedPostReadOnly.value) return;
   showMediaPicker.value = true;
   selectedMediaFileIds.value = [];
   mediaFolderId.value = null;
@@ -695,43 +1050,59 @@ function driveFileAsset(
   };
 }
 
+async function updateEditorMedia(
+  assetManifest: PostVersion["assetManifest"],
+  successMessage: string,
+) {
+  const versions = [...editorVersions.value];
+  const wasShared = sharedEditor.value;
+  const selectedId = selectedVersionId.value;
+  for (const version of versions) {
+    replaceVersion(await social.updatePostVersion(version.id, { assetManifest }));
+  }
+  const current = selectedPost.value;
+  if (current) {
+    if (wasShared) selectSharedVersions(selectedVisibleVersions.value);
+    else selectVersion(
+      current.versions.find((version) => version.id === selectedId) || current.versions[0] || null,
+    );
+  }
+  toastSuccess(successMessage);
+}
+
 async function attachSelectedMedia() {
-  const version = selectedVersion.value;
-  if (!version || selectedMediaFileIds.value.length === 0) return;
+  if (editorVersions.value.length === 0 || selectedMediaFileIds.value.length === 0) return;
   const files = selectedMediaFileIds.value
     .map((id) => mediaFiles.value.find((file) => file.id === id))
     .filter((file): file is DriveFile => Boolean(file));
   if (!files.length) return;
   const selectedVideo = files.find(isVideoFile);
-  const existingVideo = version.assetManifest.some(isVideoAsset);
-  if ((selectedVideo && version.assetManifest.length > 0) || (existingVideo && files.length > 0)) {
+  const existingVideo = editorAssetManifest.value.some(isVideoAsset);
+  if ((selectedVideo && editorAssetManifest.value.length > 0) || (existingVideo && files.length > 0)) {
     mediaError.value = "A video must be attached by itself. Remove the existing media first.";
     return;
   }
   const existingIds = new Set(
-    version.assetManifest.map((asset) => asset.fileId || asset.url),
+    editorAssetManifest.value.map((asset) => asset.fileId || asset.url),
   );
   const newFiles = files.filter(
     (file) => !existingIds.has(file.id) && !existingIds.has(driveFileUrl(file.id)),
   );
-  const isInstagram = version.platform === "instagram" || version.platform === "instagram_business";
-  if (isInstagram && version.assetManifest.length + newFiles.length > 10) {
-    mediaError.value = "Instagram carousels support up to 10 images.";
-    return;
-  }
   saving.value = true;
   mediaError.value = "";
   try {
     const assetManifest = [
-      ...version.assetManifest.map((asset, index) => ({ ...asset, assetIndex: index })),
+      ...editorAssetManifest.value.map((asset, index) => ({ ...asset, assetIndex: index })),
       ...newFiles
-        .map((file, index) => driveFileAsset(file, version.assetManifest.length + index)),
+        .map((file, index) => driveFileAsset(file, editorAssetManifest.value.length + index)),
     ].map((asset, index) => ({ ...asset, assetIndex: index }));
-    replaceVersion(await social.updatePostVersion(version.id, { assetManifest }));
+    await updateEditorMedia(
+      assetManifest,
+      selectedVideo
+        ? `Video attached to ${editorVersions.value.length} platform${editorVersions.value.length === 1 ? "" : "s"}.`
+        : files.length === 1 ? "Image attached." : `${files.length} images attached in selection order.`,
+    );
     showMediaPicker.value = false;
-    toastSuccess(selectedVideo
-      ? "Video attached."
-      : files.length === 1 ? "Image attached." : `${files.length} images attached in selection order.`);
   } catch (value) {
     social.setErrorFromApi(value, "Failed to attach images");
     mediaError.value = social.error || "Failed to attach images";
@@ -741,28 +1112,25 @@ async function attachSelectedMedia() {
 }
 
 async function moveMedia(fromIndex: number, offset: -1 | 1) {
-  const version = selectedVersion.value;
   const toIndex = fromIndex + offset;
   if (
-    !version ||
+    editorVersions.value.length === 0 ||
     selectedPostReadOnly.value ||
     saving.value ||
     toIndex < 0 ||
-    toIndex >= version.assetManifest.length
+    toIndex >= editorAssetManifest.value.length
   ) return;
-  const assetManifest = [...version.assetManifest];
+  const assetManifest = [...editorAssetManifest.value];
   const [moved] = assetManifest.splice(fromIndex, 1);
   if (!moved) return;
   assetManifest.splice(toIndex, 0, moved);
   saving.value = true;
   error.value = "";
   try {
-    replaceVersion(
-      await social.updatePostVersion(version.id, {
-        assetManifest: assetManifest.map((asset, index) => ({ ...asset, assetIndex: index })),
-      }),
+    await updateEditorMedia(
+      assetManifest.map((asset, index) => ({ ...asset, assetIndex: index })),
+      "Media order updated.",
     );
-    toastSuccess("Media order updated.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to reorder media");
     error.value = social.error || "Failed to reorder media";
@@ -772,17 +1140,14 @@ async function moveMedia(fromIndex: number, offset: -1 | 1) {
 }
 
 async function removeMedia(assetUrl: string) {
-  const version = selectedVersion.value;
-  if (!version || selectedPostReadOnly.value || saving.value) return;
+  if (editorVersions.value.length === 0 || selectedPostReadOnly.value || saving.value) return;
   saving.value = true;
   error.value = "";
   try {
-    replaceVersion(
-      await social.updatePostVersion(version.id, {
-        assetManifest: version.assetManifest.filter((asset) => asset.url !== assetUrl),
-      }),
+    await updateEditorMedia(
+      editorAssetManifest.value.filter((asset) => asset.url !== assetUrl),
+      "Media removed.",
     );
-    toastSuccess("Image removed.");
   } catch (value) {
     social.setErrorFromApi(value, "Failed to remove this image");
     error.value = social.error || "Failed to remove this image";
@@ -792,7 +1157,7 @@ async function removeMedia(assetUrl: string) {
 }
 
 function openSchedule() {
-  if (!canSchedule.value && !canPublishNow.value) return;
+  if (!canSchedule.value) return;
   const start = new Date(Date.now() + 60 * 60 * 1000);
   scheduleDate.value = start.toISOString().slice(0, 10);
   scheduleTime.value = start.toTimeString().slice(0, 5);
@@ -818,21 +1183,30 @@ async function schedulePost() {
   scheduling.value = true;
   scheduleError.value = "";
   try {
-    const version = await prepareVersionForPublication();
-    if (!version) return;
-    const publication = await social.createPostVersionPublication(version.id, {
-      scheduledFor: resolution.value,
-      timezone: scheduleTimezone.value,
-      requestContext: { surface: "social-editor" },
-    });
-    replaceVersion({
-      ...version,
-      scheduledFor: publication.scheduledFor,
-      timezone: publication.timezone,
-      publicationStatus: publication.status,
-    });
+    const versions = await prepareVersionsForPublication();
+    if (!versions.length) return;
+    const results = await Promise.allSettled(versions.map(async (version) => {
+      const publication = await social.createPostVersionPublication(version.id, {
+        scheduledFor: resolution.value,
+        timezone: scheduleTimezone.value,
+        requestContext: { surface: "social-editor", batch: true },
+      });
+      replaceVersion({
+        ...version,
+        scheduledFor: publication.scheduledFor,
+        timezone: publication.timezone,
+        publicationStatus: publication.status,
+      });
+      return publication;
+    }));
+    const succeeded = results.filter((result) => result.status === "fulfilled").length;
+    const failed = results.length - succeeded;
+    if (failed) {
+      scheduleError.value = `${succeeded} platform${succeeded === 1 ? "" : "s"} scheduled; ${failed} need attention. Successful schedules were kept.`;
+      return;
+    }
     showSchedule.value = false;
-    toastSuccess("Post scheduled.");
+    toastSuccess(`Post scheduled for ${succeeded} platform${succeeded === 1 ? "" : "s"}.`);
   } catch (value) {
     social.setErrorFromApi(value, "Failed to schedule this post");
     scheduleError.value = social.error || "Failed to schedule this post";
@@ -844,24 +1218,75 @@ async function schedulePost() {
 async function publishNow() {
   if (!canPublishNow.value) return;
   scheduling.value = true;
-  scheduleError.value = "";
+  publishError.value = "";
   try {
-    const version = await prepareVersionForPublication();
-    if (!version) return;
-    const publication = await social.publishPostVersion(version.id);
-    replaceVersion({
-      ...version,
-      publicationStatus: publication.status,
-      platformPostUrl: publication.platformPostUrl,
-      publishedAt: publication.publishedAt,
-    });
-    showSchedule.value = false;
-    toastSuccess(version.platform === "tiktok"
-      ? "TikTok draft queued. You’ll receive an inbox notification in TikTok to finish editing and post it."
-      : "Post queued to publish now.");
+    const versions = await prepareVersionsForPublication();
+    if (!versions.length) return;
+    const results = await Promise.allSettled(versions.map(async (version) => {
+      const publication = await social.publishPostVersion(version.id);
+      replaceVersion({
+        ...version,
+        publicationStatus: publication.status,
+        platformPostUrl: publication.platformPostUrl,
+        publishedAt: publication.publishedAt,
+        failureClass: publication.failureClass,
+        errorMessage: publication.errorMessage,
+      });
+      return publication;
+    }));
+    const publications = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
+    const rejected = results.filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    const failedPublications = publications.filter(
+      (publication) => publication.status === "failed" || publication.status === "cancelled",
+    );
+    const failed = rejected.length + failedPublications.length;
+    const succeeded = results.length - failed;
+    if (failed > 0) {
+      const providerMessage = failedPublications.find(
+        (publication) => publication.errorMessage,
+      )?.errorMessage;
+      if (!providerMessage && rejected[0]) {
+        social.setErrorFromApi(rejected[0].reason, "Failed to publish this post");
+      }
+      const failureReason =
+        providerMessage ||
+        social.error ||
+        "One or more platforms could not start publishing.";
+      publishError.value = succeeded > 0
+        ? `${succeeded} platform${succeeded === 1 ? "" : "s"} started; ${failed} failed. ${failureReason}`
+        : failureReason;
+      toastError(publishError.value);
+      return;
+    }
+    const includesTikTok = versions.some((version) => version.platform === "tiktok");
+    const inProgress = publications.filter(
+      (publication) =>
+        publication.status === "queued" ||
+        publication.status === "publishing" ||
+        publication.status === "scheduled",
+    );
+    if (inProgress.length > 0) {
+      toast(
+        `Sending to ${inProgress.length} platform${inProgress.length === 1 ? "" : "s"}…` +
+        (includesTikTok ? " TikTok will receive a creator draft to finish in the app." : ""),
+      );
+    } else if (includesTikTok) {
+      toastSuccess(
+        succeeded === 1
+          ? "TikTok draft sent to your inbox."
+          : `Published to ${succeeded} platforms. The TikTok draft was sent to your inbox.`,
+      );
+    } else {
+      toastSuccess(`Published to ${succeeded} platform${succeeded === 1 ? "" : "s"}.`);
+    }
   } catch (value) {
     social.setErrorFromApi(value, "Failed to publish this post");
-    scheduleError.value = social.error || "Failed to publish this post";
+    publishError.value = social.error || "Failed to publish this post";
+    toastError(publishError.value);
   } finally {
     scheduling.value = false;
   }
@@ -869,6 +1294,13 @@ async function publishNow() {
 
 watch(mediaFolderId, () => {
   if (showMediaPicker.value) void loadMediaFiles();
+});
+
+watch(destinationContentType, () => {
+  selectedDestinationAccountIds.value = selectedDestinationAccountIds.value.filter((accountId) => {
+    const option = destinationAccounts.value.find((item) => item.account.id === accountId);
+    return Boolean(option && (option.compatible || destinationLocked(option.account)));
+  });
 });
 
 watch(selectedSiteId, () => {
@@ -964,7 +1396,7 @@ function currentQueryParam(name: string): string | null {
             aria-label="New Post"
             title="New Post"
             :disabled="!currentSite || draftAccounts.length === 0 || saving"
-            @click="createDraft"
+            @click="openCreateDraft"
           >
             <UiIcon name="SquarePen" :size="18" aria-hidden="true" />
           </Button>
@@ -1003,40 +1435,60 @@ function currentQueryParam(name: string): string | null {
               size="compact"
               type="button"
               :disabled="draftAccounts.length === 0 || saving"
-              @click="createDraft"
+              @click="openCreateDraft"
             >
               Write a Post
             </Button>
           </div>
           <template v-else>
-            <button
+            <article
               v-for="detail in visiblePosts"
               :key="detail.post.id"
-              type="button"
               class="post-row"
               :class="{ 'post-row--active': selectedPostId === detail.post.id }"
-              :aria-current="selectedPostId === detail.post.id ? 'true' : undefined"
-              @click="selectPost(detail)"
             >
-              <span class="post-row__meta">
-                <time :datetime="detail.post.updatedAt">{{ formatDate(detail.post.updatedAt) }}</time>
-              </span>
-              <strong>{{ detail.post.ideaText }}</strong>
-              <span class="post-row__footer">
-                <span class="platform-list">
-                  <span v-for="version in visibleVersionsFor(detail)" :key="version.id" class="platform-chip" :title="accountLabel(version)">
-                    <span :class="['social-account-avatar', 'social-account-avatar--compact', `social-account-avatar--${version.platform}`]" aria-hidden="true">
-                      {{ accountInitials(version) }}
-                      <span class="social-account-avatar__platform">
-                        <svg viewBox="0 0 24 24"><path :d="platformIconPath(version.platform)" /></svg>
-                      </span>
-                    </span>
-                    <span class="sr-only">{{ accountLabel(version) }}</span>
-                  </span>
+              <button
+                type="button"
+                class="post-row__select"
+                :aria-current="selectedPostId === detail.post.id ? 'true' : undefined"
+                @click="selectPost(detail)"
+              >
+                <span class="post-row__meta">
+                  <time :datetime="detail.post.updatedAt">{{ formatDate(detail.post.updatedAt) }}</time>
                 </span>
-                <span class="row-status">{{ postStatus(detail) }}</span>
-              </span>
-            </button>
+                <strong>{{ detail.post.ideaText }}</strong>
+                <span class="post-row__footer">
+                  <span class="platform-list">
+                    <span v-for="version in visibleVersionsFor(detail)" :key="version.id" class="platform-chip" :title="accountLabel(version)">
+                      <span :class="['social-account-avatar', 'social-account-avatar--compact', `social-account-avatar--${version.platform}`]" aria-hidden="true">
+                        <img v-if="accountAvatarUrl(version)" class="social-account-avatar__image" :src="accountAvatarUrl(version)!" alt="" />
+                        <template v-else>{{ accountInitials(version) }}</template>
+                        <span class="social-account-avatar__platform">
+                          <svg viewBox="0 0 24 24"><path :d="platformIconPath(version.platform)" /></svg>
+                        </span>
+                      </span>
+                      <span class="sr-only">{{ accountLabel(version) }}</span>
+                    </span>
+                  </span>
+                  <span class="row-status">{{ postStatus(detail) }}</span>
+                </span>
+              </button>
+              <Button
+                v-if="selectedPostId === detail.post.id && canDeletePost(detail)"
+                class="post-row__delete"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
+                aria-label="Delete selected draft"
+                title="Delete draft"
+                :disabled="saving"
+                @click="deleteDraft(detail)"
+              >
+                <UiIcon name="Trash2" :size="16" aria-hidden="true" />
+              </Button>
+            </article>
           </template>
           </section>
 
@@ -1052,6 +1504,9 @@ function currentQueryParam(name: string): string | null {
                 :disabled="saving"
                 aria-label="Post title"
               />
+              <span v-if="includesYouTubeDestination" class="post-title-guidance">
+                Used as the YouTube title. Private uploads are reviewed in YouTube Studio.
+              </span>
               <a
                 v-if="externalSourceUrl(selectedPost)"
                 class="source-link"
@@ -1090,28 +1545,60 @@ function currentQueryParam(name: string): string | null {
             </span>
           </aside>
 
-          <div class="version-tabs" role="group" aria-label="Connected social accounts">
+          <div class="version-tabs" role="tablist" aria-label="Post versions">
+            <button
+              v-if="selectedVisibleVersions.length > 1"
+              type="button"
+              role="tab"
+              :aria-selected="sharedEditor"
+              :class="['version-tab', 'version-tab--shared', { 'version-tab--active': sharedEditor }]"
+              title="Edit shared copy and media for every selected platform"
+              @click="selectSharedVersions()"
+            >
+              <UiIcon name="Copy" :size="17" aria-hidden="true" />
+              <span>All</span>
+            </button>
             <button
               v-for="version in selectedVisibleVersions"
               :key="version.id"
               type="button"
-              :aria-pressed="selectedVersionId === version.id"
-              :class="['version-tab', { 'version-tab--active': selectedVersionId === version.id }]"
+              role="tab"
+              :aria-selected="!sharedEditor && selectedVersionId === version.id"
+              :class="['version-tab', { 'version-tab--active': !sharedEditor && selectedVersionId === version.id }]"
               :title="accountLabel(version)"
               @click="selectVersion(version)"
             >
               <span :class="['social-account-avatar', `social-account-avatar--${version.platform}`]" aria-hidden="true">
-                {{ accountInitials(version) }}
+                <img v-if="accountAvatarUrl(version)" class="social-account-avatar__image" :src="accountAvatarUrl(version)!" alt="" />
+                <template v-else>{{ accountInitials(version) }}</template>
                 <span class="social-account-avatar__platform">
                   <svg viewBox="0 0 24 24"><path :d="platformIconPath(version.platform)" /></svg>
                 </span>
               </span>
               <span class="sr-only">{{ accountLabel(version) }}</span>
             </button>
+            <button
+              v-if="!selectedPostReadOnly && activeMode === 'drafts'"
+              type="button"
+              class="version-tab version-tab--add"
+              aria-label="Add or remove publishing platforms"
+              title="Add or remove platforms"
+              @click="openManageDestinations"
+            >
+              <UiIcon name="Plus" :size="18" aria-hidden="true" />
+            </button>
           </div>
 
           <div v-if="selectedVersion" class="version-workspace">
             <div class="version-editor">
+              <div class="editor-context">
+                <strong>{{ sharedEditor ? 'All selected platforms' : platformLabel(selectedVersion.platform) }}</strong>
+                <span v-if="sharedEditor">Shared edits replace copy and media on every selected platform. Open a platform tab to customise it.</span>
+                <span v-else>Edit only this platform version.</span>
+              </div>
+              <div v-if="sharedEditor && (sharedBodyMixed || sharedMediaMixed)" class="state-banner shared-variation-notice" role="status">
+                Some platforms already have custom {{ sharedBodyMixed && sharedMediaMixed ? 'copy and media' : sharedBodyMixed ? 'copy' : 'media' }}. Saving here will replace those custom fields across all selected platforms.
+              </div>
               <label class="field">
                 <span class="sr-only">Post text</span>
                 <textarea
@@ -1121,6 +1608,12 @@ function currentQueryParam(name: string): string | null {
                   :readonly="selectedPostReadOnly"
                 />
               </label>
+              <div class="editor-validation-summary" aria-live="polite">
+                <span>{{ Array.from(editorBody).length.toLocaleString() }} characters</span>
+                <span v-if="!sharedEditor && targetValidations.find((item) => item.version.id === selectedVersionId)?.issue" class="validation-issue">
+                  {{ targetValidations.find((item) => item.version.id === selectedVersionId)?.issue }}
+                </span>
+              </div>
 
               <div v-if="!selectedPostReadOnly" class="media-attachments">
                 <div class="media-attachments__toolbar">
@@ -1128,10 +1621,10 @@ function currentQueryParam(name: string): string | null {
                     <UiIcon name="Images" :size="17" aria-hidden="true" />
                     Add media
                   </Button>
-                  <span v-if="selectedVersion.assetManifest.length">{{ selectedVersion.assetManifest.length }} attached</span>
+                  <span v-if="editorAssetManifest.length">{{ editorAssetManifest.length }} attached</span>
                 </div>
-                <div v-if="selectedVersion.assetManifest.length" class="media-attachments__items">
-                  <figure v-for="(asset, index) in selectedVersion.assetManifest" :key="asset.url" class="media-attachment">
+                <div v-if="editorAssetManifest.length" class="media-attachments__items">
+                  <figure v-for="(asset, index) in editorAssetManifest" :key="asset.url" class="media-attachment">
                     <div class="media-attachment__preview">
                       <img v-if="!isVideoAsset(asset)" :src="asset.url" :alt="asset.altText || asset.filename || 'Attached media'" />
                       <video v-else :src="asset.url" muted preload="metadata" />
@@ -1139,12 +1632,12 @@ function currentQueryParam(name: string): string | null {
                         <UiIcon name="X" :size="14" aria-hidden="true" />
                       </Button>
                     </div>
-                    <div v-if="selectedVersion.assetManifest.length > 1" class="media-attachment__order">
+                    <div v-if="editorAssetManifest.length > 1" class="media-attachment__order">
                       <Button class="media-attachment__move" color="ghost" shape="soft" size="compact" icon-only type="button" :disabled="saving || index === 0" :aria-label="`Move ${asset.filename || 'media'} earlier`" @click="moveMedia(index, -1)">
                         <UiIcon name="ChevronLeft" :size="15" aria-hidden="true" />
                       </Button>
                       <span aria-hidden="true">{{ index + 1 }}</span>
-                      <Button class="media-attachment__move" color="ghost" shape="soft" size="compact" icon-only type="button" :disabled="saving || index === selectedVersion.assetManifest.length - 1" :aria-label="`Move ${asset.filename || 'media'} later`" @click="moveMedia(index, 1)">
+                      <Button class="media-attachment__move" color="ghost" shape="soft" size="compact" icon-only type="button" :disabled="saving || index === editorAssetManifest.length - 1" :aria-label="`Move ${asset.filename || 'media'} later`" @click="moveMedia(index, 1)">
                         <UiIcon name="ChevronRight" :size="15" aria-hidden="true" />
                       </Button>
                     </div>
@@ -1156,14 +1649,46 @@ function currentQueryParam(name: string): string | null {
                 <Button color="outline" shape="soft" size="compact" type="button" :disabled="saving || scheduling || (!editorDirty && !titleDirty)" @click="saveDraft">
                   Save Draft
                 </Button>
-                <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || scheduling || (!canSchedule && !canPublishNow)" @click="openSchedule">
-                  <UiIcon :name="selectedVersion.platform === 'tiktok' ? 'Upload' : 'CalendarDays'" :size="16" aria-hidden="true" />
-                  {{ selectedVersion.platform === "tiktok" ? "Send to TikTok" : "Schedule" }}
+                <Button color="outline" shape="soft" size="compact" type="button" :disabled="saving || scheduling || !canPublishNow" @click="publishNow">
+                  <UiIcon name="Send" :size="16" aria-hidden="true" />
+                  {{ scheduling ? 'Posting…' : 'Post now' }}
+                </Button>
+                <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || scheduling || !canSchedule" @click="openSchedule">
+                  <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
+                  Schedule
                 </Button>
               </div>
+              <p v-if="publishError" class="form-error editor-action-error" role="alert" aria-live="assertive">{{ publishError }}</p>
             </div>
 
-            <aside :class="['post-preview', `post-preview--${selectedVersion.platform}`]" aria-label="Post preview">
+            <aside v-if="sharedEditor" class="post-preview publishing-checks" aria-label="Publishing checks">
+              <header class="publishing-checks__header">
+                <div>
+                  <strong>Publishing checks</strong>
+                  <span>{{ targetValidations.length }} selected destination{{ targetValidations.length === 1 ? '' : 's' }}</span>
+                </div>
+              </header>
+              <ul class="publishing-checks__list">
+                <li v-for="validation in targetValidations" :key="validation.version.id">
+                  <span :class="['social-account-avatar', 'social-account-avatar--compact', `social-account-avatar--${validation.version.platform}`]" aria-hidden="true">
+                    <img v-if="accountAvatarUrl(validation.version)" class="social-account-avatar__image" :src="accountAvatarUrl(validation.version)!" alt="" />
+                    <template v-else>{{ accountInitials(validation.version) }}</template>
+                    <span class="social-account-avatar__platform">
+                      <svg viewBox="0 0 24 24"><path :d="platformIconPath(validation.version.platform)" /></svg>
+                    </span>
+                  </span>
+                  <span class="publishing-checks__copy">
+                    <strong>{{ platformLabel(validation.version.platform) }}</strong>
+                    <small>{{ validation.capability?.deliveryLabel }}</small>
+                  </span>
+                  <span :class="['validation-state', { 'validation-state--ready': validation.contentValid && validation.accountValid && validation.capability?.publish }]">
+                    {{ validation.issue || (validation.capability?.publish ? 'Ready' : validation.capability?.deliveryLabel || 'Unavailable') }}
+                  </span>
+                </li>
+              </ul>
+            </aside>
+
+            <aside v-else :class="['post-preview', `post-preview--${selectedVersion.platform}`]" aria-label="Post preview">
               <template v-if="selectedVersion.platform === 'tiktok'">
                 <div class="tiktok-preview__platform-bar">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="platformIconPath(selectedVersion.platform)" /></svg>
@@ -1357,6 +1882,85 @@ function currentQueryParam(name: string): string | null {
       </div>
     </main>
 
+    <AppDialog :open="showDestinations" labelled-by="social-destinations-title" @close="showDestinations = false">
+      <section class="social-destinations-dialog">
+        <header>
+          <div>
+            <h2 id="social-destinations-title">{{ destinationMode === 'create' ? 'Choose publishing platforms' : 'Publishing platforms' }}</h2>
+            <p>No platform is selected by default. Choose only the destinations for this Post.</p>
+          </div>
+          <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close platform picker" @click="showDestinations = false">
+            <UiIcon name="X" :size="17" aria-hidden="true" />
+          </Button>
+        </header>
+
+        <fieldset class="content-type-picker">
+          <legend>What are you posting?</legend>
+          <label :class="{ 'is-selected': destinationContentType === 'short_video' }">
+            <input v-model="destinationContentType" type="radio" value="short_video" />
+            <UiIcon name="Play" :size="17" aria-hidden="true" />
+            <span>Short video</span>
+          </label>
+          <label :class="{ 'is-selected': destinationContentType === 'image' }">
+            <input v-model="destinationContentType" type="radio" value="image" />
+            <UiIcon name="Image" :size="17" aria-hidden="true" />
+            <span>Image</span>
+          </label>
+          <label :class="{ 'is-selected': destinationContentType === 'carousel' }">
+            <input v-model="destinationContentType" type="radio" value="carousel" />
+            <UiIcon name="Images" :size="17" aria-hidden="true" />
+            <span>Carousel</span>
+          </label>
+          <label :class="{ 'is-selected': destinationContentType === 'text' }">
+            <input v-model="destinationContentType" type="radio" value="text" />
+            <UiIcon name="FileText" :size="17" aria-hidden="true" />
+            <span>Text</span>
+          </label>
+        </fieldset>
+
+        <div class="destination-options" role="group" aria-label="Connected platform accounts">
+          <button
+            v-for="option in destinationAccounts"
+            :key="option.account.id"
+            type="button"
+            :class="['destination-option', { 'is-selected': selectedDestinationAccountIds.includes(option.account.id) }]"
+            :aria-pressed="selectedDestinationAccountIds.includes(option.account.id)"
+            :disabled="!option.compatible && !destinationLocked(option.account)"
+            @click="toggleDestinationAccount(option.account.id)"
+          >
+            <span :class="['social-account-avatar', `social-account-avatar--${option.account.platform}`]" aria-hidden="true">
+              <img v-if="option.account.avatarUrl" class="social-account-avatar__image" :src="option.account.avatarUrl" alt="" />
+              <template v-else>{{ accountInitialsForAccount(option.account) }}</template>
+              <span class="social-account-avatar__platform">
+                <svg viewBox="0 0 24 24"><path :d="platformIconPath(option.account.platform as SocialPlatform)" /></svg>
+              </span>
+            </span>
+            <span class="destination-option__copy">
+              <strong>{{ platformLabel(option.account.platform) }}</strong>
+              <small>{{ accountDisplayName(option.account) }} · {{ option.capability?.deliveryLabel }}</small>
+              <small v-if="!option.compatible">{{ destinationLocked(option.account) ? 'Publication history keeps this platform attached.' : `Not available for ${destinationContentType.replace('_', ' ')}.` }}</small>
+            </span>
+            <UiIcon
+              :name="selectedDestinationAccountIds.includes(option.account.id) ? (destinationLocked(option.account) ? 'Shield' : 'Check') : 'Plus'"
+              :size="17"
+              aria-hidden="true"
+            />
+          </button>
+        </div>
+
+        <p v-if="destinationError" class="form-error" role="alert">{{ destinationError }}</p>
+        <footer>
+          <span>{{ selectedDestinationAccountIds.length }} selected</span>
+          <div class="inline-actions">
+            <Button color="outline" shape="soft" size="compact" type="button" :disabled="saving" @click="showDestinations = false">Cancel</Button>
+            <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || selectedDestinationAccountIds.length === 0" @click="saveDestinations">
+              {{ saving ? 'Saving…' : destinationMode === 'create' ? 'Create draft' : 'Update platforms' }}
+            </Button>
+          </div>
+        </footer>
+      </section>
+    </AppDialog>
+
     <AppDialog :open="showMediaPicker" labelled-by="social-media-picker-title" @close="showMediaPicker = false">
       <section class="social-media-picker">
         <header>
@@ -1415,25 +2019,44 @@ function currentQueryParam(name: string): string | null {
       <form class="social-schedule-dialog" @submit.prevent="schedulePost">
         <header>
           <div>
-            <h2 id="social-schedule-title">{{ selectedVersion?.platform === "tiktok" ? "Send draft to TikTok" : "Schedule post" }}</h2>
-            <p>{{ selectedVersion ? `${platformLabel(selectedVersion.platform)} · ${previewAccountName(selectedVersion)}` : "" }}</p>
+            <h2 id="social-schedule-title">Schedule post</h2>
+            <p>{{ targetValidations.length }} selected platform{{ targetValidations.length === 1 ? '' : 's' }}. Each receives its exact platform version.</p>
           </div>
-          <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close schedule" @click="showSchedule = false">
+          <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close schedule dialog" @click="showSchedule = false">
             <UiIcon name="X" :size="17" aria-hidden="true" />
           </Button>
         </header>
-        <div v-if="canSchedule" class="schedule-fields">
+
+        <ul class="publish-target-list">
+          <li v-for="validation in targetValidations" :key="validation.version.id">
+            <span>
+              <strong>{{ platformLabel(validation.version.platform) }}</strong>
+              <small>{{ validation.capability?.deliveryLabel }}</small>
+            </span>
+            <span :class="['validation-state', { 'validation-state--ready': !validation.issue && validation.capability?.publish }]">
+              {{ validation.issue || (validation.capability?.publish ? 'Ready' : validation.capability?.reason || 'Unavailable') }}
+            </span>
+          </li>
+        </ul>
+
+        <div class="schedule-fields">
           <label class="field"><span>Date</span><input v-model="scheduleDate" type="date" required /></label>
           <label class="field"><span>Time</span><input v-model="scheduleTime" type="time" required /></label>
         </div>
-        <label v-if="canSchedule" class="field"><span>Timezone</span><input v-model="scheduleTimezone" required /></label>
+        <label class="field"><span>Timezone</span><input v-model="scheduleTimezone" required /></label>
         <p v-if="scheduleError" class="form-error" role="alert">{{ scheduleError }}</p>
         <footer>
           <Button color="outline" shape="soft" size="compact" type="button" :disabled="scheduling" @click="showSchedule = false">Cancel</Button>
-          <div class="inline-actions">
-            <Button v-if="canPublishNow" color="outline" shape="soft" size="compact" type="button" :disabled="scheduling" @click="publishNow">{{ scheduling ? (selectedVersion?.platform === "tiktok" ? "Sending…" : "Publishing…") : (selectedVersion?.platform === "tiktok" ? "Send draft" : "Post now") }}</Button>
-            <Button v-if="canSchedule" color="primary" shape="soft" size="compact" type="submit" :disabled="scheduling">{{ scheduling ? "Scheduling…" : "Schedule" }}</Button>
-          </div>
+          <Button
+            color="primary"
+            shape="soft"
+            size="compact"
+            type="submit"
+            :disabled="scheduling || !canSchedule"
+          >
+            <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
+            {{ scheduling ? 'Scheduling…' : 'Schedule' }}
+          </Button>
         </footer>
       </form>
     </AppDialog>
@@ -1753,14 +2376,22 @@ function currentQueryParam(name: string): string | null {
 }
 
 .post-row {
+  position: relative;
+  width: 100%;
+  border-bottom: 1px solid var(--ui-border);
+  background: transparent;
+  color: inherit;
+}
+
+.post-row__select {
   display: grid;
   width: 100%;
   gap: 8px;
   padding: 16px;
   border: 0;
-  border-bottom: 1px solid var(--ui-border);
   background: transparent;
   color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
@@ -1770,10 +2401,21 @@ function currentQueryParam(name: string): string | null {
   background: var(--ui-surface);
 }
 
-.post-row:focus-visible,
+.post-row__select:focus-visible,
 .version-tab:focus-visible {
   outline: 2px solid var(--ui-accent);
   outline-offset: -2px;
+}
+
+.post-row__delete {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  right: 8px;
+}
+
+.post-row--active .post-row__meta {
+  padding-right: 38px;
 }
 
 .post-row__meta,
@@ -1836,6 +2478,13 @@ function currentQueryParam(name: string): string | null {
   width: 29px;
   height: 29px;
   font-size: 0.6rem;
+}
+
+.social-account-avatar__image {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
 }
 
 .social-account-avatar__platform {
@@ -1919,6 +2568,13 @@ function currentQueryParam(name: string): string | null {
   outline: 2px solid var(--ui-accent-soft);
 }
 
+.post-title-guidance {
+  display: block;
+  margin-top: 5px;
+  color: var(--ui-text-muted);
+  font-size: 0.76rem;
+}
+
 .publication-panel,
 .recovery-banner {
   margin-top: 18px;
@@ -1982,6 +2638,26 @@ function currentQueryParam(name: string): string | null {
   opacity: 0.48;
 }
 
+.version-tab--shared {
+  grid-auto-flow: column;
+  width: auto;
+  min-width: 58px;
+  gap: 5px;
+  padding: 0 8px;
+  filter: none;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.version-tab--add {
+  border: 1px dashed var(--ui-border-strong);
+  border-bottom-width: 1px;
+  border-radius: 50%;
+  filter: none;
+  opacity: 0.72;
+}
+
 .version-tab--active {
   border-bottom-color: var(--ui-accent);
   color: var(--ui-text);
@@ -2004,6 +2680,93 @@ function currentQueryParam(name: string): string | null {
 
 .version-editor {
   gap: 14px;
+}
+
+.editor-context {
+  display: grid;
+  gap: 3px;
+}
+
+.editor-context > span,
+.editor-validation-summary {
+  color: var(--ui-text-muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.shared-variation-notice {
+  margin: 0;
+  color: var(--ui-text-muted);
+  font-size: 0.78rem;
+}
+
+.editor-validation-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: -6px;
+}
+
+.validation-issue {
+  color: #a54545;
+  text-align: right;
+}
+
+.publishing-checks {
+  align-self: start;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.publishing-checks__header {
+  padding: 16px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.publishing-checks__header > div,
+.publishing-checks__copy {
+  display: grid;
+  gap: 2px;
+}
+
+.publishing-checks__header span,
+.publishing-checks__copy small {
+  color: var(--ui-text-muted);
+  font-size: 0.76rem;
+}
+
+.publishing-checks__list,
+.publish-target-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.publishing-checks__list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.publishing-checks__list li:last-child {
+  border-bottom: 0;
+}
+
+.validation-state {
+  max-width: 190px;
+  color: #a54545;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.validation-state--ready {
+  color: var(--ui-accent-strong);
 }
 
 .media-attachments {
@@ -2804,6 +3567,7 @@ input:focus {
 }
 
 .accounts-card,
+.social-destinations-dialog,
 .social-media-picker,
 .social-schedule-dialog {
   position: relative;
@@ -2874,6 +3638,13 @@ input:focus {
   gap: 18px;
 }
 
+.social-destinations-dialog {
+  display: grid;
+  gap: 18px;
+}
+
+.social-destinations-dialog > header,
+.social-destinations-dialog > footer,
 .social-media-picker header,
 .social-media-picker footer,
 .social-schedule-dialog header,
@@ -2883,6 +3654,8 @@ input:focus {
   justify-content: space-between;
 }
 
+.social-destinations-dialog h2,
+.social-destinations-dialog p,
 .social-media-picker h2,
 .social-media-picker p,
 .social-schedule-dialog h2,
@@ -2890,10 +3663,142 @@ input:focus {
   margin: 0;
 }
 
+.social-destinations-dialog header p,
 .social-media-picker header p,
 .social-schedule-dialog header p {
   margin-top: 4px;
   color: var(--ui-text-muted);
+}
+
+.content-type-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.content-type-picker legend {
+  width: 100%;
+  margin-bottom: 2px;
+  color: var(--ui-text-muted);
+  font-size: 0.76rem;
+}
+
+.content-type-picker label {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  cursor: pointer;
+}
+
+.content-type-picker label.is-selected {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.content-type-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.content-type-picker label:focus-within {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+.editor-action-error {
+  margin: 10px 0 0;
+}
+
+.destination-options {
+  display: grid;
+  gap: 7px;
+}
+
+.destination-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 64px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.destination-option:hover:not(:disabled),
+.destination-option.is-selected {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.destination-option:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+.destination-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.destination-option__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.destination-option__copy small {
+  overflow: hidden;
+  color: var(--ui-text-muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.publish-target-list {
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+}
+
+.publish-target-list li {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.publish-target-list li:last-child {
+  border-bottom: 0;
+}
+
+.publish-target-list li > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.publish-target-list small {
+  color: var(--ui-text-muted);
+  font-size: 0.74rem;
 }
 
 .social-media-picker__grid {

@@ -21,12 +21,14 @@ export type SocialPublishFailureClass =
 
 export type SocialPublishAdapter = {
   validateDraft(input: {
+    title?: string;
     bodyText: string;
     assets: SocialMediaAsset[];
   }): { ok: true } | { ok: false; error: string };
   publish(input: {
     accessToken: string;
     accountId: string;
+    title?: string;
     bodyText: string;
     assets: SocialMediaAsset[];
     fetcher: typeof fetch;
@@ -38,15 +40,31 @@ const X_CHAR_LIMIT = 280;
 const X_IMAGE_COUNT_LIMIT = 4;
 const X_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const X_ALT_TEXT_LIMIT = 1_000;
+const X_VIDEO_MAX_BYTES = 512 * 1024 * 1024;
+const X_VIDEO_CHUNK_BYTES = 4 * 1024 * 1024;
+const X_VIDEO_PROCESSING_ATTEMPTS = 10;
+const X_VIDEO_MIME_TYPES = new Set(["video/mp4"]);
 const X_IMAGE_MIME_TYPES = new Set<CarouselRasterMimeType>([
   "image/png",
   "image/jpeg",
   "image/webp",
 ]);
 const LINKEDIN_MAX_CHARS = 3000;
+const LINKEDIN_IMAGE_COUNT_LIMIT = 20;
+const LINKEDIN_ALT_TEXT_LIMIT = 4_086;
+const LINKEDIN_IMAGE_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+]);
 const LINKEDIN_VERSION = "202606";
 const INSTAGRAM_MAX_CHARS = 2200;
 const INSTAGRAM_CAROUSEL_MAX_ITEMS = 10;
+const INSTAGRAM_VIDEO_MAX_BYTES = 1024 * 1024 * 1024;
+const INSTAGRAM_VIDEO_MIME_TYPES = new Set([
+  "video/mp4",
+  "video/quicktime",
+]);
 const INSTAGRAM_GRAPH_VERSION = "v21.0";
 const TIKTOK_UPLOAD_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/";
 const TIKTOK_STATUS_URL = "https://open.tiktokapis.com/v2/post/publish/status/fetch/";
@@ -60,6 +78,10 @@ const TIKTOK_VIDEO_MIME_TYPES = new Set([
   "video/quicktime",
   "video/webm",
 ]);
+const YOUTUBE_TITLE_MAX_CHARS = 100;
+const YOUTUBE_DESCRIPTION_MAX_CHARS = 5_000;
+const YOUTUBE_VIDEO_MAX_BYTES = 256 * 1024 * 1024 * 1024;
+const YOUTUBE_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
 
 export function adapterFor(platform: SocialPlatform): SocialPublishAdapter {
   if (platform === "x") return xAdapter;
@@ -90,14 +112,23 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 type XErrorBody = {
-  data?: { id?: string };
+  data?: {
+    id?: string;
+    processing_info?: {
+      state?: string;
+      check_after_secs?: number;
+      progress_percent?: number;
+      error?: { code?: number; name?: string; message?: string };
+    };
+  };
   errors?: Array<{ title?: string; detail?: string }>;
   title?: string;
   detail?: string;
 };
 
 function xErrorMessage(body: XErrorBody, fallback: string): string {
-  return body.errors?.[0]?.detail ||
+  return body.data?.processing_info?.error?.message ||
+    body.errors?.[0]?.detail ||
     body.errors?.[0]?.title ||
     body.detail ||
     body.title ||
@@ -124,6 +155,10 @@ function xHeaders(accessToken: string): Record<string, string> {
   };
 }
 
+function xAuthorizationHeaders(accessToken: string): Record<string, string> {
+  return { Authorization: `Bearer ${accessToken}` };
+}
+
 function validateXDraft(input: {
   bodyText: string;
   assets: SocialMediaAsset[];
@@ -132,6 +167,27 @@ function validateXDraft(input: {
   if (!body) return { ok: false, error: "This X draft is empty." };
   if (characterLength(body) > X_CHAR_LIMIT) {
     return { ok: false, error: `This X draft is too long (max ${X_CHAR_LIMIT} characters).` };
+  }
+  const videos = input.assets.filter((asset) => asset.kind === "video");
+  if (videos.length > 0) {
+    if (input.assets.length !== 1 || videos.length !== 1) {
+      return { ok: false, error: "An X video post must contain exactly one video and no images." };
+    }
+    const video = videos[0]!;
+    if (!video.url?.trim()) {
+      return { ok: false, error: "The X video needs a delivery URL." };
+    }
+    const mimeType = normalizeMimeType(video.mimeType);
+    if (!mimeType || !X_VIDEO_MIME_TYPES.has(mimeType)) {
+      return { ok: false, error: "X video publishing currently supports MP4 files." };
+    }
+    if (!Number.isSafeInteger(video.byteLength) || (video.byteLength ?? 0) <= 0) {
+      return { ok: false, error: "X needs the video file size before it can upload." };
+    }
+    if (video.byteLength! > X_VIDEO_MAX_BYTES) {
+      return { ok: false, error: "The X video is larger than 512 MB." };
+    }
+    return { ok: true };
   }
   if (input.assets.length > X_IMAGE_COUNT_LIMIT) {
     return {
@@ -142,9 +198,6 @@ function validateXDraft(input: {
   for (const [index, asset] of input.assets.entries()) {
     if (!asset.url?.trim()) {
       return { ok: false, error: `X image ${index + 1} needs a URL.` };
-    }
-    if (asset.kind === "video") {
-      return { ok: false, error: "X publishing currently supports text and raster images only." };
     }
     const mimeType = normalizeMimeType(asset.mimeType);
     if (mimeType && !X_IMAGE_MIME_TYPES.has(mimeType as CarouselRasterMimeType)) {
@@ -164,7 +217,7 @@ function validateXDraft(input: {
   return { ok: true };
 }
 
-async function readBoundedImageBytes(
+async function readBoundedBytes(
   response: Response,
   maxBytes: number,
 ): Promise<Uint8Array | null> {
@@ -180,7 +233,7 @@ async function readBoundedImageBytes(
     if (done) break;
     byteLength += value.byteLength;
     if (byteLength > maxBytes) {
-      await reader.cancel("X image exceeds the upload limit").catch(() => undefined);
+      await reader.cancel("Provider media exceeds the upload limit").catch(() => undefined);
       return null;
     }
     chunks.push(value);
@@ -204,6 +257,12 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+function copyBytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function fetchFailureClass(status: number): SocialPublishFailureClass {
   return status === 409 || status === 429 || status >= 500 ? "retryable" : "rejected";
 }
@@ -221,22 +280,54 @@ const linkedInAdapter: SocialPublishAdapter = {
   validateDraft(input) {
     const body = input.bodyText.trim();
     if (!body) return { ok: false, error: "This LinkedIn draft is empty." };
-    if (body.length > LINKEDIN_MAX_CHARS) {
+    if (characterLength(body) > LINKEDIN_MAX_CHARS) {
       return {
         ok: false,
         error: `This LinkedIn draft is too long (max ${LINKEDIN_MAX_CHARS} characters).`,
       };
     }
     if (input.assets.some((asset) => asset.kind === "video")) {
-      return { ok: false, error: "LinkedIn publishing currently supports text and one image." };
+      return { ok: false, error: "LinkedIn publishing currently supports text and image posts." };
     }
-    if (input.assets.length > 1) {
-      return { ok: false, error: "LinkedIn publishing currently supports one image per post." };
+    if (input.assets.length > LINKEDIN_IMAGE_COUNT_LIMIT) {
+      return {
+        ok: false,
+        error: `LinkedIn multi-image posts support up to ${LINKEDIN_IMAGE_COUNT_LIMIT} images.`,
+      };
+    }
+    for (const [index, asset] of input.assets.entries()) {
+      if (!asset.url?.trim()) {
+        return { ok: false, error: `LinkedIn image ${index + 1} needs a URL.` };
+      }
+      const mimeType = normalizeMimeType(asset.mimeType);
+      if (mimeType && !LINKEDIN_IMAGE_MIME_TYPES.has(mimeType)) {
+        return {
+          ok: false,
+          error: "LinkedIn image posts support JPEG, PNG, and GIF files.",
+        };
+      }
+      const altText = asset.altText?.trim();
+      if (altText && characterLength(altText) > LINKEDIN_ALT_TEXT_LIMIT) {
+        return {
+          ok: false,
+          error: `LinkedIn image ${index + 1} alt text is too long (max ${LINKEDIN_ALT_TEXT_LIMIT} characters).`,
+        };
+      }
     }
     return { ok: true };
   },
 
   async publish(input) {
+    const validation = linkedInAdapter.validateDraft(input);
+    if (!validation.ok) {
+      return providerError(
+        "linkedin_validation_failed",
+        validation.error,
+        undefined,
+        validation.error.includes("support") ? "unsupported" : "rejected",
+      );
+    }
+
     let userinfoResponse: Response;
     try {
       userinfoResponse = await input.fetcher("https://api.linkedin.com/v2/userinfo", {
@@ -266,16 +357,15 @@ const linkedInAdapter: SocialPublishAdapter = {
     }
 
     const author = sub.startsWith("urn:li:") ? sub : `urn:li:person:${sub}`;
-    let content: { media: { id: string } } | undefined;
-    const asset = input.assets[0];
-    if (asset) {
+    const uploadedImages: Array<{ id: string; altText?: string }> = [];
+    for (const [index, asset] of input.assets.entries()) {
       let imageResponse: Response;
       try {
         imageResponse = await input.fetcher(asset.url);
       } catch (error) {
         return providerError(
           "linkedin_image_fetch",
-          "Could not load the LinkedIn image. ME3 can safely try again.",
+          `Could not load LinkedIn image ${index + 1}. ME3 can safely try again.`,
           { message: error instanceof Error ? error.message : String(error) },
           "retryable",
         );
@@ -283,7 +373,7 @@ const linkedInAdapter: SocialPublishAdapter = {
       if (!imageResponse.ok) {
         return providerError(
           "linkedin_image_fetch",
-          "Could not load the LinkedIn image.",
+          `Could not load LinkedIn image ${index + 1}.`,
           undefined,
           failureClassForStatus(imageResponse.status),
         );
@@ -301,7 +391,7 @@ const linkedInAdapter: SocialPublishAdapter = {
       } catch (error) {
         return providerError(
           "linkedin_image_initialize",
-          "LinkedIn did not finish preparing the image. ME3 can safely try again.",
+          `LinkedIn did not finish preparing image ${index + 1}. ME3 can safely try again.`,
           { message: error instanceof Error ? error.message : String(error) },
           "retryable",
         );
@@ -313,7 +403,7 @@ const linkedInAdapter: SocialPublishAdapter = {
       if (!initializeResponse.ok || !initialized.value?.uploadUrl || !initialized.value.image) {
         return providerError(
           "linkedin_image_initialize",
-          initialized.message || "LinkedIn could not initialize the image upload.",
+          initialized.message || `LinkedIn could not initialize image ${index + 1}.`,
           initialized,
           failureClassForStatus(initializeResponse.status),
         );
@@ -331,7 +421,7 @@ const linkedInAdapter: SocialPublishAdapter = {
       } catch (error) {
         return providerError(
           "linkedin_image_upload",
-          "LinkedIn did not finish uploading the image. ME3 can safely try again.",
+          `LinkedIn did not finish uploading image ${index + 1}. ME3 can safely try again.`,
           { message: error instanceof Error ? error.message : String(error) },
           "retryable",
         );
@@ -339,13 +429,23 @@ const linkedInAdapter: SocialPublishAdapter = {
       if (!uploadResponse.ok) {
         return providerError(
           "linkedin_image_upload",
-          "LinkedIn could not upload the image.",
+          `LinkedIn could not upload image ${index + 1}.`,
           await uploadResponse.text().catch(() => ""),
           failureClassForStatus(uploadResponse.status),
         );
       }
-      content = { media: { id: initialized.value.image } };
+      const altText = asset.altText?.trim();
+      uploadedImages.push({
+        id: initialized.value.image,
+        ...(altText ? { altText } : {}),
+      });
     }
+
+    const content = uploadedImages.length === 1
+      ? { media: uploadedImages[0]! }
+      : uploadedImages.length > 1
+        ? { multiImage: { images: uploadedImages } }
+        : undefined;
 
     let postResponse: Response;
     await input.markProviderWriteStarted?.();
@@ -406,6 +506,272 @@ const linkedInAdapter: SocialPublishAdapter = {
   },
 };
 
+type XVideoUploadResult =
+  | { ok: true; mediaId: string; providerResponses: unknown[] }
+  | { ok: false; result: SocialPublishAdapterResult };
+
+async function uploadXVideo(
+  input: Parameters<SocialPublishAdapter["publish"]>[0],
+  asset: SocialMediaAsset,
+): Promise<XVideoUploadResult> {
+  const byteLength = asset.byteLength!;
+  const mimeType = normalizeMimeType(asset.mimeType)!;
+  const providerResponses: unknown[] = [];
+  const initBody = new FormData();
+  initBody.set("command", "INIT");
+  initBody.set("media_type", mimeType);
+  initBody.set("total_bytes", String(byteLength));
+  initBody.set("media_category", "tweet_video");
+
+  let initResponse: Response;
+  try {
+    initResponse = await input.fetcher("https://api.x.com/2/media/upload", {
+      method: "POST",
+      headers: xAuthorizationHeaders(input.accessToken),
+      body: initBody,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      result: providerError(
+        "x_video_initialize",
+        "X did not finish preparing the video upload. ME3 can safely try again.",
+        describeFetchError(error),
+        "retryable",
+      ),
+    };
+  }
+  const initialized = await readJson<XErrorBody>(initResponse);
+  providerResponses.push(initialized);
+  if (!initResponse.ok) {
+    return {
+      ok: false,
+      result: providerError(
+        "x_video_initialize",
+        xErrorMessage(initialized, `X could not initialize the video (${initResponse.status}).`),
+        initialized,
+        failureClassForStatus(initResponse.status),
+      ),
+    };
+  }
+  const mediaId = initialized.data?.id?.trim();
+  if (!mediaId) {
+    return {
+      ok: false,
+      result: providerError(
+        "x_media_missing_id",
+        "X prepared a video upload but did not return its media id.",
+        initialized,
+        "retryable",
+      ),
+    };
+  }
+
+  let segmentIndex = 0;
+  for (let start = 0; start < byteLength; start += X_VIDEO_CHUNK_BYTES) {
+    const end = Math.min(byteLength - 1, start + X_VIDEO_CHUNK_BYTES - 1);
+    const expectedBytes = end - start + 1;
+    let sourceResponse: Response;
+    try {
+      sourceResponse = await input.fetcher(asset.url, {
+        headers: { Range: `bytes=${start}-${end}` },
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        result: providerError(
+          "x_video_fetch",
+          `Could not load X video segment ${segmentIndex + 1}. ME3 can safely try again.`,
+          describeFetchError(error),
+          "retryable",
+        ),
+      };
+    }
+    if (!sourceResponse.ok || (byteLength > X_VIDEO_CHUNK_BYTES && sourceResponse.status !== 206)) {
+      return {
+        ok: false,
+        result: providerError(
+          "x_video_fetch",
+          `Could not load X video segment ${segmentIndex + 1} (${sourceResponse.status}).`,
+          await sourceResponse.text().catch(() => ""),
+          failureClassForStatus(sourceResponse.status),
+        ),
+      };
+    }
+
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await readBoundedBytes(sourceResponse, expectedBytes);
+    } catch (error) {
+      return {
+        ok: false,
+        result: providerError(
+          "x_video_fetch",
+          `Could not finish loading X video segment ${segmentIndex + 1}.`,
+          describeFetchError(error),
+          "retryable",
+        ),
+      };
+    }
+    if (!bytes || bytes.byteLength !== expectedBytes) {
+      return {
+        ok: false,
+        result: providerError(
+          "x_video_range",
+          `X video segment ${segmentIndex + 1} did not contain the expected bytes.`,
+          { expectedBytes, receivedBytes: bytes?.byteLength ?? null },
+          "retryable",
+        ),
+      };
+    }
+
+    const appendBody = new FormData();
+    appendBody.set("command", "APPEND");
+    appendBody.set("media_id", mediaId);
+    appendBody.set("segment_index", String(segmentIndex));
+    appendBody.set(
+      "media",
+      new Blob([copyBytesToArrayBuffer(bytes)], { type: mimeType }),
+      `segment-${segmentIndex}.mp4`,
+    );
+    let appendResponse: Response;
+    try {
+      appendResponse = await input.fetcher("https://api.x.com/2/media/upload", {
+        method: "POST",
+        headers: xAuthorizationHeaders(input.accessToken),
+        body: appendBody,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        result: providerError(
+          "x_video_append",
+          `X did not finish uploading video segment ${segmentIndex + 1}. ME3 can safely try again.`,
+          { ...describeFetchError(error), mediaId, segmentIndex },
+          "retryable",
+        ),
+      };
+    }
+    const appended = await readJson<XErrorBody>(appendResponse);
+    providerResponses.push(appended);
+    if (!appendResponse.ok) {
+      return {
+        ok: false,
+        result: providerError(
+          "x_video_append",
+          xErrorMessage(
+            appended,
+            `X could not upload video segment ${segmentIndex + 1} (${appendResponse.status}).`,
+          ),
+          appended,
+          failureClassForStatus(appendResponse.status),
+        ),
+      };
+    }
+    segmentIndex += 1;
+  }
+
+  const finalizeBody = new FormData();
+  finalizeBody.set("command", "FINALIZE");
+  finalizeBody.set("media_id", mediaId);
+  let finalizeResponse: Response;
+  try {
+    finalizeResponse = await input.fetcher("https://api.x.com/2/media/upload", {
+      method: "POST",
+      headers: xAuthorizationHeaders(input.accessToken),
+      body: finalizeBody,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      result: providerError(
+        "x_video_finalize",
+        "X did not finish finalizing the video. ME3 can safely check or try again.",
+        { ...describeFetchError(error), mediaId },
+        "retryable",
+      ),
+    };
+  }
+  let processing = await readJson<XErrorBody>(finalizeResponse);
+  providerResponses.push(processing);
+  if (!finalizeResponse.ok) {
+    return {
+      ok: false,
+      result: providerError(
+        "x_video_finalize",
+        xErrorMessage(processing, `X could not finalize the video (${finalizeResponse.status}).`),
+        processing,
+        failureClassForStatus(finalizeResponse.status),
+      ),
+    };
+  }
+
+  for (let attempt = 0; attempt < X_VIDEO_PROCESSING_ATTEMPTS; attempt += 1) {
+    const processingInfo = processing.data?.processing_info;
+    if (!processingInfo || processingInfo.state === "succeeded") {
+      return { ok: true, mediaId, providerResponses };
+    }
+    if (processingInfo.state === "failed") {
+      return {
+        ok: false,
+        result: providerError(
+          "x_video_processing",
+          xErrorMessage(processing, "X could not process the uploaded video."),
+          processing,
+          "rejected",
+        ),
+      };
+    }
+    const checkAfterSeconds = Math.min(
+      5,
+      Math.max(1, Math.ceil(processingInfo.check_after_secs || 1)),
+    );
+    await wait(checkAfterSeconds * 1_000);
+    const statusUrl = new URL("https://api.x.com/2/media/upload");
+    statusUrl.searchParams.set("command", "STATUS");
+    statusUrl.searchParams.set("media_id", mediaId);
+    let statusResponse: Response;
+    try {
+      statusResponse = await input.fetcher(statusUrl, {
+        headers: xAuthorizationHeaders(input.accessToken),
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        result: providerError(
+          "x_video_status",
+          "X did not finish checking the video. ME3 can safely try again.",
+          { ...describeFetchError(error), mediaId },
+          "retryable",
+        ),
+      };
+    }
+    processing = await readJson<XErrorBody>(statusResponse);
+    providerResponses.push(processing);
+    if (!statusResponse.ok) {
+      return {
+        ok: false,
+        result: providerError(
+          "x_video_status",
+          xErrorMessage(processing, `X could not check the video (${statusResponse.status}).`),
+          processing,
+          failureClassForStatus(statusResponse.status),
+        ),
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    result: providerError(
+      "x_video_processing_timeout",
+      "X is still processing the video. ME3 can safely try again later.",
+      { mediaId, providerResponses },
+      "retryable",
+    ),
+  };
+}
+
 const xAdapter: SocialPublishAdapter = {
   validateDraft: validateXDraft,
 
@@ -422,30 +788,37 @@ const xAdapter: SocialPublishAdapter = {
 
     const mediaIds: string[] = [];
     const mediaResponses: unknown[] = [];
-    for (const [index, asset] of input.assets.entries()) {
-      let imageResponse: Response;
-      try {
-        imageResponse = await input.fetcher(asset.url);
-      } catch (error) {
-        return providerError(
-          "x_image_fetch",
-          `Could not load X image ${index + 1}.`,
-          { message: error instanceof Error ? error.message : String(error) },
-          "retryable",
-        );
-      }
-      if (!imageResponse.ok) {
-        return providerError(
-          "x_image_fetch",
-          `Could not load X image ${index + 1} (${imageResponse.status}).`,
-          await imageResponse.text().catch(() => ""),
-          fetchFailureClass(imageResponse.status),
-        );
-      }
+    const videoAsset = input.assets.find((asset) => asset.kind === "video");
+    if (videoAsset) {
+      const upload = await uploadXVideo(input, videoAsset);
+      if (!upload.ok) return upload.result;
+      mediaIds.push(upload.mediaId);
+      mediaResponses.push(...upload.providerResponses);
+    } else {
+      for (const [index, asset] of input.assets.entries()) {
+        let imageResponse: Response;
+        try {
+          imageResponse = await input.fetcher(asset.url);
+        } catch (error) {
+          return providerError(
+            "x_image_fetch",
+            `Could not load X image ${index + 1}.`,
+            { message: error instanceof Error ? error.message : String(error) },
+            "retryable",
+          );
+        }
+        if (!imageResponse.ok) {
+          return providerError(
+            "x_image_fetch",
+            `Could not load X image ${index + 1} (${imageResponse.status}).`,
+            await imageResponse.text().catch(() => ""),
+            fetchFailureClass(imageResponse.status),
+          );
+        }
 
       let bytes: Uint8Array | null;
       try {
-        bytes = await readBoundedImageBytes(imageResponse, X_IMAGE_MAX_BYTES);
+        bytes = await readBoundedBytes(imageResponse, X_IMAGE_MAX_BYTES);
       } catch (error) {
         return providerError(
           "x_image_fetch",
@@ -559,7 +932,8 @@ const xAdapter: SocialPublishAdapter = {
           failureClassForStatus(metadataResponse.status),
         );
       }
-      mediaResponses.push(metadataJson);
+        mediaResponses.push(metadataJson);
+      }
     }
 
     let response: Response;
@@ -860,21 +1234,395 @@ const tikTokAdapter: SocialPublishAdapter = {
   },
 };
 
-const youtubeAdapter: SocialPublishAdapter = {
-  validateDraft(input) {
-    if (input.assets.length !== 1 || input.assets[0]?.kind !== "video") {
-      return { ok: false, error: "YouTube upload requires exactly one video." };
-    }
-    return { ok: true };
-  },
+type YouTubeApiBody = {
+  id?: string;
+  error?: {
+    code?: number;
+    message?: string;
+    errors?: Array<{ reason?: string; message?: string }>;
+  };
+  items?: Array<{
+    id?: string;
+    status?: {
+      uploadStatus?: string;
+      privacyStatus?: string;
+      failureReason?: string;
+      rejectionReason?: string;
+    };
+    processingDetails?: {
+      processingStatus?: string;
+      processingFailureReason?: string;
+      processingProgress?: {
+        partsProcessed?: string;
+        partsTotal?: string;
+        timeLeftMs?: string;
+      };
+    };
+  }>;
+};
 
-  async publish() {
-    return providerError(
-      "youtube_upload_not_ready",
-      "YouTube connection is ready, but private video upload is not enabled in this release.",
-      undefined,
-      "unsupported",
+function youtubeErrorMessage(body: YouTubeApiBody, fallback: string): string {
+  return body.error?.errors?.[0]?.message || body.error?.message || fallback;
+}
+
+function youtubeFailureClass(
+  status: number,
+  body: YouTubeApiBody,
+): SocialPublishFailureClass {
+  const reason = body.error?.errors?.[0]?.reason || "";
+  if (
+    status === 401 ||
+    reason === "authError" ||
+    reason === "insufficientPermissions" ||
+    reason === "youtubeSignupRequired"
+  ) {
+    return "reconnect_required";
+  }
+  if (status === 429 || status >= 500) return "retryable";
+  return "rejected";
+}
+
+function youtubeResumeOffset(response: Response): number {
+  const range = response.headers.get("range");
+  const match = range?.match(/bytes=0-(\d+)$/i);
+  return match ? Number(match[1]) + 1 : 0;
+}
+
+type YouTubeUploadStatus =
+  | { kind: "resume"; offset: number; providerResponse: unknown }
+  | { kind: "complete"; videoId: string; providerResponse: unknown }
+  | { kind: "failed"; result: SocialPublishAdapterResult };
+
+async function checkYouTubeUploadStatus(
+  input: Parameters<SocialPublishAdapter["publish"]>[0],
+  uploadUrl: string,
+  byteLength: number,
+): Promise<YouTubeUploadStatus> {
+  let response: Response;
+  try {
+    response = await input.fetcher(uploadUrl, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${input.accessToken}`,
+        "Content-Length": "0",
+        "Content-Range": `bytes */${byteLength}`,
+      },
+    });
+  } catch (error) {
+    return {
+      kind: "failed",
+      result: providerError(
+        "youtube_upload_outcome_unknown",
+        "YouTube did not confirm whether the private video upload completed. Check YouTube Studio before trying again.",
+        describeFetchError(error),
+        "outcome_unknown",
+      ),
+    };
+  }
+  const body = await readJson<YouTubeApiBody>(response);
+  if (response.status === 308) {
+    return {
+      kind: "resume",
+      offset: youtubeResumeOffset(response),
+      providerResponse: body,
+    };
+  }
+  if (response.ok) {
+    if (body.id) {
+      return { kind: "complete", videoId: body.id, providerResponse: body };
+    }
+    return {
+      kind: "failed",
+      result: providerError(
+        "youtube_upload_outcome_unknown",
+        "YouTube completed the upload request without returning a video id. Check YouTube Studio before trying again.",
+        body,
+        "outcome_unknown",
+      ),
+    };
+  }
+  return {
+    kind: "failed",
+    result: providerError(
+      "youtube_upload_status",
+      youtubeErrorMessage(body, `YouTube could not resume the upload (${response.status}).`),
+      body,
+      response.status === 404
+        ? "retryable"
+        : youtubeFailureClass(response.status, body),
+    ),
+  };
+}
+
+function validateYouTubeDraft(input: {
+  title?: string;
+  bodyText: string;
+  assets: SocialMediaAsset[];
+}): { ok: true } | { ok: false; error: string } {
+  const title = input.title?.trim() || "";
+  if (!title) return { ok: false, error: "YouTube needs a video title." };
+  if (characterLength(title) > YOUTUBE_TITLE_MAX_CHARS) {
+    return {
+      ok: false,
+      error: `The YouTube title is too long (max ${YOUTUBE_TITLE_MAX_CHARS} characters).`,
+    };
+  }
+  if (characterLength(input.bodyText.trim()) > YOUTUBE_DESCRIPTION_MAX_CHARS) {
+    return {
+      ok: false,
+      error: `The YouTube description is too long (max ${YOUTUBE_DESCRIPTION_MAX_CHARS} characters).`,
+    };
+  }
+  if (input.assets.length !== 1 || input.assets[0]?.kind !== "video") {
+    return { ok: false, error: "YouTube upload requires exactly one video." };
+  }
+  const asset = input.assets[0];
+  if (!asset.url?.trim()) {
+    return { ok: false, error: "The YouTube video needs a delivery URL." };
+  }
+  const mimeType = normalizeMimeType(asset.mimeType);
+  if (!mimeType || (mimeType !== "application/octet-stream" && !mimeType.startsWith("video/"))) {
+    return { ok: false, error: "YouTube requires a video file." };
+  }
+  if (!Number.isSafeInteger(asset.byteLength) || (asset.byteLength ?? 0) <= 0) {
+    return { ok: false, error: "YouTube needs the video file size before it can upload." };
+  }
+  if (asset.byteLength! > YOUTUBE_VIDEO_MAX_BYTES) {
+    return { ok: false, error: "The YouTube video is larger than 256 GB." };
+  }
+  return { ok: true };
+}
+
+const youtubeAdapter: SocialPublishAdapter = {
+  validateDraft: validateYouTubeDraft,
+
+  async publish(input) {
+    const validation = validateYouTubeDraft(input);
+    if (!validation.ok) {
+      return providerError(
+        "youtube_validation_failed",
+        validation.error,
+        undefined,
+        "rejected",
+      );
+    }
+
+    const asset = input.assets[0]!;
+    const byteLength = asset.byteLength!;
+    const mimeType = normalizeMimeType(asset.mimeType)!;
+    const metadata = {
+      snippet: {
+        title: input.title!.trim(),
+        description: input.bodyText.trim(),
+        categoryId: "22",
+      },
+      status: {
+        privacyStatus: "private",
+        selfDeclaredMadeForKids: false,
+      },
+    };
+    const metadataBody = JSON.stringify(metadata);
+    const uploadInitUrl = new URL(
+      "https://www.googleapis.com/upload/youtube/v3/videos",
     );
+    uploadInitUrl.searchParams.set("uploadType", "resumable");
+    uploadInitUrl.searchParams.set("part", "snippet,status");
+    uploadInitUrl.searchParams.set("notifySubscribers", "false");
+
+    let initResponse: Response;
+    try {
+      initResponse = await input.fetcher(uploadInitUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.accessToken}`,
+          "Content-Type": "application/json; charset=UTF-8",
+          "Content-Length": String(new TextEncoder().encode(metadataBody).byteLength),
+          "X-Upload-Content-Length": String(byteLength),
+          "X-Upload-Content-Type": mimeType,
+        },
+        body: metadataBody,
+      });
+    } catch (error) {
+      return providerError(
+        "youtube_upload_initialize",
+        "YouTube did not finish preparing the private upload. ME3 can safely try again.",
+        describeFetchError(error),
+        "retryable",
+      );
+    }
+    const initialized = await readJson<YouTubeApiBody>(initResponse);
+    if (!initResponse.ok) {
+      return providerError(
+        "youtube_upload_initialize",
+        youtubeErrorMessage(
+          initialized,
+          `YouTube could not prepare the private upload (${initResponse.status}).`,
+        ),
+        initialized,
+        youtubeFailureClass(initResponse.status, initialized),
+      );
+    }
+    const uploadUrl = initResponse.headers.get("location")?.trim();
+    if (!uploadUrl) {
+      return providerError(
+        "youtube_upload_location",
+        "YouTube did not return a resumable upload URL. ME3 can safely try again.",
+        initialized,
+        "retryable",
+      );
+    }
+
+    await input.markProviderWriteStarted?.();
+    const providerResponses: unknown[] = [initialized];
+    let offset = 0;
+    let videoId: string | null = null;
+    while (offset < byteLength) {
+      const end = Math.min(
+        byteLength - 1,
+        offset + YOUTUBE_UPLOAD_CHUNK_BYTES - 1,
+      );
+      const expectedBytes = end - offset + 1;
+      let sourceResponse: Response;
+      try {
+        sourceResponse = await input.fetcher(asset.url, {
+          headers: { Range: `bytes=${offset}-${end}` },
+        });
+      } catch (error) {
+        return providerError(
+          "youtube_video_fetch",
+          "Could not load the YouTube video from Files. ME3 can safely try again.",
+          describeFetchError(error),
+          "retryable",
+        );
+      }
+      if (
+        !sourceResponse.ok ||
+        (byteLength > YOUTUBE_UPLOAD_CHUNK_BYTES && sourceResponse.status !== 206)
+      ) {
+        return providerError(
+          "youtube_video_fetch",
+          `Could not load the YouTube video (${sourceResponse.status}).`,
+          await sourceResponse.text().catch(() => ""),
+          failureClassForStatus(sourceResponse.status),
+        );
+      }
+
+      let bytes: Uint8Array | null;
+      try {
+        bytes = await readBoundedBytes(sourceResponse, expectedBytes);
+      } catch (error) {
+        return providerError(
+          "youtube_video_fetch",
+          "Could not finish loading the YouTube video from Files.",
+          describeFetchError(error),
+          "retryable",
+        );
+      }
+      if (!bytes || bytes.byteLength !== expectedBytes) {
+        return providerError(
+          "youtube_video_range",
+          "The YouTube video segment did not contain the expected bytes.",
+          { expectedBytes, receivedBytes: bytes?.byteLength ?? null, offset },
+          "retryable",
+        );
+      }
+
+      let uploadResponse: Response;
+      try {
+        uploadResponse = await input.fetcher(uploadUrl, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${input.accessToken}`,
+            "Content-Length": String(bytes.byteLength),
+            "Content-Type": mimeType,
+            "Content-Range": `bytes ${offset}-${end}/${byteLength}`,
+          },
+          body: copyBytesToArrayBuffer(bytes),
+        });
+      } catch {
+        const status = await checkYouTubeUploadStatus(input, uploadUrl, byteLength);
+        if (status.kind === "failed") return status.result;
+        providerResponses.push(status.providerResponse);
+        if (status.kind === "complete") {
+          videoId = status.videoId;
+          break;
+        }
+        offset = status.offset;
+        continue;
+      }
+      const uploaded = await readJson<YouTubeApiBody>(uploadResponse);
+      providerResponses.push(uploaded);
+      if (uploadResponse.status === 308) {
+        const resumedOffset = youtubeResumeOffset(uploadResponse);
+        offset = resumedOffset > offset ? resumedOffset : end + 1;
+        continue;
+      }
+      if (uploadResponse.ok) {
+        if (!uploaded.id) {
+          return providerError(
+            "youtube_upload_outcome_unknown",
+            "YouTube accepted the private video without returning its id. Check YouTube Studio before trying again.",
+            uploaded,
+            "outcome_unknown",
+          );
+        }
+        videoId = uploaded.id;
+        break;
+      }
+      if (uploadResponse.status >= 500) {
+        const status = await checkYouTubeUploadStatus(input, uploadUrl, byteLength);
+        if (status.kind === "failed") return status.result;
+        providerResponses.push(status.providerResponse);
+        if (status.kind === "complete") {
+          videoId = status.videoId;
+          break;
+        }
+        offset = status.offset;
+        continue;
+      }
+      return providerError(
+        "youtube_upload",
+        youtubeErrorMessage(
+          uploaded,
+          `YouTube could not upload the private video (${uploadResponse.status}).`,
+        ),
+        uploaded,
+        youtubeFailureClass(uploadResponse.status, uploaded),
+      );
+    }
+
+    if (!videoId) {
+      return providerError(
+        "youtube_upload_outcome_unknown",
+        "YouTube did not confirm the private video's id. Check YouTube Studio before trying again.",
+        providerResponses,
+        "outcome_unknown",
+      );
+    }
+
+    let processing: YouTubeApiBody | null = null;
+    try {
+      const statusUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
+      statusUrl.searchParams.set("part", "status,processingDetails");
+      statusUrl.searchParams.set("id", videoId);
+      const statusResponse = await input.fetcher(statusUrl, {
+        headers: { Authorization: `Bearer ${input.accessToken}` },
+      });
+      processing = await readJson<YouTubeApiBody>(statusResponse);
+    } catch {
+      processing = null;
+    }
+
+    return {
+      ok: true,
+      platformPostId: videoId,
+      platformPostUrl: `https://studio.youtube.com/video/${videoId}/edit`,
+      providerResponse: {
+        privacyStatus: "private",
+        upload: providerResponses,
+        processing,
+      },
+    };
   },
 };
 
@@ -907,6 +1655,15 @@ function validateInstagramDraft(input: {
   }
   if (videos.length > 0 && (videos.length !== 1 || images.length > 0)) {
     return { ok: false, error: "An Instagram Reel must contain one video and no images." };
+  }
+  if (videos.length === 1) {
+    const mimeType = normalizeMimeType(videos[0]?.mimeType);
+    if (!mimeType || !INSTAGRAM_VIDEO_MIME_TYPES.has(mimeType)) {
+      return { ok: false, error: "Instagram Reels support MP4 and QuickTime video uploads." };
+    }
+    if ((videos[0]?.byteLength || 0) > INSTAGRAM_VIDEO_MAX_BYTES) {
+      return { ok: false, error: "The Instagram Reel is larger than 1 GB." };
+    }
   }
   if (images.length > INSTAGRAM_CAROUSEL_MAX_ITEMS) {
     return {

@@ -10,11 +10,30 @@ export type SocialPlatform =
   | "youtube"
   | "tiktok";
 
+export type SocialContentType = "text" | "image" | "carousel" | "short_video";
+export type SocialDeliveryMode = "direct_publish" | "provider_draft" | "draft_only";
+
+export type SocialPlatformContentRule = {
+  contentType: SocialContentType;
+  label: string;
+  requiresText: boolean;
+  maxTextCharacters: number | null;
+  minMediaItems: number;
+  maxMediaItems: number;
+  allowedMediaKinds: Array<"image" | "video">;
+  allowedMimeTypes: string[];
+  maxBytesPerItem: number | null;
+  guidance: string | null;
+};
+
 export type SocialPlatformCapabilities = {
   platform: SocialPlatform;
   draft: boolean;
   schedule: boolean;
   publish: boolean;
+  deliveryMode: SocialDeliveryMode;
+  deliveryLabel: string;
+  contentRules: SocialPlatformContentRule[];
   reason: string | null;
 };
 
@@ -24,6 +43,8 @@ export type SocialAccountRow = {
   platform: string;
   handle: string | null;
   displayName: string | null;
+  avatarUrl?: string | null;
+  avatarSource?: "provider" | "owner_profile" | null;
   status: string;
   lastVerifiedAt: string | null;
 };
@@ -89,7 +110,7 @@ export type PostVersion = {
   postId: string;
   platform: SocialPlatform;
   targetAccountId: string | null;
-  format: "post" | "carousel";
+  format: "post" | "image" | "carousel" | "short_video";
   bodyText: string;
   assetManifest: SocialMediaAsset[];
   sourceExcerpt: string | null;
@@ -343,6 +364,14 @@ export type PostVersionUpdate = {
   bodyText?: string;
   assetManifest?: SocialMediaAsset[];
   approvalStatus?: PostVersion["approvalStatus"];
+};
+
+export type CreatePostVersionInput = {
+  platform: SocialPlatform;
+  targetAccountId?: string | null;
+  format?: PostVersion["format"];
+  bodyText: string;
+  assetManifest?: SocialMediaAsset[];
 };
 
 export type PublicationStatus =
@@ -649,6 +678,28 @@ export const useSocialStore = defineStore("social", () => {
     return data.post;
   }
 
+  async function addPostVersion(
+    postId: string,
+    input: CreatePostVersionInput,
+  ): Promise<SocialPostDetail> {
+    error.value = null;
+    const data = await api.post<{ post: SocialPostDetail }>(
+      `/social/posts/${encodeURIComponent(postId)}/versions`,
+      input,
+    );
+    if (!data.post) throw new Error("No Social Post returned");
+    return data.post;
+  }
+
+  async function deletePostVersion(versionId: string): Promise<SocialPostDetail> {
+    error.value = null;
+    const data = await api.delete<{ post: SocialPostDetail }>(
+      `/social/versions/${encodeURIComponent(versionId)}`,
+    );
+    if (!data.post) throw new Error("No Social Post returned");
+    return data.post;
+  }
+
   async function deleteSocialPost(postId: string, expectedUpdatedAt: string): Promise<void> {
     error.value = null;
     await api.delete(
@@ -906,6 +957,8 @@ export const useSocialStore = defineStore("social", () => {
     createSocialPost,
     createLocalSocialDemo,
     updateSocialPost,
+    addPostVersion,
+    deletePostVersion,
     deleteSocialPost,
     listDriveFolders,
     listDriveFiles,

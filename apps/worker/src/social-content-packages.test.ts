@@ -3,8 +3,11 @@ import * as socialPublishingPackage from "@me3-core/plugin-social-publishing";
 import {
   SocialPostInputError,
   SocialPublishingInputError,
+  addPostVersion,
   createPostVersionPublication,
   createSocialPost,
+  deletePostVersion,
+  deleteSocialPost,
   dispatchDueSocialPublications,
   listSocialPosts,
   publishQueuedPublication,
@@ -242,6 +245,63 @@ describe("Social Posts", () => {
     });
   });
 
+  it("adds and removes explicit platform Versions without changing the others", async () => {
+    const { env } = createEnv();
+    const created = await createSocialPost(env, "owner", {
+      siteId: "site-1",
+      sourceType: "pasted",
+      sourceSnapshot: "One source, selected destinations.",
+      sourceText: "One source, selected destinations.",
+      ideaText: "Selected destinations",
+      versions: [{
+        platform: "linkedin",
+        targetAccountId: "linkedin-1",
+        bodyText: "Shared copy.",
+      }],
+    });
+
+    const withX = await addPostVersion(env, "owner", created.post.id, {
+      platform: "x",
+      targetAccountId: "x-1",
+      bodyText: "Shared copy.",
+    });
+    expect(withX?.versions.map((version) => version.platform)).toEqual(["linkedin", "x"]);
+
+    const xVersion = withX?.versions.find((version) => version.platform === "x");
+    const withoutX = await deletePostVersion(env, "owner", xVersion!.id);
+    expect(withoutX?.versions.map((version) => version.platform)).toEqual(["linkedin"]);
+  });
+
+  it("removes failed drafts from the workspace without deleting delivery history", async () => {
+    const { env, packages, publications } = createEnv();
+    const created = await createSocialPost(env, "owner", {
+      siteId: "site-1",
+      sourceType: "pasted",
+      sourceSnapshot: "A human-authored failed draft.",
+      sourceText: "A human-authored failed draft.",
+      ideaText: "Failed draft",
+      versions: [{
+        platform: "linkedin",
+        targetAccountId: "linkedin-1",
+        bodyText: "A human-authored failed draft.",
+      }],
+    });
+    publications.push({
+      id: "publication-failed",
+      variant_id: created.versions[0]!.id,
+      status: "failed",
+    });
+
+    await expect(
+      deleteSocialPost(env, "owner", created.post.id, created.post.updatedAt),
+    ).resolves.toBe(true);
+    expect(packages[0]?.status).toBe("archived");
+    expect(publications).toEqual([
+      expect.objectContaining({ id: "publication-failed", status: "failed" }),
+    ]);
+    await expect(listSocialPosts(env, "owner", "site-1")).resolves.toEqual([]);
+  });
+
   it("atomically cancels a schedule committed immediately before a Version edit batch", async () => {
     const { db, env, publishingEnv, publications, events } = createEnv();
     const created = await createSocialPost(env, "owner", {
@@ -434,7 +494,7 @@ describe("Social Posts", () => {
     });
   });
 
-  it("rejects scheduling and publishing draft-only X Versions", async () => {
+  it("schedules and queues approved X Versions", async () => {
     for (const platform of ["x"] as const) {
       const { env, publishingEnv, publications, queueMessages } = createEnv();
       const platformLabel = platform === "x" ? "X" : "Instagram";
@@ -455,29 +515,31 @@ describe("Social Posts", () => {
         approvalStatus: "approved",
       });
 
-      await expect(
-        createPostVersionPublication(
-          publishingEnv as never,
-          "owner",
-          version!.id,
-          {
-            scheduledFor: "2099-07-11T08:30:00.000Z",
-            timezone: "Europe/Dublin",
-          },
-        ),
-      ).rejects.toThrow(
-        `${platformLabel} Versions are draft-only and cannot be scheduled yet`,
+      const scheduled = await createPostVersionPublication(
+        publishingEnv as never,
+        "owner",
+        version!.id,
+        {
+          scheduledFor: "2099-07-11T08:30:00.000Z",
+          timezone: "Europe/Dublin",
+        },
       );
-      await expect(
-        createPostVersionPublication(
-          publishingEnv as never,
-          "owner",
-          version!.id,
-          {},
-        ),
-      ).rejects.toBeInstanceOf(SocialPublishingInputError);
-      expect(publications).toHaveLength(0);
-      expect(queueMessages).toHaveLength(0);
+      expect(scheduled).toMatchObject({
+        platform,
+        status: "scheduled",
+      });
+      const queued = await createPostVersionPublication(
+        publishingEnv as never,
+        "owner",
+        version!.id,
+        {},
+      );
+      expect(queued).toMatchObject({
+        platform,
+        status: "queued",
+      });
+      expect(publications).toHaveLength(2);
+      expect(queueMessages).toEqual([{ publicationId: queued!.id }]);
     }
   });
 
@@ -622,6 +684,82 @@ class Statement {
     }
     if (this.sql.includes("FROM plugin_installations")) {
       return { enabled: 1, status: "installed" } as T;
+    }
+    if (
+      this.sql.includes("UPDATE social_packages") &&
+      this.sql.includes("SET status = 'archived'") &&
+      this.sql.includes("RETURNING id")
+    ) {
+      const [updatedAt, postId, expectedUpdatedAt, ownerId] = this.values;
+      const pkg = this.state.packages.find(
+        (row) => row.id === postId && row.updated_at === expectedUpdatedAt,
+      );
+      const site = this.state.sites.find(
+        (row) => row.id === pkg?.site_id && row.user_id === ownerId,
+      );
+      if (!pkg || !site) return null as T | null;
+      pkg.status = "archived";
+      pkg.updated_at = updatedAt;
+      return { id: postId } as T;
+    }
+    if (
+      this.sql.includes("COUNT(*) AS total") &&
+      this.sql.includes("FROM social_publications publication")
+    ) {
+      const [packageId] = this.values;
+      const versionIds = new Set(
+        this.state.variants
+          .filter((row) => row.package_id === packageId)
+          .map((row) => row.id),
+      );
+      const publications = this.state.publications.filter(
+        (row) => versionIds.has(row.variant_id),
+      );
+      return {
+        total: publications.length,
+        protected: publications.filter((row) =>
+          ["scheduled", "queued", "publishing", "published"].includes(String(row.status)),
+        ).length,
+      } as T;
+    }
+    if (
+      this.sql.includes("COUNT(*) AS count") &&
+      this.sql.includes("FROM social_variants") &&
+      this.sql.includes("package_id = ?")
+    ) {
+      const [packageId] = this.values;
+      return {
+        count: this.state.variants.filter((row) => row.package_id === packageId).length,
+      } as T;
+    }
+    if (
+      this.sql.includes("FROM social_variants version") &&
+      this.sql.includes("JOIN social_packages post")
+    ) {
+      const [versionId, ownerId] = this.values;
+      const version = this.state.variants.find((row) => row.id === versionId);
+      const pkg = this.state.packages.find((row) => row.id === version?.package_id);
+      const site = this.state.sites.find(
+        (row) => row.id === pkg?.site_id && row.user_id === ownerId,
+      );
+      return (version && pkg && site
+        ? {
+            id: version.id,
+            package_id: version.package_id,
+            approval_status: version.approval_status,
+            post_updated_at: pkg.updated_at,
+            source_type: pkg.source_type,
+          }
+        : null) as T | null;
+    }
+    if (
+      this.sql.includes("SELECT id FROM social_publications") &&
+      this.sql.includes("WHERE variant_id = ?") &&
+      this.sql.includes("LIMIT 1")
+    ) {
+      const [versionId] = this.values;
+      const publication = this.state.publications.find((row) => row.variant_id === versionId);
+      return (publication ? { id: publication.id } : null) as T | null;
     }
     if (
       this.sql.includes("INSERT INTO social_publications") &&
@@ -1236,6 +1374,40 @@ class Statement {
         payload_json: payload,
         created_at: createdAt,
       });
+    } else if (this.sql.includes("DELETE FROM social_publication_events")) {
+      if (this.sql.includes("WHERE variant_id = ?")) {
+        const [versionId] = this.values;
+        this.state.events.splice(
+          0,
+          this.state.events.length,
+          ...this.state.events.filter((row) => row.variant_id !== versionId),
+        );
+      }
+    } else if (this.sql.includes("DELETE FROM social_publications")) {
+      if (this.sql.includes("WHERE variant_id = ?")) {
+        const [versionId] = this.values;
+        this.state.publications.splice(
+          0,
+          this.state.publications.length,
+          ...this.state.publications.filter((row) => row.variant_id !== versionId),
+        );
+      }
+    } else if (this.sql.includes("DELETE FROM social_variants")) {
+      if (this.sql.includes("WHERE id = ?")) {
+        const [versionId] = this.values;
+        this.state.variants.splice(
+          0,
+          this.state.variants.length,
+          ...this.state.variants.filter((row) => row.id !== versionId),
+        );
+      }
+    } else if (
+      this.sql.includes("UPDATE social_packages") &&
+      this.sql.includes("SET updated_at = ?")
+    ) {
+      const [updatedAt, packageId] = this.values;
+      const pkg = this.state.packages.find((row) => row.id === packageId);
+      if (pkg) pkg.updated_at = updatedAt;
     } else if (this.sql.includes("UPDATE social_publications")) {
       if (this.sql.includes("WHERE variant_id = ?")) {
         const [errorCode, errorMessage, updatedAt, variantId] = this.values;

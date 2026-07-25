@@ -3,11 +3,13 @@ import {
   SocialPostingPlanInputError,
   SocialPublishingGateError,
   SocialPublishingInputError,
+  addPostVersion,
   cancelPublication,
   chooseSocialSuggestion,
   confirmPostingPlan,
   createPostVersionPublication,
   createSocialPost,
+  deletePostVersion,
   ensureLocalSocialDemo,
   deleteSocialPost,
   createSocialSuggestions,
@@ -30,6 +32,7 @@ import {
   updatePreferredPostingTimes,
   type ChooseSocialSuggestionInput,
   type CreatePublicationInput,
+  type CreatePostVersionInput,
   type CreateSocialPostInput,
   type CreatePostingPlanInput,
   type CreateSocialSuggestionsInput,
@@ -228,6 +231,26 @@ export function registerSocialContentRoutes(app: AppHono, deps: OwnerRouteDeps) 
     }
   });
 
+  app.post("/api/social/posts/:id/versions", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
+
+    try {
+      await requireSocialPublishing(c);
+      const post = await addPostVersion(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        (body && typeof body === "object" ? body : {}) as CreatePostVersionInput,
+      );
+      if (!post) return c.json({ ok: false, error: "Social Post not found" }, 404);
+      return c.json({ ok: true, post }, 201);
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
   app.patch("/api/social/posts/:id", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
@@ -368,6 +391,20 @@ export function registerSocialContentRoutes(app: AppHono, deps: OwnerRouteDeps) 
       );
       if (!version) return c.json({ ok: false, error: "Post Version not found" }, 404);
       return c.json({ ok: true, version });
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
+  app.delete("/api/social/versions/:id", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      await requireSocialPublishing(c);
+      const post = await deletePostVersion(c.env, ownerId, c.req.param("id"));
+      if (!post) return c.json({ ok: false, error: "Post Version not found" }, 404);
+      return c.json({ ok: true, post });
     } catch (error) {
       return socialContentErrorResponse(c, error);
     }

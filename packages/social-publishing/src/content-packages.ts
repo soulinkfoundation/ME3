@@ -24,7 +24,7 @@ export const SOCIAL_POST_SOURCE_TYPES = [
 ] as const;
 
 export type SocialPostSourceType = (typeof SOCIAL_POST_SOURCE_TYPES)[number];
-export type SocialPostFormat = "post" | "carousel";
+export type SocialPostFormat = "post" | "image" | "carousel" | "short_video";
 export type SocialPostApprovalStatus = "draft" | "approved" | "rejected";
 
 export type SocialPost = {
@@ -106,6 +106,14 @@ export type UpdatePostVersionInput = {
   bodyText?: string;
   assetManifest?: SocialMediaAsset[];
   approvalStatus?: SocialPostApprovalStatus;
+};
+
+export type CreatePostVersionInput = {
+  platform: SocialPlatform;
+  targetAccountId?: string | null;
+  format?: SocialPostFormat;
+  bodyText: string;
+  assetManifest?: SocialMediaAsset[];
 };
 
 export type UpdateSocialPostInput = {
@@ -772,11 +780,50 @@ export async function deleteSocialPost(
       409,
     );
   }
-  if (existing.variants.some((version) =>
-    version.approvalStatus !== "draft" || version.scheduledFor || version.publicationStatus,
-  )) {
+  const publicationSummary = await env.DB.prepare(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN publication.status IN ('scheduled', 'queued', 'publishing', 'published')
+              THEN 1 ELSE 0 END) AS protected
+     FROM social_publications publication
+     JOIN social_variants version ON version.id = publication.variant_id
+     WHERE version.package_id = ?`,
+  )
+    .bind(postId)
+    .first<{ total: number | string; protected: number | string | null }>();
+  const publicationCount = Number(publicationSummary?.total || 0);
+  const protectedPublicationCount = Number(publicationSummary?.protected || 0);
+  if (
+    protectedPublicationCount > 0 ||
+    existing.variants.some((version) => version.scheduledFor)
+  ) {
     throw new SocialPostInputError(
-      "Only unscheduled draft Posts can be deleted.",
+      "Scheduled, publishing, or published Posts cannot be deleted.",
+      409,
+    );
+  }
+
+  if (publicationCount > 0) {
+    const archived = await env.DB.prepare(
+      `UPDATE social_packages
+       SET status = 'archived', updated_at = ?
+       WHERE id = ? AND updated_at = ?
+         AND EXISTS (SELECT 1 FROM sites WHERE sites.id = social_packages.site_id AND sites.user_id = ?)
+       RETURNING id`,
+    )
+      .bind(monotonicUpdatedAt(existing.package.updatedAt), postId, expectedUpdatedAt, ownerId)
+      .first<{ id: string }>();
+    if (!archived) {
+      throw new SocialPostInputError(
+        "This Post changed while it was being deleted. Refresh and try again.",
+        409,
+      );
+    }
+    return true;
+  }
+
+  if (existing.variants.some((version) => version.approvalStatus !== "draft")) {
+    throw new SocialPostInputError(
+      "Only unapproved draft Posts can be deleted.",
       409,
     );
   }
@@ -798,6 +845,145 @@ export async function deleteSocialPost(
     ).bind(postId, expectedUpdatedAt, ownerId),
   ]);
   return true;
+}
+
+export async function addPostVersion(
+  env: SocialPostEnv,
+  ownerId: string,
+  postIdInput: string,
+  input: CreatePostVersionInput,
+): Promise<SocialPostDetail | null> {
+  const postId = requiredText(postIdInput, "Post id is required");
+  const existing = await getSocialContentPackage(env, ownerId, postId);
+  if (!existing) return null;
+  if (existing.package.sourceType === "legacy_content_bank_read_only") {
+    throw new SocialPostInputError("This imported Post is read-only.", 403);
+  }
+  if (existing.variants.some((version) => version.platform === input.platform)) {
+    throw new SocialPostInputError("This Post already has a Version for that platform.", 409);
+  }
+
+  const bodyText = requiredText(input.bodyText, "bodyText is required");
+  const targetAccountId = optionalText(input.targetAccountId);
+  if (targetAccountId) {
+    await requireActiveAccount(
+      env,
+      ownerId,
+      existing.package.siteId,
+      input.platform,
+      targetAccountId,
+    );
+  }
+
+  const versionId = `social-variant-${crypto.randomUUID()}`;
+  const now = monotonicUpdatedAt(existing.package.updatedAt);
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO social_variants (
+         id, package_id, platform, target_account_id, format, body_text,
+         asset_manifest_json, source_excerpt, approval_status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+    ).bind(
+      versionId,
+      postId,
+      input.platform,
+      targetAccountId,
+      input.format || "post",
+      bodyText,
+      JSON.stringify(input.assetManifest || []),
+      existing.package.sourceSnapshot.slice(0, 1_000),
+      now,
+      now,
+    ),
+    env.DB.prepare(
+      `INSERT INTO social_publication_events (
+         id, publication_id, variant_id, event_type, payload_json, created_at
+       ) VALUES (?, NULL, ?, 'generated', ?, ?)`,
+    ).bind(
+      `social-event-${crypto.randomUUID()}`,
+      versionId,
+      JSON.stringify({
+        platform: input.platform,
+        targetAccountId,
+        sourceType: existing.package.sourceType,
+        sourceRef: existing.package.sourceRef,
+        addedToPost: true,
+      }),
+      now,
+    ),
+    env.DB.prepare(
+      `UPDATE social_packages SET updated_at = ?
+       WHERE id = ? AND EXISTS (
+         SELECT 1 FROM sites WHERE sites.id = social_packages.site_id AND sites.user_id = ?
+       )`,
+    ).bind(now, postId, ownerId),
+  ]);
+  return getSocialPost(env, ownerId, postId);
+}
+
+export async function deletePostVersion(
+  env: SocialPostEnv,
+  ownerId: string,
+  versionIdInput: string,
+): Promise<SocialPostDetail | null> {
+  const versionId = requiredText(versionIdInput, "Post Version id is required");
+  const existing = await env.DB.prepare(
+    `SELECT version.id, version.package_id, version.approval_status,
+            post.updated_at AS post_updated_at, post.source_type
+     FROM social_variants version
+     JOIN social_packages post ON post.id = version.package_id
+     JOIN sites site ON site.id = post.site_id
+     WHERE version.id = ? AND site.user_id = ?`,
+  )
+    .bind(versionId, ownerId)
+    .first<{
+      id: string;
+      package_id: string;
+      approval_status: SocialPostApprovalStatus;
+      post_updated_at: string;
+      source_type: SocialPost["sourceType"];
+    }>();
+  if (!existing) return null;
+  if (existing.source_type === "legacy_content_bank_read_only") {
+    throw new SocialPostInputError("This imported Post is read-only.", 403);
+  }
+  const versionCount = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM social_variants WHERE package_id = ?",
+  )
+    .bind(existing.package_id)
+    .first<{ count: number | string }>();
+  if (Number(versionCount?.count || 0) <= 1) {
+    throw new SocialPostInputError(
+      "A Post needs at least one platform. Delete the Post instead.",
+      409,
+    );
+  }
+  if (existing.approval_status !== "draft") {
+    throw new SocialPostInputError("Only draft platform Versions can be removed.", 409);
+  }
+  const publication = await env.DB.prepare(
+    "SELECT id FROM social_publications WHERE variant_id = ? LIMIT 1",
+  )
+    .bind(versionId)
+    .first<{ id: string }>();
+  if (publication) {
+    throw new SocialPostInputError(
+      "A platform Version with Publication history cannot be removed.",
+      409,
+    );
+  }
+
+  const now = monotonicUpdatedAt(existing.post_updated_at);
+  await env.DB.batch([
+    env.DB.prepare(
+      "DELETE FROM social_publication_events WHERE variant_id = ?",
+    ).bind(versionId),
+    env.DB.prepare("DELETE FROM social_variants WHERE id = ?").bind(versionId),
+    env.DB.prepare(
+      "UPDATE social_packages SET updated_at = ? WHERE id = ?",
+    ).bind(now, existing.package_id),
+  ]);
+  return getSocialPost(env, ownerId, existing.package_id);
 }
 
 export async function updatePostVersion(

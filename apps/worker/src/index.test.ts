@@ -10071,6 +10071,7 @@ describe("ME3 Worker auth", () => {
       platform_account_id: "linkedin-owner",
       platform_handle: null,
       display_name: "Owner LinkedIn",
+      metadata_json: JSON.stringify({ avatarUrl: "https://cdn.test/linkedin-owner.jpg" }),
       status: "active",
       scopes_json: JSON.stringify(["w_member_social"]),
       last_verified_at: "2026-05-11T10:00:00Z",
@@ -10093,6 +10094,9 @@ describe("ME3 Worker auth", () => {
           draft: boolean;
           schedule: boolean;
           publish: boolean;
+          deliveryMode: string;
+          deliveryLabel: string;
+          contentRules: Array<{ contentType: string }>;
           reason: string | null;
         }>;
       };
@@ -10102,48 +10106,76 @@ describe("ME3 Worker auth", () => {
     expect(statusResponse.status).toBe(200);
     expect(statusBody.plugin).toMatchObject({ status: "installed", ready: true });
     expect(statusBody.plugin.platformCapabilities).toEqual([
-      {
+      expect.objectContaining({
         platform: "linkedin",
         draft: true,
         schedule: true,
         publish: true,
+        deliveryMode: "direct_publish",
+        deliveryLabel: "Publishes directly",
+        contentRules: expect.arrayContaining([
+          expect.objectContaining({ contentType: "text" }),
+          expect.objectContaining({ contentType: "image" }),
+          expect.objectContaining({ contentType: "carousel", maxMediaItems: 20 }),
+        ]),
         reason: null,
-      },
-      {
+      }),
+      expect.objectContaining({
         platform: "x",
         draft: true,
-        schedule: false,
-        publish: false,
-        reason: expect.any(String),
-      },
-      {
+        schedule: true,
+        publish: true,
+        deliveryMode: "direct_publish",
+        deliveryLabel: "Publishes directly",
+        contentRules: expect.arrayContaining([
+          expect.objectContaining({ contentType: "text" }),
+          expect.objectContaining({ contentType: "carousel" }),
+          expect.objectContaining({ contentType: "short_video" }),
+        ]),
+        reason: null,
+      }),
+      expect.objectContaining({
         platform: "instagram",
         draft: true,
         schedule: true,
         publish: true,
+        deliveryMode: "direct_publish",
+        contentRules: expect.arrayContaining([
+          expect.objectContaining({ contentType: "image" }),
+          expect.objectContaining({ contentType: "carousel" }),
+          expect.objectContaining({ contentType: "short_video" }),
+        ]),
         reason: null,
-      },
-      {
+      }),
+      expect.objectContaining({
         platform: "instagram_business",
         draft: true,
         schedule: true,
         publish: true,
+        deliveryMode: "direct_publish",
         reason: null,
-      },
-      {
+      }),
+      expect.objectContaining({
         platform: "youtube",
         draft: true,
         schedule: false,
-        publish: false,
-        reason: expect.any(String),
-      },
-      {
+        publish: true,
+        deliveryMode: "provider_draft",
+        deliveryLabel: "Uploads privately",
+        contentRules: [
+          expect.objectContaining({ contentType: "short_video" }),
+        ],
+        reason: null,
+      }),
+      expect.objectContaining({
         platform: "tiktok",
         draft: true,
         schedule: false,
         publish: true,
+        deliveryMode: "provider_draft",
+        deliveryLabel: "Sends a creator draft",
         reason: null,
-      },
+      }),
     ]);
     expect(statusBody.hostedOAuth).toEqual({
       configured: true,
@@ -10158,7 +10190,13 @@ describe("ME3 Worker auth", () => {
     );
     const body = (await response.json()) as {
       plugin: { status: string; ready: boolean };
-      accounts: Array<{ id: string; platform: string; scopes: string[] }>;
+      accounts: Array<{
+        id: string;
+        platform: string;
+        scopes: string[];
+        avatarUrl: string | null;
+        avatarSource: string | null;
+      }>;
     };
 
     expect(response.status).toBe(200);
@@ -10168,6 +10206,8 @@ describe("ME3 Worker auth", () => {
         id: "social-account-1",
         platform: "linkedin",
         scopes: ["w_member_social"],
+        avatarUrl: "https://cdn.test/linkedin-owner.jpg",
+        avatarSource: "provider",
       }),
     ]);
   });
@@ -10344,88 +10384,6 @@ describe("ME3 Worker auth", () => {
         ],
       },
     ]);
-  });
-
-  it("rejects scheduling for draft-only X Versions", async () => {
-    const env = createEnv();
-    const session = cookieHeader(await bootstrap(env));
-    await app.fetch(
-      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-
-    const draftOnlyPlatforms = ["x"] as const;
-    for (const platform of draftOnlyPlatforms) {
-      env.socialAccounts.push({
-        id: `${platform}-account`,
-        user_id: "owner",
-        site_id: "site-1",
-        platform,
-        platform_account_id: `${platform}-owner`,
-        platform_handle: null,
-        display_name: `${platform} owner`,
-        status: "active",
-        scopes_json: "[]",
-        last_verified_at: "2026-07-18T09:00:00.000Z",
-        created_at: "2026-07-18T09:00:00.000Z",
-        updated_at: "2026-07-18T09:00:00.000Z",
-      });
-    }
-
-    const createResponse = await app.fetch(
-      new Request("http://localhost/api/social/posts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: session },
-        body: JSON.stringify({
-          siteId: "site-1",
-          sourceType: "pasted",
-          sourceSnapshot: "A human-authored scheduling test Source.",
-          sourceText: "A human-authored scheduling test Source.",
-          ideaText: "Draft-only platforms stay draft-only.",
-          versions: draftOnlyPlatforms.map((platform) => ({
-            platform,
-            targetAccountId: `${platform}-account`,
-            bodyText: `A ${platform} draft.`,
-          })),
-        }),
-      }),
-      env,
-    );
-    const createBody = (await createResponse.json()) as {
-      post: { versions: Array<{ id: string; platform: string }> };
-    };
-
-    expect(createResponse.status).toBe(201);
-    for (const version of createBody.post.versions) {
-      const approvalResponse = await app.fetch(
-        new Request(`http://localhost/api/social/versions/${version.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", Cookie: session },
-          body: JSON.stringify({ approvalStatus: "approved" }),
-        }),
-        env,
-      );
-      expect(approvalResponse.status, version.platform).toBe(200);
-
-      const response = await app.fetch(
-        new Request(`http://localhost/api/social/versions/${version.id}/publications`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Cookie: session },
-          body: JSON.stringify({
-            scheduledFor: "2099-07-20T09:30:00.000Z",
-            timezone: "Europe/Dublin",
-          }),
-        }),
-        env,
-      );
-      const body = (await response.json()) as { error: string };
-
-      expect(response.status, version.platform).toBe(400);
-      expect(body.error).toContain("Versions are draft-only and cannot be scheduled yet");
-    }
   });
 
   it("does not expose the retired legacy content-item routes", async () => {

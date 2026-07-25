@@ -11,10 +11,78 @@ vi.mock("../api", () => ({
   ApiError: class ApiError extends Error {},
 }));
 
+const toastHarness = vi.hoisted(() => ({
+  error: vi.fn(),
+  notice: vi.fn(),
+  success: vi.fn(),
+}));
+
+vi.mock("../composables/useAppToast", () => ({
+  useAppToast: () => ({
+    toast: toastHarness.notice,
+    toastError: toastHarness.error,
+    toastSuccess: toastHarness.success,
+  }),
+}));
+
 const account = {
   id: "account-linkedin", siteId: "site-1", platform: "linkedin", handle: "@kieran",
-  displayName: "Kieran", status: "active", lastVerifiedAt: "2026-07-18T08:00:00Z",
+  displayName: "Kieran", avatarUrl: "https://cdn.test/kieran.jpg", avatarSource: "provider",
+  status: "active", lastVerifiedAt: "2026-07-18T08:00:00Z",
 };
+
+function platformCapability(
+  platform: "linkedin" | "instagram" | "tiktok",
+  options: { schedule: boolean; deliveryMode: "direct_publish" | "provider_draft" },
+) {
+  const isTikTok = platform === "tiktok";
+  const isInstagram = platform === "instagram";
+  return {
+    platform,
+    draft: true,
+    schedule: options.schedule,
+    publish: true,
+    deliveryMode: options.deliveryMode,
+    deliveryLabel: isTikTok ? "Sends a creator draft" : "Publishes directly",
+    contentRules: isTikTok
+      ? [{
+          contentType: "short_video",
+          label: "Short video",
+          requiresText: false,
+          maxTextCharacters: null,
+          minMediaItems: 1,
+          maxMediaItems: 1,
+          allowedMediaKinds: ["video"],
+          allowedMimeTypes: ["video/mp4", "video/quicktime", "video/webm"],
+          maxBytesPerItem: 4 * 1024 * 1024 * 1024,
+          guidance: "Finish in TikTok.",
+        }]
+      : isInstagram ? [{
+          contentType: "short_video",
+          label: "Short video",
+          requiresText: true,
+          maxTextCharacters: 2_200,
+          minMediaItems: 1,
+          maxMediaItems: 1,
+          allowedMediaKinds: ["video"],
+          allowedMimeTypes: ["video/mp4", "video/quicktime"],
+          maxBytesPerItem: 1024 * 1024 * 1024,
+          guidance: "Publishes as a Reel.",
+        }] : [{
+          contentType: "text",
+          label: "Text post",
+          requiresText: true,
+          maxTextCharacters: 3_000,
+          minMediaItems: 0,
+          maxMediaItems: 0,
+          allowedMediaKinds: [],
+          allowedMimeTypes: [],
+          maxBytesPerItem: null,
+          guidance: null,
+        }],
+    reason: null,
+  };
+}
 
 const mediaFiles = [
   {
@@ -82,7 +150,7 @@ describe("SocialPage", () => {
       if (endpoint === "/files/items") return Promise.resolve({ files: mediaFiles });
       if (endpoint === "/social/status") return Promise.resolve({
         plugin: { status: "installed", enabled: true, ready: true, statusLabel: "Installed", platformCapabilities: [
-          { platform: "linkedin", draft: true, schedule: true, publish: true, reason: null },
+          platformCapability("linkedin", { schedule: true, deliveryMode: "direct_publish" }),
         ] },
         hostedOAuth: { configured: false, platforms: [] },
       });
@@ -106,7 +174,58 @@ describe("SocialPage", () => {
     expect(wrapper.text()).not.toContain("Posting plan");
   });
 
-  it("automatically targets a connected account and uses a platform preview", async () => {
+  it("uses Schedule as the primary action and keeps Post now out of the dialog", async () => {
+    const textOnlyPost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        assetManifest: [],
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [textOnlyPost] });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("linkedin", {
+              schedule: true,
+              deliveryMode: "direct_publish",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const actions = wrapper.get(".editor-actions");
+    expect(actions.findAll("button").map((button) => button.text().trim())).toEqual([
+      "Save Draft",
+      "Post now",
+      "Schedule",
+    ]);
+    const schedule = actions.findAll("button")
+      .find((button) => button.text().trim() === "Schedule");
+    expect(schedule?.attributes("disabled")).toBeUndefined();
+    await schedule!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get(".social-schedule-dialog h2").text()).toBe("Schedule post");
+    expect(wrapper.find(".social-schedule-dialog input[type='radio']").exists()).toBe(false);
+    expect(wrapper.get(".social-schedule-dialog").text()).not.toContain("Post now");
+  });
+
+  it("requires an explicit destination choice and uses a platform preview", async () => {
     const wrapper = mountPage();
     await flushPromises();
 
@@ -134,9 +253,21 @@ describe("SocialPage", () => {
     await wrapper.get("[aria-label='New Post']").trigger("click");
     await flushPromises();
 
+    expect(api.post).not.toHaveBeenCalled();
+    await wrapper.get(".content-type-picker input[value='text']").setValue();
+    await wrapper.get(".destination-option").trigger("click");
+    const createDraft = wrapper.findAll("button").find((button) => button.text().includes("Create draft"));
+    expect(createDraft).toBeTruthy();
+    await createDraft!.trigger("click");
+    await flushPromises();
+
     expect(api.post).toHaveBeenCalledWith("/social/posts", expect.objectContaining({
       ideaText: "Untitled draft",
-      versions: [expect.objectContaining({ platform: "linkedin", targetAccountId: "account-linkedin" })],
+      versions: [expect.objectContaining({
+        platform: "linkedin",
+        targetAccountId: "account-linkedin",
+        format: "post",
+      })],
     }));
     expect((wrapper.get("#social-post-title").element as HTMLInputElement).value)
       .toBe("Untitled draft");
@@ -217,6 +348,115 @@ describe("SocialPage", () => {
     expect(wrapper.findAll(".social-media-picker__grid video")).toHaveLength(1);
   });
 
+  it("bulk-edits shared copy while preserving truthful platform delivery modes", async () => {
+    const instagramAccount = {
+      ...account,
+      id: "account-instagram",
+      platform: "instagram",
+      handle: "kieran",
+      displayName: "Kieran on Instagram",
+    };
+    const tiktokAccount = {
+      ...account,
+      id: "account-tiktok",
+      platform: "tiktok",
+      handle: "kieranofearth",
+      displayName: "kieranofearth",
+    };
+    const sharedVideo = {
+      url: "https://example.com/short.mp4",
+      kind: "video" as const,
+      mimeType: "video/mp4",
+      byteLength: 303,
+    };
+    const multiPlatformPost = {
+      ...post,
+      versions: [
+        {
+          ...post.versions[0],
+          id: "version-instagram",
+          platform: "instagram" as const,
+          targetAccountId: instagramAccount.id,
+          bodyText: "Shared short caption.",
+          assetManifest: [sharedVideo],
+        },
+        {
+          ...post.versions[0],
+          id: "version-tiktok",
+          platform: "tiktok" as const,
+          targetAccountId: tiktokAccount.id,
+          bodyText: "Shared short caption.",
+          assetManifest: [sharedVideo],
+        },
+      ],
+    };
+
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [multiPlatformPost] });
+      }
+      if (endpoint === "/social/accounts") {
+        return Promise.resolve({ accounts: [instagramAccount, tiktokAccount] });
+      }
+      if (endpoint === "/social/status") {
+        return Promise.resolve({
+          plugin: {
+            status: "installed",
+            enabled: true,
+            ready: true,
+            statusLabel: "Installed",
+            platformCapabilities: [
+              platformCapability("instagram", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+              platformCapability("tiktok", {
+                schedule: false,
+                deliveryMode: "provider_draft",
+              }),
+            ],
+          },
+          hostedOAuth: { configured: false, platforms: [] },
+        });
+      }
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.patch).mockImplementation(async (endpoint, input) => {
+      const versionId = endpoint.split("/").at(-1);
+      const version = multiPlatformPost.versions.find((item) => item.id === versionId)!;
+      return { version: { ...version, ...(input as Record<string, unknown>) } };
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.get(".version-tab--shared").classes()).toContain("version-tab--active");
+    expect(wrapper.get(".publishing-checks").text()).toContain("Publishes directly");
+    expect(wrapper.get(".publishing-checks").text()).toContain("Sends a creator draft");
+    expect(wrapper.get(".editor-actions").text()).toContain("Post now");
+    expect(wrapper.get(".editor-actions").text()).toContain("Schedule");
+    expect(wrapper.get(".editor-actions").text()).not.toContain("Send to TikTok");
+    const scheduleButton = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Schedule");
+    expect(scheduleButton?.attributes("disabled")).toBeDefined();
+    expect(wrapper.findAll(".social-account-avatar__image").length).toBeGreaterThan(0);
+
+    await wrapper.get(".version-editor textarea").setValue("Revised shared caption.");
+    const save = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().includes("Save Draft"));
+    await save!.trigger("click");
+    await flushPromises();
+
+    const versionUpdates = vi.mocked(api.patch).mock.calls.filter(
+      ([endpoint]) => endpoint.startsWith("/social/versions/"),
+    );
+    expect(versionUpdates).toHaveLength(2);
+    expect(versionUpdates.map(([, input]) => input)).toEqual([
+      expect.objectContaining({ bodyText: "Revised shared caption." }),
+      expect.objectContaining({ bodyText: "Revised shared caption." }),
+    ]);
+  });
+
   it("renders TikTok video previews with the caption at the bottom of the stage", async () => {
     const tiktokAccount = {
       ...account,
@@ -244,7 +484,7 @@ describe("SocialPage", () => {
       if (endpoint === "/files/items") return Promise.resolve({ files: mediaFiles });
       if (endpoint === "/social/status") return Promise.resolve({
         plugin: { status: "installed", enabled: true, ready: true, statusLabel: "Installed", platformCapabilities: [
-          { platform: "tiktok", draft: true, schedule: false, publish: true, reason: null },
+          platformCapability("tiktok", { schedule: false, deliveryMode: "provider_draft" }),
         ] },
         hostedOAuth: { configured: false, platforms: [] },
       });
@@ -259,5 +499,90 @@ describe("SocialPage", () => {
     expect(wrapper.get(".tiktok-preview__caption").text()).toContain("Greetings Earthling");
     expect(wrapper.find(".tiktok-preview__rail").exists()).toBe(true);
     expect(wrapper.get(".tiktok-preview__stage video").attributes("controls")).toBeDefined();
+  });
+
+  it("shows a TikTok delivery failure instead of a success confirmation", async () => {
+    const tiktokAccount = {
+      ...account,
+      id: "account-tiktok",
+      platform: "tiktok",
+      handle: "kieranofearth",
+      displayName: "kieranofearth",
+    };
+    const tiktokVersion = {
+      ...post.versions[0],
+      id: "version-tiktok",
+      platform: "tiktok" as const,
+      targetAccountId: "account-tiktok",
+      bodyText: "Greetings Earthling 🌍",
+      assetManifest: [{
+        url: "/api/files/file-video-1/content",
+        fileId: "file-video-1",
+        kind: "video" as const,
+        mimeType: "video/mp4",
+        byteLength: 303,
+      }],
+    };
+    const tiktokPost = {
+      ...post,
+      versions: [tiktokVersion],
+    };
+
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") return Promise.resolve({ posts: [tiktokPost] });
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [tiktokAccount] });
+      if (endpoint === "/files/folders") return Promise.resolve({ folders: [] });
+      if (endpoint === "/files/items") return Promise.resolve({ files: mediaFiles });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: { status: "installed", enabled: true, ready: true, statusLabel: "Installed", platformCapabilities: [
+          platformCapability("tiktok", { schedule: false, deliveryMode: "provider_draft" }),
+        ] },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.patch).mockResolvedValue({
+      version: { ...tiktokVersion, approvalStatus: "approved" },
+    });
+    vi.mocked(api.post).mockResolvedValue({
+      publication: {
+        id: "publication-tiktok-failed",
+        versionId: "version-tiktok",
+        platform: "tiktok",
+        status: "failed",
+        scheduledFor: null,
+        timezone: null,
+        queuedAt: null,
+        platformPostId: null,
+        platformPostUrl: null,
+        publishedAt: null,
+        failureClass: "retryable",
+        errorCode: "retryable:media_delivery_setup",
+        errorMessage: "ME3 needs an exact public API origin before private Files media can be delivered.",
+        requestedByType: "owner",
+        requestedByUserId: "owner",
+        requestContext: {},
+        createdAt: "2026-07-25T12:00:00.000Z",
+        updatedAt: "2026-07-25T12:00:01.000Z",
+      },
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const postNow = wrapper.findAll("button").find(
+      (button) => button.text().trim() === "Post now",
+    );
+    expect(postNow).toBeTruthy();
+    await postNow!.trigger("click");
+    await flushPromises();
+
+    const message =
+      "ME3 needs an exact public API origin before private Files media can be delivered.";
+    expect(wrapper.find(".social-schedule-dialog").exists()).toBe(false);
+    expect(wrapper.get(".editor-action-error").text()).toContain(message);
+    expect(toastHarness.error).toHaveBeenCalledWith(message);
+    expect(toastHarness.success).not.toHaveBeenCalled();
+    expect(api.post).toHaveBeenCalledWith("/social/versions/version-tiktok/publish", {});
   });
 });

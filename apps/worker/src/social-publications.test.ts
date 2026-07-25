@@ -144,6 +144,56 @@ describe("reusable social Publications", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("rejects private Files media before creating a Publication when delivery is not configured", async () => {
+    fixture.db.run(
+      `UPDATE social_variants
+       SET asset_manifest_json = ?
+       WHERE id = 'version-1'`,
+      JSON.stringify([{
+        url: "/api/files/file-private-1/content",
+        fileId: "file-private-1",
+        filename: "private.png",
+        mimeType: "image/png",
+        kind: "image",
+        byteLength: 4,
+      }]),
+    );
+
+    await expect(
+      createPostVersionPublication(
+        fixture.env as never,
+        "owner",
+        "version-1",
+      ),
+    ).rejects.toMatchObject({
+      status: 424,
+      message: "ME3 needs an exact public API origin before private Files media can be delivered.",
+    });
+
+    fixture.env.CORE_API_ORIGIN = "https://core.example";
+    await expect(
+      createPostVersionPublication(
+        fixture.env as never,
+        "owner",
+        "version-1",
+      ),
+    ).rejects.toMatchObject({
+      status: 424,
+      message: "ME3 needs Files storage before private media can be delivered.",
+    });
+
+    expect(
+      fixture.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM social_publications",
+      ),
+    ).toEqual({ count: 0 });
+    expect(
+      fixture.db.first<{ approval_status: string }>(
+        "SELECT approval_status FROM social_variants WHERE id = 'version-1'",
+      ),
+    ).toEqual({ approval_status: "approved" });
+  });
+
   it("rolls back and safely retries scheduled Publication creation with its audit", async () => {
     const scheduledFor = "2099-08-01T09:00:00.000Z";
     fixture.db.failNextBatchAfterFirst = true;
@@ -366,10 +416,10 @@ describe("reusable social Publications", () => {
       `UPDATE social_variants SET approval_status = 'approved' WHERE id = 'version-1'`,
     );
     fixture.db.run(
-      `UPDATE social_variants SET platform = 'x' WHERE id = 'version-1'`,
+      `UPDATE social_variants SET platform = 'youtube' WHERE id = 'version-1'`,
     );
     fixture.db.run(
-      `UPDATE social_publications SET platform = 'x' WHERE id = ?`,
+      `UPDATE social_publications SET platform = 'youtube' WHERE id = ?`,
       publication.id,
     );
     await expect(
@@ -380,7 +430,7 @@ describe("reusable social Publications", () => {
       }),
     ).rejects.toMatchObject({
       status: 409,
-      message: "X Versions cannot be scheduled yet",
+      message: "YouTube Versions cannot be scheduled yet",
     });
     fixture.db.run(
       `UPDATE social_variants SET platform = 'linkedin' WHERE id = 'version-1'`,
@@ -450,6 +500,15 @@ describe("reusable social Publications", () => {
     );
 
     expect(versions).toEqual([
+      expect.objectContaining({
+        versionId: "version-x",
+        postId: "post-x",
+        siteId: "site-1",
+        platform: "x",
+        accountId: "account-x",
+        accountLabel: "X account",
+        sourceLabel: "Journal",
+      }),
       expect.objectContaining({
         versionId: "version-1",
         postId: "post-1",
@@ -807,6 +866,50 @@ describe("reusable social Publications", () => {
       status: "published",
       platform_post_id: "urn:li:share:private-media",
     });
+  });
+
+  it("preserves approval when queued private media loses its delivery configuration", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    fixture.db.run(
+      `UPDATE social_publications
+       SET asset_manifest_json_snapshot = ?
+       WHERE id = ?`,
+      JSON.stringify([{
+        url: "/api/files/file-private-1/content",
+        fileId: "file-private-1",
+        filename: "private.png",
+        mimeType: "image/png",
+        kind: "image",
+        byteLength: 4,
+      }]),
+      publication.id,
+    );
+
+    const fetcher = vi.fn();
+    await expect(
+      publishQueuedPublication(
+        fixture.env as never,
+        publication.id,
+        fetcher as unknown as typeof fetch,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(
+      fixture.db.first<{ status: string; error_code: string }>(
+        "SELECT status, error_code FROM social_publications WHERE id = ?",
+        publication.id,
+      ),
+    ).toEqual({
+      status: "failed",
+      error_code: "retryable:media_delivery_setup",
+    });
+    expect(
+      fixture.db.first<{ approval_status: string }>(
+        "SELECT approval_status FROM social_variants WHERE id = 'version-1'",
+      ),
+    ).toEqual({ approval_status: "approved" });
   });
 
   it("keeps an unmarked publishing claim leased when exception recovery fails, then safely reclaims it", async () => {
@@ -1795,6 +1898,7 @@ async function enableProviderDelivery(
   fixture: ReturnType<typeof createFixture>,
   publicationId: string,
 ): Promise<void> {
+  fixture.env.SITE_ASSETS = {};
   fixture.db.run(
     `UPDATE social_accounts
      SET status = 'active', access_token_ciphertext = ?
@@ -1904,6 +2008,7 @@ function createFixture() {
       TOKEN_ENCRYPTION_KEY: TEST_TOKEN_ENCRYPTION_KEY,
       ME3_SOCIAL_OAUTH_ORIGIN: undefined as string | undefined,
       CORE_API_ORIGIN: undefined as string | undefined,
+      SITE_ASSETS: undefined as unknown,
     },
     send,
     queueMessages,

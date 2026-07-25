@@ -93,6 +93,102 @@ describe("LinkedIn publishing adapter", () => {
     expect(fetcher).toHaveBeenCalledTimes(5);
   });
 
+  it("uploads ordered images and publishes a LinkedIn multi-image post", async () => {
+    const uploads: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v2/userinfo")) return Response.json({ sub: "member-1" });
+      if (url.startsWith("https://cdn.example/")) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-type": url.endsWith(".png") ? "image/png" : "image/jpeg" },
+        });
+      }
+      if (url.includes("/rest/images?action=initializeUpload")) {
+        const imageNumber = uploads.length + 1;
+        uploads.push(`image-${imageNumber}`);
+        return Response.json({
+          value: {
+            uploadUrl: `https://upload.linkedin.example/image-${imageNumber}`,
+            image: `urn:li:image:image-${imageNumber}`,
+          },
+        });
+      }
+      if (url.startsWith("https://upload.linkedin.example/")) {
+        expect(init?.method).toBe("PUT");
+        return new Response(null, { status: 201 });
+      }
+      if (url.endsWith("/rest/posts")) {
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          commentary: "Two images in order.",
+          content: {
+            multiImage: {
+              images: [
+                { id: "urn:li:image:image-1", altText: "First image." },
+                { id: "urn:li:image:image-2" },
+              ],
+            },
+          },
+        });
+        return new Response("{}", {
+          status: 201,
+          headers: { "x-restli-id": "urn:li:share:multi-image-post" },
+        });
+      }
+      throw new Error(`Unexpected LinkedIn request: ${url}`);
+    });
+
+    const result = await adapterFor("linkedin").publish({
+      accessToken: "token",
+      accountId: "member-1",
+      bodyText: "Two images in order.",
+      assets: [
+        {
+          url: "https://cdn.example/first.png",
+          kind: "image",
+          mimeType: "image/png",
+          altText: " First image. ",
+        },
+        {
+          url: "https://cdn.example/second.jpg",
+          kind: "image",
+          mimeType: "image/jpeg",
+        },
+      ],
+      fetcher: fetcher as typeof fetch,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      platformPostId: "urn:li:share:multi-image-post",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(8);
+  });
+
+  it("rejects unsupported LinkedIn media before delivery", () => {
+    expect(adapterFor("linkedin").validateDraft({
+      bodyText: "A video.",
+      assets: [{
+        url: "https://cdn.example/video.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+      }],
+    })).toEqual({
+      ok: false,
+      error: "LinkedIn publishing currently supports text and image posts.",
+    });
+    expect(adapterFor("linkedin").validateDraft({
+      bodyText: "Too many images.",
+      assets: Array.from({ length: 21 }, (_, index) => ({
+        url: `https://cdn.example/${index}.png`,
+        kind: "image" as const,
+        mimeType: "image/png",
+      })),
+    })).toEqual({
+      ok: false,
+      error: "LinkedIn multi-image posts support up to 20 images.",
+    });
+  });
+
   it("classifies a confirmed rate limit as safely retryable", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith("/v2/userinfo")) return Response.json({ sub: "member-1" });
@@ -256,6 +352,72 @@ describe("X publishing adapter", () => {
     expect(fetcher).toHaveBeenCalledTimes(6);
   });
 
+  it("uploads and publishes one MP4 video through X's chunked media flow", async () => {
+    const videoBytes = new Uint8Array([1, 2, 3, 4]);
+    const commands: string[] = [];
+    const markProviderWriteStarted = vi.fn(async () => undefined);
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://media.example/short.mp4") {
+        expect(new Headers(init?.headers).get("Range")).toBe("bytes=0-3");
+        return new Response(videoBytes, { status: 206 });
+      }
+      if (url === "https://api.x.com/2/media/upload") {
+        const body = init?.body as FormData;
+        const command = String(body.get("command"));
+        commands.push(command);
+        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer x-token");
+        if (command === "INIT") {
+          expect(body.get("command")).toBe("INIT");
+          expect(body.get("media_type")).toBe("video/mp4");
+          expect(body.get("total_bytes")).toBe("4");
+          expect(body.get("media_category")).toBe("tweet_video");
+          return Response.json({ data: { id: "video-media-1" } });
+        }
+        if (command === "APPEND") {
+          expect(body.get("media_id")).toBe("video-media-1");
+          expect(body.get("segment_index")).toBe("0");
+          expect(body.get("media")).toBeInstanceOf(Blob);
+          return new Response(null, { status: 204 });
+        }
+        expect(command).toBe("FINALIZE");
+        return Response.json({
+          data: {
+            id: "video-media-1",
+            processing_info: { state: "succeeded" },
+          },
+        });
+      }
+      if (url === "https://api.x.com/2/tweets") {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          text: "A useful short video.",
+          media: { media_ids: ["video-media-1"] },
+        });
+        return Response.json({ data: { id: "video-post-1" } }, { status: 201 });
+      }
+      throw new Error(`Unexpected X request: ${url}`);
+    });
+
+    const result = await adapterFor("x").publish({
+      accessToken: "x-token",
+      accountId: "x-owner",
+      bodyText: "A useful short video.",
+      assets: [{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: videoBytes.byteLength,
+      }],
+      fetcher: fetcher as typeof fetch,
+      markProviderWriteStarted,
+    });
+
+    expect(result).toMatchObject({ ok: true, platformPostId: "video-post-1" });
+    expect(commands).toEqual(["INIT", "APPEND", "FINALIZE"]);
+    expect(markProviderWriteStarted).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(5);
+  });
+
   it.each([
     {
       label: "more than four images",
@@ -267,9 +429,31 @@ describe("X publishing adapter", () => {
       message: "up to 4 raster images",
     },
     {
-      label: "video",
-      assets: [{ url: "https://cdn.example/video.mp4", kind: "video" as const }],
-      message: "raster images only",
+      label: "non-MP4 video",
+      assets: [{
+        url: "https://cdn.example/video.mov",
+        kind: "video" as const,
+        mimeType: "video/quicktime",
+        byteLength: 100,
+      }],
+      message: "supports MP4",
+    },
+    {
+      label: "mixed video and image",
+      assets: [
+        {
+          url: "https://cdn.example/video.mp4",
+          kind: "video" as const,
+          mimeType: "video/mp4",
+          byteLength: 100,
+        },
+        {
+          url: "https://cdn.example/image.png",
+          kind: "image" as const,
+          mimeType: "image/png",
+        },
+      ],
+      message: "exactly one video and no images",
     },
     {
       label: "SVG",
@@ -430,6 +614,169 @@ describe("X publishing adapter", () => {
       failureClass: "outcome_unknown",
       errorCode: "x_missing_id",
     });
+  });
+});
+
+describe("YouTube private upload adapter", () => {
+  it("uploads a video privately through a resumable session and returns YouTube Studio", async () => {
+    const videoBytes = new Uint8Array([1, 2, 3, 4]);
+    const markProviderWriteStarted = vi.fn(async () => undefined);
+    const uploadUrl = "https://www.googleapis.com/upload/youtube/v3/videos?upload_id=one";
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable")) {
+        expect(init?.method).toBe("POST");
+        expect(new Headers(init?.headers).get("X-Upload-Content-Length")).toBe("4");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          snippet: {
+            title: "My useful Short",
+            description: "A concise YouTube description.",
+            categoryId: "22",
+          },
+          status: {
+            privacyStatus: "private",
+            selfDeclaredMadeForKids: false,
+          },
+        });
+        return new Response(null, {
+          status: 200,
+          headers: { Location: uploadUrl },
+        });
+      }
+      if (url === "https://media.example/short.mp4") {
+        expect(new Headers(init?.headers).get("Range")).toBe("bytes=0-3");
+        return new Response(videoBytes, { status: 206 });
+      }
+      if (url === uploadUrl) {
+        expect(init?.method).toBe("PUT");
+        expect(new Headers(init?.headers).get("Content-Range")).toBe("bytes 0-3/4");
+        expect(new Uint8Array(await new Response(init?.body).arrayBuffer())).toEqual(videoBytes);
+        return Response.json({ id: "youtube-video-1" }, { status: 201 });
+      }
+      if (url.startsWith("https://www.googleapis.com/youtube/v3/videos?part=status")) {
+        return Response.json({
+          items: [{
+            id: "youtube-video-1",
+            status: { uploadStatus: "uploaded", privacyStatus: "private" },
+            processingDetails: { processingStatus: "processing" },
+          }],
+        });
+      }
+      throw new Error(`Unexpected YouTube request: ${url}`);
+    });
+
+    const result = await adapterFor("youtube").publish({
+      accessToken: "youtube-token",
+      accountId: "channel-1",
+      title: "My useful Short",
+      bodyText: "A concise YouTube description.",
+      assets: [{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: videoBytes.byteLength,
+      }],
+      fetcher: fetcher as typeof fetch,
+      markProviderWriteStarted,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      platformPostId: "youtube-video-1",
+      platformPostUrl: "https://studio.youtube.com/video/youtube-video-1/edit",
+      providerResponse: {
+        privacyStatus: "private",
+        processing: {
+          items: [{
+            processingDetails: { processingStatus: "processing" },
+          }],
+        },
+      },
+    });
+    expect(markProviderWriteStarted).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
+  it("queries an interrupted upload and resumes from YouTube's confirmed byte offset", async () => {
+    const videoBytes = new Uint8Array([1, 2, 3, 4]);
+    const sourceRanges: string[] = [];
+    const uploadRanges: string[] = [];
+    const uploadUrl = "https://www.googleapis.com/upload/youtube/v3/videos?upload_id=resume";
+    let uploadAttempt = 0;
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("uploadType=resumable")) {
+        return new Response(null, { status: 200, headers: { Location: uploadUrl } });
+      }
+      if (url === "https://media.example/resume.mp4") {
+        const range = new Headers(init?.headers).get("Range")!;
+        sourceRanges.push(range);
+        return new Response(
+          range === "bytes=0-3" ? videoBytes : videoBytes.slice(2),
+          { status: 206 },
+        );
+      }
+      if (url === uploadUrl) {
+        const range = new Headers(init?.headers).get("Content-Range")!;
+        uploadRanges.push(range);
+        if (range === "bytes */4") {
+          return new Response(null, {
+            status: 308,
+            headers: { Range: "bytes=0-1" },
+          });
+        }
+        uploadAttempt += 1;
+        if (uploadAttempt === 1) throw new Error("connection reset");
+        return Response.json({ id: "youtube-video-resumed" }, { status: 201 });
+      }
+      if (url.startsWith("https://www.googleapis.com/youtube/v3/videos?part=status")) {
+        return Response.json({ items: [] });
+      }
+      throw new Error(`Unexpected YouTube request: ${url}`);
+    });
+
+    await expect(adapterFor("youtube").publish({
+      accessToken: "youtube-token",
+      accountId: "channel-1",
+      title: "Resume safely",
+      bodyText: "No duplicate private video.",
+      assets: [{
+        url: "https://media.example/resume.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: videoBytes.byteLength,
+      }],
+      fetcher: fetcher as typeof fetch,
+    })).resolves.toMatchObject({
+      ok: true,
+      platformPostId: "youtube-video-resumed",
+    });
+
+    expect(sourceRanges).toEqual(["bytes=0-3", "bytes=2-3"]);
+    expect(uploadRanges).toEqual(["bytes 0-3/4", "bytes */4", "bytes 2-3/4"]);
+  });
+
+  it("requires complete private-upload metadata before contacting YouTube", () => {
+    expect(adapterFor("youtube").validateDraft({
+      title: "",
+      bodyText: "Description",
+      assets: [{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: 4,
+      }],
+    })).toEqual({ ok: false, error: "YouTube needs a video title." });
+    expect(adapterFor("youtube").validateDraft({
+      title: "Valid title",
+      bodyText: "Description",
+      assets: [{
+        url: "https://media.example/short.mov",
+        kind: "video",
+        mimeType: "image/png",
+        byteLength: 4,
+      }],
+    })).toEqual({ ok: false, error: "YouTube requires a video file." });
   });
 });
 

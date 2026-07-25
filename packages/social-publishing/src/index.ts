@@ -27,13 +27,16 @@ export {
 export {
   SOCIAL_POST_SOURCE_TYPES,
   SocialPostInputError,
+  addPostVersion,
   createSocialPost,
+  deletePostVersion,
   ensureLocalSocialDemo,
   deleteSocialPost,
   getSocialPost,
   listSocialPosts,
   updateSocialPost,
   updatePostVersion,
+  type CreatePostVersionInput,
   type CreateSocialPostInput,
   type PostVersion,
   type SocialPost,
@@ -160,7 +163,11 @@ export {
   canScheduleSocialPlatform,
   getSocialPlatformCapabilities,
   socialPlatformCapabilities,
+  type SocialContentType,
+  type SocialDeliveryMode,
+  type SocialMediaKind,
   type SocialPlatformCapabilities,
+  type SocialPlatformContentRule,
 } from "./capabilities";
 
 export {
@@ -257,6 +264,8 @@ export type SocialPublishingAccount = {
   platformAccountId: string;
   handle: string | null;
   displayName: string | null;
+  avatarUrl: string | null;
+  avatarSource: "provider" | "owner_profile" | null;
   status: string;
   scopes: string[];
   lastVerifiedAt: string | null;
@@ -402,6 +411,8 @@ type SocialAccountRow = {
   platform_account_id: string;
   platform_handle: string | null;
   display_name: string | null;
+  metadata_json: string | null;
+  owner_avatar_url: string | null;
   status: string;
   scopes_json: string;
   last_verified_at: string | null;
@@ -483,6 +494,7 @@ type SocialPublicationRow = {
   pub_status: PublicationStatus;
   pub_updated_at: string;
   pub_error_code: string | null;
+  title: string;
   body: string;
   media_manifest_json: string;
   platforms_json: string;
@@ -600,6 +612,7 @@ type PostVersionPublicationCandidate = {
   target_account_id: string | null;
   format: string;
   body_text: string;
+  post_title: string;
   asset_manifest_json: string;
   approval_status: string;
   approved_at: string | null;
@@ -625,6 +638,7 @@ type SocialPublishingEnv = {
     prepare(sql: string): D1StatementLike;
     batch(statements: D1BoundStatementLike[]): Promise<unknown[]>;
   };
+  SITE_ASSETS?: unknown;
   SOCIAL_PUBLISH_QUEUE?: {
     send(message: SocialPublishQueueMessage): Promise<unknown>;
   };
@@ -695,6 +709,13 @@ export class SocialPublishingInputError extends Error {
   }
 }
 
+class SocialMediaDeliverySetupError extends SocialPublishingInputError {
+  constructor(message: string) {
+    super(message, 424);
+    this.name = "SocialMediaDeliverySetupError";
+  }
+}
+
 export async function getSocialPublishingRuntimeStatus(
   env: SocialPublishingEnv,
 ): Promise<SocialPublishingGate> {
@@ -722,29 +743,41 @@ export async function listSocialPublishingAccounts(
   }
 
   const rows = await env.DB.prepare(
-    `SELECT id, site_id, platform, platform_account_id, platform_handle, display_name,
-            status, scopes_json, last_verified_at, created_at, updated_at
-     FROM social_accounts
-     WHERE user_id = ?
-       AND platform IN ('x', 'linkedin', 'instagram', 'instagram_business', 'youtube', 'tiktok')
-     ORDER BY updated_at DESC`,
+    `SELECT account.id, account.site_id, account.platform, account.platform_account_id,
+            account.platform_handle, account.display_name, account.metadata_json,
+            owner.avatar_url AS owner_avatar_url, account.status, account.scopes_json,
+            account.last_verified_at, account.created_at, account.updated_at
+     FROM social_accounts account
+     LEFT JOIN owner_profile owner ON owner.id = account.user_id
+     WHERE account.user_id = ?
+       AND account.platform IN ('x', 'linkedin', 'instagram', 'instagram_business', 'youtube', 'tiktok')
+     ORDER BY account.updated_at DESC`,
   )
     .bind(ownerId)
     .all<SocialAccountRow>();
 
-  return (rows.results || []).map((row) => ({
-    id: row.id,
-    siteId: row.site_id,
-    platform: row.platform,
-    platformAccountId: row.platform_account_id,
-    handle: row.platform_handle,
-    displayName: row.display_name,
-    status: row.status,
-    scopes: parseStringArray(row.scopes_json),
-    lastVerifiedAt: row.last_verified_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }));
+  return (rows.results || []).map((row) => {
+    const metadata = parseJsonObject(row.metadata_json);
+    const providerAvatarUrl = normalizeAvatarUrl(metadata.avatarUrl);
+    const ownerAvatarUrl = normalizeAvatarUrl(row.owner_avatar_url);
+    return {
+      id: row.id,
+      siteId: row.site_id,
+      platform: row.platform,
+      platformAccountId: row.platform_account_id,
+      handle: row.platform_handle,
+      displayName: row.display_name,
+      avatarUrl: providerAvatarUrl || ownerAvatarUrl,
+      avatarSource: providerAvatarUrl
+        ? "provider" as const
+        : ownerAvatarUrl ? "owner_profile" as const : null,
+      status: row.status,
+      scopes: parseStringArray(row.scopes_json),
+      lastVerifiedAt: row.last_verified_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  });
 }
 
 export async function disconnectSocialPublishingAccount(
@@ -1065,7 +1098,10 @@ export async function completeSocialOAuth(
       token.refreshToken ? await encryptSecret(token.refreshToken, options.installKey) : null,
       token.expiresAt,
       JSON.stringify(token.scopes),
-      JSON.stringify({ provider: platform }),
+      JSON.stringify({
+        provider: platform,
+        ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : {}),
+      }),
       now,
       now,
       now,
@@ -1100,6 +1136,7 @@ async function completeHostedSocialOAuth(
       id?: string;
       handle?: string | null;
       displayName?: string | null;
+      avatarUrl?: string | null;
     };
     token?: {
       accessToken?: string;
@@ -1149,7 +1186,13 @@ async function completeHostedSocialOAuth(
       payload.token.refreshToken ? await encryptSecret(payload.token.refreshToken, options.installKey) : null,
       payload.token.expiresAt || null,
       JSON.stringify(Array.isArray(payload.token.scopes) ? payload.token.scopes : []),
-      JSON.stringify({ provider: stateRow.platform, credentialSource: "hosted_oauth" }),
+      JSON.stringify({
+        provider: stateRow.platform,
+        credentialSource: "hosted_oauth",
+        ...(normalizeAvatarUrl(payload.account.avatarUrl)
+          ? { avatarUrl: normalizeAvatarUrl(payload.account.avatarUrl) }
+          : {}),
+      }),
       now,
       now,
       now,
@@ -1712,6 +1755,7 @@ async function getOwnedPostVersionPublicationCandidate(
 ): Promise<PostVersionPublicationCandidate | null> {
   return env.DB.prepare(
     `SELECT v.id, v.platform, v.target_account_id, v.format, v.body_text,
+            p.post_title_snapshot AS post_title,
             v.asset_manifest_json, v.approval_status, v.approved_at,
             v.approved_by_user_id, p.site_id, p.source_type AS post_source_type
      FROM social_variants v
@@ -1768,6 +1812,16 @@ async function assertPostVersionCanCreatePublication(
       424,
     );
   }
+  const assets = normalizeMediaManifest(parseJsonArray(version.asset_manifest_json));
+  const validation = adapterFor(version.platform).validateDraft({
+    title: version.post_title,
+    bodyText: version.body_text,
+    assets,
+  });
+  if (!validation.ok) {
+    throw new SocialPublishingInputError(validation.error);
+  }
+  assertPrivateMediaDeliveryReady(env, assets);
 }
 
 export async function createPostVersionPublication(
@@ -3029,14 +3083,17 @@ export async function publishQueuedPublication(
       assets: manifestAssets,
     });
   } catch (error) {
+    const setupFailure = error instanceof SocialMediaDeliverySetupError;
     const failed = await failContentPublication(
       env,
       row,
-      "rejected:media_unavailable",
+      setupFailure
+        ? "retryable:media_delivery_setup"
+        : "rejected:media_unavailable",
       error instanceof Error ? error.message : "Attached media is unavailable.",
       "publishing",
     );
-    if (failed) await revokeSocialVariantApproval(env, row.variant_id);
+    if (failed && !setupFailure) await revokeSocialVariantApproval(env, row.variant_id);
     return;
   }
 
@@ -3074,6 +3131,7 @@ export async function publishQueuedPublication(
   const result = await adapter.publish({
     accessToken,
     accountId: row.platform_account_id,
+    title: row.title,
     bodyText: row.body,
     assets,
     fetcher,
@@ -3538,6 +3596,7 @@ async function fetchSocialProfile(
   id: string;
   handle: string | null;
   displayName: string | null;
+  avatarUrl: string | null;
   accessToken?: string;
 }> {
   if (platform === "youtube" || platform === "tiktok") {
@@ -3547,32 +3606,54 @@ async function fetchSocialProfile(
     );
   }
   if (platform === "x") {
-    const response = await fetcher("https://api.twitter.com/2/users/me?user.fields=username,name", {
+    const response = await fetcher("https://api.twitter.com/2/users/me?user.fields=username,name,profile_image_url", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    const body = await readJsonResponse<{ data?: { id?: string; username?: string; name?: string } }>(response);
+    const body = await readJsonResponse<{
+      data?: { id?: string; username?: string; name?: string; profile_image_url?: string };
+    }>(response);
     if (!body.data?.id) throw new SocialPublishingInputError("Social profile response was invalid", 502);
-    return { id: body.data.id, handle: body.data.username || null, displayName: body.data.name || null };
+    return {
+      id: body.data.id,
+      handle: body.data.username || null,
+      displayName: body.data.name || null,
+      avatarUrl: normalizeAvatarUrl(body.data.profile_image_url),
+    };
   }
 
   if (platform === "linkedin") {
     const response = await fetcher("https://api.linkedin.com/v2/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    const body = await readJsonResponse<{ sub?: string; name?: string; given_name?: string }>(response);
+    const body = await readJsonResponse<{
+      sub?: string;
+      name?: string;
+      given_name?: string;
+      picture?: string;
+    }>(response);
     if (!body.sub) throw new SocialPublishingInputError("Social profile response was invalid", 502);
-    return { id: body.sub, handle: null, displayName: body.name || body.given_name || null };
+    return {
+      id: body.sub,
+      handle: null,
+      displayName: body.name || body.given_name || null,
+      avatarUrl: normalizeAvatarUrl(body.picture),
+    };
   }
 
   if (platform === "instagram_business") {
     const response = await fetcher(
-      "https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,name}",
+      "https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,name,profile_picture_url}",
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     const body = await readJsonResponse<{
       data?: Array<{
         access_token?: string;
-        instagram_business_account?: { id?: string; username?: string; name?: string };
+        instagram_business_account?: {
+          id?: string;
+          username?: string;
+          name?: string;
+          profile_picture_url?: string;
+        };
       }>;
     }>(response);
     const page = body.data?.find(
@@ -3589,16 +3670,27 @@ async function fetchSocialProfile(
       id: account.id,
       handle: account.username || null,
       displayName: account.name || account.username || null,
+      avatarUrl: normalizeAvatarUrl(account.profile_picture_url),
       accessToken: page.access_token,
     };
   }
 
-  const response = await fetcher("https://graph.instagram.com/me?fields=id,username", {
+  const response = await fetcher("https://graph.instagram.com/me?fields=id,username,profile_picture_url", {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  const body = await readJsonResponse<{ id?: string; username?: string; name?: string }>(response);
+  const body = await readJsonResponse<{
+    id?: string;
+    username?: string;
+    name?: string;
+    profile_picture_url?: string;
+  }>(response);
   if (!body.id) throw new SocialPublishingInputError("Social profile response was invalid", 502);
-  return { id: body.id, handle: body.username || null, displayName: body.name || body.username || null };
+  return {
+    id: body.id,
+    handle: body.username || null,
+    displayName: body.name || body.username || null,
+    avatarUrl: normalizeAvatarUrl(body.profile_picture_url),
+  };
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -3669,6 +3761,7 @@ async function getQueuedPublicationRow(
             pub.status AS pub_status,
             pub.updated_at AS pub_updated_at,
             pub.error_code AS pub_error_code,
+            p.post_title_snapshot AS title,
             pub.body_text_snapshot AS body,
             COALESCE(pub.asset_manifest_json_snapshot, '[]') AS media_manifest_json,
             '[]' AS platforms_json,
@@ -4138,13 +4231,8 @@ async function resolveProviderMediaAssets(
     assets: ContentMediaAsset[];
   },
 ): Promise<ContentMediaAsset[]> {
+  assertPrivateMediaDeliveryReady(env, input.assets);
   const origin = getPublicAssetOrigin(env);
-  if (!origin && input.assets.some((asset) => asset.fileId)) {
-    throw new SocialPublishingInputError(
-      "ME3 needs a public API origin before private Files media can be delivered.",
-      424,
-    );
-  }
 
   const resolved: ContentMediaAsset[] = [];
   for (const asset of input.assets) {
@@ -4201,6 +4289,23 @@ async function resolveProviderMediaAssets(
     });
   }
   return resolved;
+}
+
+function assertPrivateMediaDeliveryReady(
+  env: SocialPublishingEnv,
+  assets: ContentMediaAsset[],
+): void {
+  if (!assets.some((asset) => asset.fileId)) return;
+  if (!getPublicAssetOrigin(env)) {
+    throw new SocialMediaDeliverySetupError(
+      "ME3 needs an exact public API origin before private Files media can be delivered.",
+    );
+  }
+  if (!env.SITE_ASSETS) {
+    throw new SocialMediaDeliverySetupError(
+      "ME3 needs Files storage before private media can be delivered.",
+    );
+  }
 }
 
 async function revokeProviderMediaGrants(
@@ -4701,6 +4806,14 @@ function isHttpsUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function normalizeAvatarUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 2_048) return null;
+  if (trimmed.startsWith("/")) return trimmed;
+  return isHttpsUrl(trimmed) ? trimmed : null;
 }
 
 function gateErrorMessage(gate: SocialPublishingGate): string {
