@@ -705,10 +705,12 @@ async function saveDraft() {
   const wasShared = sharedEditor.value;
   const selectedId = selectedVersionId.value;
   const nextBodyText = editorBody.value.trim();
+  const bodyWasDirty = editorDirty.value;
+  const titleWasDirty = titleDirty.value;
   saving.value = true;
   error.value = "";
   try {
-    if (titleDirty.value) {
+    if (titleWasDirty) {
       replacePost(
         await social.updateSocialPost(post.post.id, {
           title: editorTitle.value.trim(),
@@ -716,7 +718,7 @@ async function saveDraft() {
         }),
       );
     }
-    if (editorDirty.value) {
+    if (bodyWasDirty) {
       for (const version of versions) {
         replaceVersion(await social.updatePostVersion(version.id, {
           bodyText: nextBodyText,
@@ -1057,6 +1059,16 @@ async function updateEditorMedia(
   const versions = [...editorVersions.value];
   const wasShared = sharedEditor.value;
   const selectedId = selectedVersionId.value;
+  const pendingTitle = editorTitle.value;
+  const pendingBody = editorBody.value;
+  const pendingAccountId = editorAccountId.value;
+  const preserveTitle = titleDirty.value;
+  const preserveBody = versions.some(
+    (version) => pendingBody.trim() !== version.bodyText,
+  );
+  const preserveAccount = !wasShared && versions.some(
+    (version) => (pendingAccountId || null) !== version.targetAccountId,
+  );
   for (const version of versions) {
     replaceVersion(await social.updatePostVersion(version.id, { assetManifest }));
   }
@@ -1067,6 +1079,9 @@ async function updateEditorMedia(
       current.versions.find((version) => version.id === selectedId) || current.versions[0] || null,
     );
   }
+  if (preserveTitle) editorTitle.value = pendingTitle;
+  if (preserveBody) editorBody.value = pendingBody;
+  if (preserveAccount) editorAccountId.value = pendingAccountId;
   toastSuccess(successMessage);
 }
 

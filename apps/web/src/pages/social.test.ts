@@ -284,6 +284,8 @@ describe("SocialPage", () => {
     const wrapper = mountPage();
     await flushPromises();
 
+    await wrapper.get("#social-post-title").setValue("Unsaved title");
+    await wrapper.get(".version-editor textarea").setValue("Unsaved body");
     const addMedia = wrapper.findAll("button").find((button) => button.text().includes("Add media"));
     expect(addMedia).toBeTruthy();
     await addMedia!.trigger("click");
@@ -329,6 +331,58 @@ describe("SocialPage", () => {
         },
       ],
     });
+    expect((wrapper.get("#social-post-title").element as HTMLInputElement).value)
+      .toBe("Unsaved title");
+    expect((wrapper.get(".version-editor textarea").element as HTMLTextAreaElement).value)
+      .toBe("Unsaved body");
+  });
+
+  it("saves title and body together without the title refresh dropping copy", async () => {
+    vi.mocked(api.patch).mockImplementation(async (endpoint, input) => {
+      if (endpoint === "/social/posts/post-1") {
+        return {
+          post: {
+            ...post,
+            post: {
+              ...post.post,
+              ideaText: (input as { title: string }).title,
+              updatedAt: "2026-07-25T16:00:00.000Z",
+            },
+          },
+        };
+      }
+      if (endpoint === "/social/versions/version-1") {
+        return {
+          version: {
+            ...post.versions[0],
+            bodyText: (input as { bodyText: string }).bodyText,
+          },
+        };
+      }
+      throw new Error(`Unexpected PATCH ${endpoint}`);
+    });
+    const wrapper = mountPage();
+    await flushPromises();
+
+    await wrapper.get("#social-post-title").setValue("Saved title");
+    await wrapper.get(".version-editor textarea").setValue("Saved body");
+    const save = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().includes("Save Draft"));
+    await save!.trigger("click");
+    await flushPromises();
+
+    expect(api.patch).toHaveBeenCalledWith("/social/posts/post-1", {
+      title: "Saved title",
+      expectedUpdatedAt: post.post.updatedAt,
+    });
+    expect(api.patch).toHaveBeenCalledWith("/social/versions/version-1", {
+      bodyText: "Saved body",
+      targetAccountId: account.id,
+    });
+    expect((wrapper.get("#social-post-title").element as HTMLInputElement).value)
+      .toBe("Saved title");
+    expect((wrapper.get(".version-editor textarea").element as HTMLTextAreaElement).value)
+      .toBe("Saved body");
   });
 
   it("keeps video selection exclusive in the Files picker", async () => {

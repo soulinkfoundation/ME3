@@ -129,6 +129,9 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.get("0030_social_youtube_tiktok")).toBe(
       "2026-07-21-social-youtube-tiktok-v2",
     );
+    expect(db.migrations.get("0031_social_publication_formats")).toBe(
+      "2026-07-25-social-publication-formats-v1",
+    );
     expect(
       db.statements.some(
         (sql) =>
@@ -136,6 +139,14 @@ describe("Core runtime migrations", () => {
           sql.includes("'youtube'") &&
           sql.includes("'tiktok'") &&
           !sql.includes("PRAGMA defer_foreign_keys"),
+      ),
+    ).toBe(true);
+    expect(
+      db.statements.some(
+        (sql) =>
+          sql.includes("CREATE TABLE social_publications_0031_new") &&
+          sql.includes("'image'") &&
+          sql.includes("'short_video'"),
       ),
     ).toBe(true);
     expect(
@@ -328,6 +339,7 @@ class RuntimeMigrationDb {
         "scheduled_for",
       ]),
     ],
+    ["social_publications", new Set(["id", "format_snapshot"])],
   ]);
   readonly migrations = new Map<string, string>();
   readonly statements: string[] = [];
