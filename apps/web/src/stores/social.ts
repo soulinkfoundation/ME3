@@ -45,6 +45,7 @@ export type SocialAccountRow = {
   displayName: string | null;
   avatarUrl?: string | null;
   avatarSource?: "provider" | "owner_profile" | null;
+  credentialSource: "hosted_oauth" | "byo";
   status: string;
   lastVerifiedAt: string | null;
 };
@@ -79,6 +80,11 @@ export type SocialStatus = {
     configured: boolean;
     platforms: string[];
   };
+  managedXUsage?: {
+    usedPercent: number;
+    blocked: boolean;
+    resetsAt: string;
+  } | null;
   localDemo?: boolean;
 };
 

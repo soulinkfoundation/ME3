@@ -53,6 +53,7 @@ import {
   SocialPublishingInputError,
   completeSocialOAuth,
   dispatchDueSocialPublications,
+  getManagedXUsageWarning,
   getSocialPublishingRuntimeStatus,
   listSocialProviderSettings,
   listSocialPublishingAccounts,
@@ -1003,16 +1004,28 @@ registerSocialMediaDeliveryRoutes(app);
 app.get("/api/social/status", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
-  const hostedOAuthOrigin = await resolveHostedSocialOAuthOrigin(c.env);
+  const [hostedOAuthOrigin, managedXUsage] = await Promise.all([
+    resolveHostedSocialOAuthOrigin(c.env),
+    getManagedXUsageWarning(c.env),
+  ]);
+  const managedDeployment =
+    c.env.ME3_DEPLOYMENT_MODE?.trim().toLowerCase() === "managed";
 
   return c.json({
     plugin: await getSocialPublishingRuntimeStatus(c.env),
     hostedOAuth: {
       configured: Boolean(hostedOAuthOrigin),
       platforms: hostedOAuthOrigin
-        ? ["linkedin", "instagram", "youtube", "tiktok"]
+        ? [
+            ...(managedDeployment ? ["x"] : []),
+            "linkedin",
+            "instagram",
+            "youtube",
+            "tiktok",
+          ]
         : [],
     },
+    managedXUsage,
     localDemo: c.env.ENVIRONMENT === "local",
   });
 });

@@ -723,6 +723,107 @@ describe("reusable social Publications", () => {
     });
   });
 
+  it("reserves and consumes managed X cost without exposing the dollar allowance", async () => {
+    seedApprovedVersion(fixture.db, {
+      postId: "post-managed-x",
+      versionId: "version-managed-x",
+      bodyText: "Managed X update https://example.com",
+      platform: "x",
+      accountId: "account-x",
+    });
+    fixture.db.exec(
+      `CREATE TABLE install_secrets (
+         name TEXT PRIMARY KEY,
+         value TEXT NOT NULL
+       );
+       INSERT INTO install_secrets (name, value) VALUES
+         ('ME3_CLOUD_OWNER_ID', 'cloud-owner'),
+         ('ME3_CORE_INSTALL_ID', 'core-install'),
+         ('ME3_CLOUD_CORE_TOKEN', 'core-update-token');`,
+    );
+    fixture.db.run(
+      `UPDATE social_accounts
+       SET access_token_ciphertext = ?,
+           metadata_json = '{"credentialSource":"hosted_oauth"}'
+       WHERE id = 'account-x'`,
+      await encryptTestSecret("managed-x-access-token", TEST_TOKEN_ENCRYPTION_KEY),
+    );
+    fixture.db.run(
+      `UPDATE social_variants SET asset_manifest_json = '[]'
+       WHERE id = 'version-managed-x'`,
+    );
+    fixture.env.ME3_DEPLOYMENT_MODE = "managed";
+    fixture.env.ME3_SOCIAL_OAUTH_ORIGIN = "https://cloud.example";
+
+    const cloudRequests: Array<{ url: string; body: unknown }> = [];
+    const fetcher = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("https://cloud.example/api/social/x/usage/")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-ME3-Core-Owner-ID")).toBe("cloud-owner");
+        expect(headers.get("X-ME3-Core-Install-ID")).toBe("core-install");
+        expect(headers.get("X-ME3-Core-Update-Token")).toBe("core-update-token");
+        cloudRequests.push({
+          url,
+          body: JSON.parse(String(init?.body || "{}")),
+        });
+        return Response.json(
+          url.endsWith("/consume")
+            ? { ok: true }
+            : { allowed: true, warning: null },
+        );
+      }
+      if (url === "https://api.x.com/2/tweets") {
+        expect(new Headers(init?.headers).get("Authorization")).toBe(
+          "Bearer managed-x-access-token",
+        );
+        return Response.json({ data: { id: "managed-x-post" } }, { status: 201 });
+      }
+      throw new Error(`Unexpected managed X request: ${url}`);
+    });
+
+    const publication = await createPostVersionPublication(
+      fixture.env as never,
+      "owner",
+      "version-managed-x",
+      {},
+      fetcher as unknown as typeof fetch,
+    );
+    expect(publication).toMatchObject({ platform: "x", status: "queued" });
+    await publishQueuedPublication(
+      fixture.env as never,
+      publication?.id,
+      fetcher as unknown as typeof fetch,
+    );
+
+    expect(cloudRequests).toHaveLength(3);
+    expect(cloudRequests[0]).toMatchObject({
+      url: "https://cloud.example/api/social/x/usage/reservations",
+      body: {
+        publicationId: publication?.id,
+        scheduledFor: null,
+        hasUrl: true,
+        mediaCount: 0,
+        altTextCount: 0,
+        videoCount: 0,
+      },
+    });
+    expect(cloudRequests[1]).toMatchObject({
+      url: "https://cloud.example/api/social/x/usage/reservations",
+      body: { publicationId: publication?.id },
+    });
+    expect(cloudRequests[2]?.url).toBe(
+      `https://cloud.example/api/social/x/usage/reservations/${publication?.id}/consume`,
+    );
+    expect(JSON.stringify(cloudRequests)).not.toContain("$");
+    expect(
+      fixture.db.first<{ status: string; platform_post_id: string }>(
+        "SELECT status, platform_post_id FROM social_publications WHERE id = ?",
+        publication?.id,
+      ),
+    ).toEqual({ status: "published", platform_post_id: "managed-x-post" });
+  });
+
   it("requeues a post-claim exception before the provider write and publishes once on redelivery", async () => {
     const publication = await createPublication(fixture, "version-1");
     await enableProviderDelivery(fixture, publication.id);
@@ -2006,6 +2107,7 @@ function createFixture() {
       DB: db,
       SOCIAL_PUBLISH_QUEUE: { send },
       TOKEN_ENCRYPTION_KEY: TEST_TOKEN_ENCRYPTION_KEY,
+      ME3_DEPLOYMENT_MODE: undefined as string | undefined,
       ME3_SOCIAL_OAUTH_ORIGIN: undefined as string | undefined,
       CORE_API_ORIGIN: undefined as string | undefined,
       SITE_ASSETS: undefined as unknown,

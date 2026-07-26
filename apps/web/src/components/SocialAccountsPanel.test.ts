@@ -54,7 +54,7 @@ const xProvider = {
   callbackPath: "/api/social/x/callback",
 } satisfies SocialProviderSetting;
 
-describe("SocialAccountsPanel X funding acknowledgement", () => {
+describe("SocialAccountsPanel managed X connection", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
@@ -69,7 +69,7 @@ describe("SocialAccountsPanel X funding acknowledgement", () => {
     vi.restoreAllMocks();
   });
 
-  it("explains owner-funded pay-per-use access and requires acknowledgement before connecting", async () => {
+  it("keeps BYO X credentials in Advanced and requires a concise acknowledgement", async () => {
     const store = useSocialStore();
     const configured = { ...xProvider, clientId: "client-id", configured: true, enabled: true };
     const updateProvider = vi.spyOn(store, "updateProviderSetting").mockResolvedValue([configured]);
@@ -87,25 +87,17 @@ describe("SocialAccountsPanel X funding acknowledgement", () => {
     await flushPromises();
 
     await wrapper.findAll(".social-connect-btn")[0]!.trigger("click");
-    const notice = wrapper.get(".x-funding-notice");
-    expect(notice.text()).toContain("X API access is pay-per-use");
-    expect(notice.text()).toContain("your own X developer account");
-
-    const links = notice.findAll("a");
-    expect(links.map((link) => link.attributes("href"))).toEqual([
-      "https://docs.x.com/x-api/getting-started/pricing",
-      "https://console.x.com",
-    ]);
-    for (const link of links) {
-      expect(link.attributes("target")).toBe("_blank");
-      expect(link.attributes("rel")).toContain("noopener");
-      expect(link.attributes("rel")).toContain("noreferrer");
-    }
+    const dialog = wrapper.get('[role="dialog"]');
+    const notice = dialog.get(".x-funding-notice__acknowledgement");
+    expect(dialog.text()).not.toContain("X API access is pay-per-use");
+    expect(dialog.text()).not.toContain("your own X developer account");
+    expect(dialog.findAll("a")).toHaveLength(0);
+    expect(notice.text()).toBe("I pay X API charges.");
 
     const connectButton = wrapper.get(".social-own-app__button");
     expect(connectButton.attributes()).toHaveProperty("disabled");
-    await wrapper.findAll(".social-own-app input")[0]!.setValue("client-id");
-    await wrapper.findAll(".social-own-app input")[1]!.setValue("client-secret");
+    await wrapper.get('.social-own-app input[type="text"]').setValue("client-id");
+    await wrapper.get('.social-own-app input[type="password"]').setValue("client-secret");
     await notice.get('input[type="checkbox"]').setValue(true);
     expect(connectButton.attributes()).not.toHaveProperty("disabled");
 
@@ -122,7 +114,7 @@ describe("SocialAccountsPanel X funding acknowledgement", () => {
   });
 
   it.each([
-    ["x", "X connected. It will now appear as a draft target."],
+    ["x", "X connected."],
     ["instagram", "Instagram connected. It will now appear as a draft target."],
     ["linkedin", "LinkedIn connected. It will now appear as a publish target."],
   ])("reports truthful capability language after connecting %s", async (platform, message) => {
@@ -160,10 +152,78 @@ describe("SocialAccountsPanel X funding acknowledgement", () => {
 
     await wrapper.findAll(".social-connect-btn")[1]!.trigger("click");
     const dialog = wrapper.get('[role="dialog"]');
-    expect(dialog.text()).toContain("Connect with ME3");
+    expect(dialog.get(".social-connect-option__button").text()).toBe("Connect");
     expect(dialog.text()).toContain("Advanced: use my own app");
+    expect(dialog.text()).not.toContain("Connect with ME3");
     expect(dialog.text()).not.toContain("Connect through ME3 Cloud");
     expect(dialog.text()).not.toContain("Recommended. Requires this installation");
+  });
+
+  it("uses the managed X app by default and leaves BYO collapsed", async () => {
+    const store = useSocialStore();
+    vi.mocked(store.fetchSocialStatus).mockResolvedValue({
+      ...status,
+      hostedOAuth: { configured: true, platforms: ["x", "linkedin", "instagram"] },
+      managedXUsage: null,
+    });
+    const startOAuth = vi.spyOn(store, "startSocialOAuth").mockRejectedValue(
+      new Error("Stop before navigation"),
+    );
+    const wrapper = mount(SocialAccountsPanel, {
+      props: { siteId: "site-1" },
+      global: {
+        stubs: {
+          UiIcon: { template: "<span aria-hidden=\"true\" />" },
+        },
+      },
+    });
+    await flushPromises();
+
+    await wrapper.findAll(".social-connect-btn")[0]!.trigger("click");
+    const dialog = wrapper.get('[role="dialog"]');
+    expect(dialog.get("h3").text()).toBe("Connect X");
+    expect(dialog.get(".social-connect-option__button").text()).toBe("Connect");
+    expect(dialog.get("details").attributes()).not.toHaveProperty("open");
+    expect(dialog.text()).not.toContain("API usage");
+
+    await dialog.get(".social-connect-option__button").trigger("click");
+    await flushPromises();
+    expect(startOAuth).toHaveBeenCalledWith("x", "site-1", "/social", "managed");
+  });
+
+  it("shows only the percentage after managed X usage reaches 80%", async () => {
+    const store = useSocialStore();
+    vi.mocked(store.fetchSocialStatus).mockResolvedValue({
+      ...status,
+      hostedOAuth: { configured: true, platforms: ["x"] },
+      managedXUsage: {
+        usedPercent: 83,
+        blocked: false,
+        resetsAt: "2026-08-01T00:00:00.000Z",
+      },
+    });
+    vi.mocked(store.fetchSocialAccounts).mockResolvedValue([{
+      id: "account-x",
+      siteId: "site-1",
+      platform: "x",
+      handle: "owner",
+      displayName: "Owner",
+      credentialSource: "hosted_oauth",
+      status: "active",
+      lastVerifiedAt: null,
+    }]);
+    const wrapper = mount(SocialAccountsPanel, {
+      props: { siteId: "site-1" },
+      global: {
+        stubs: {
+          UiIcon: { template: "<span aria-hidden=\"true\" />" },
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.get(".social-x-usage").text()).toBe("X usage: 83%");
+    expect(wrapper.text()).not.toContain("$");
   });
 
   it("reports actionable hosted OAuth failures through vue-sonner", async () => {

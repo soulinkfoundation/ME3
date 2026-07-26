@@ -259,6 +259,7 @@ describe("X publishing adapter", () => {
   });
 
   it("publishes a text-only post through the current X API host", async () => {
+    const markProviderCostStarted = vi.fn(async () => undefined);
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe("https://api.x.com/2/tweets");
       expect(init?.method).toBe("POST");
@@ -273,6 +274,7 @@ describe("X publishing adapter", () => {
       bodyText: "  A useful X post.  ",
       assets: [],
       fetcher: fetcher as typeof fetch,
+      markProviderCostStarted,
     });
 
     expect(result).toMatchObject({
@@ -281,10 +283,12 @@ describe("X publishing adapter", () => {
       platformPostUrl: "https://x.com/i/web/status/post-123",
     });
     expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(markProviderCostStarted).toHaveBeenCalledTimes(1);
   });
 
   it("uploads ordered raster images, adds optional alt text, and attaches media ids", async () => {
     const uploadBodies: Array<Record<string, unknown>> = [];
+    const markProviderCostStarted = vi.fn(async () => undefined);
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "https://cdn.example/one.png") {
@@ -334,6 +338,7 @@ describe("X publishing adapter", () => {
         },
       ],
       fetcher: fetcher as typeof fetch,
+      markProviderCostStarted,
     });
 
     expect(result).toMatchObject({ ok: true, platformPostId: "post-with-media" });
@@ -350,6 +355,7 @@ describe("X publishing adapter", () => {
       },
     ]);
     expect(fetcher).toHaveBeenCalledTimes(6);
+    expect(markProviderCostStarted).toHaveBeenCalledTimes(1);
   });
 
   it("uploads and publishes one MP4 video through X's chunked media flow", async () => {
@@ -508,6 +514,7 @@ describe("X publishing adapter", () => {
   });
 
   it("classifies a confirmed media upload rate limit as retryable", async () => {
+    const markProviderCostStarted = vi.fn(async () => undefined);
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === "https://cdn.example/image.png") {
         return new Response(PNG_BYTES, { headers: { "content-type": "image/png" } });
@@ -525,6 +532,7 @@ describe("X publishing adapter", () => {
         mimeType: "image/png",
       }],
       fetcher: fetcher as typeof fetch,
+      markProviderCostStarted,
     });
 
     expect(result).toMatchObject({
@@ -533,6 +541,7 @@ describe("X publishing adapter", () => {
       errorCode: "x_media_upload",
       errorMessage: "Media limit reached",
     });
+    expect(markProviderCostStarted).not.toHaveBeenCalled();
   });
 
   it("rejects oversized and invalid raster bytes before contacting X", async () => {

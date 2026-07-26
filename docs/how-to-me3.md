@@ -482,24 +482,28 @@ Social Publishing uses five owner-facing domain terms:
   time, timezone, request context, delivery state, provider result, recovery, and history. The same
   approved Version can have many future and historical Publications; reposting creates another one.
 
-LinkedIn currently supports the complete approval, scheduling, publishing, and recovery workflow
-when an active account and the Social Publishing queue are ready. X, Instagram, and Instagram
-Business currently support drafting and review only; ME3 rejects attempts to schedule or publish
-those Versions until their provider workflows work end to end.
+LinkedIn, X, Instagram, and Instagram Business support the complete approval, scheduling, direct
+publishing, and recovery workflow when an active account and the Social Publishing queue are ready.
+YouTube uploads privately for final review in YouTube Studio, while TikTok sends a creator draft for
+completion in TikTok; neither short-video path supports ME3 scheduling.
 
-Production installations offer the ME3 Cloud LinkedIn and Instagram OAuth bridge as the recommended
-connection path. The installation must first be linked to ME3 Cloud; provider app secrets stay in the
-bridge, while the resulting owner-authorized social token is encrypted and stored in the installation.
-Owners can select the advanced bring-your-own-app path instead, and independent self-hosted installs
-can leave the bridge unset. Linked installations automatically use the official bridge even when an
-older preserved `wrangler.toml` does not contain `ME3_SOCIAL_OAUTH_ORIGIN`; LinkedIn and Instagram
-client secrets must not be copied into the installation.
+Production installations offer the ME3 Cloud LinkedIn, Instagram, YouTube, and TikTok OAuth bridge
+as the default connection path. The installation must first be linked to ME3 Cloud; provider app
+secrets stay in the bridge, while the resulting owner-authorized social token is encrypted and stored
+in the installation. Owners can select the advanced bring-your-own-app path where supported, and
+independent self-hosted installs can leave the bridge unset.
 
-The X adapter can prepare text and up to four validated PNG, JPEG, or WebP images, including
-optional alt text, through the current X v2 media and Post APIs. Owners must provide their own X
-developer app, fund its pay-per-use API access, and acknowledge that cost before connecting. This
-local adapter support does not change X's draft-only capability until live OAuth, delivery,
-scheduling, token refresh, and unknown-outcome recovery are proven.
+The X adapter publishes text, up to four validated PNG, JPEG, or WebP images with optional alt text,
+or one bounded MP4 video through the current X v2 APIs. A true managed installation uses the
+ME3-owned X app by default. ME3 Cloud enforces its separate internal monthly cost allowance; Core
+shows no allowance message below 80 percent and only `X usage: N%` at or above the threshold. At the
+ceiling, new managed X Publications stop while drafts remain available.
+
+Open `Advanced: use my own app` to switch an X connection to owner-funded credentials. The owner
+must acknowledge `I pay X API charges.` and reconnect; that connection bypasses the hosted allowance.
+Linked and unlinked self-hosted installations always use owner-funded X credentials. Dedicated hosted
+X app secrets and its private cost ledger belong only in ME3 Cloud and must never be copied into this
+Core repository or an installation.
 
 `SOCIAL_PUBLISH_QUEUE` targets `me3-social-publish`. Its Worker consumer uses batch size 10, a
 five-second batch timeout, two retries after the initial delivery, and

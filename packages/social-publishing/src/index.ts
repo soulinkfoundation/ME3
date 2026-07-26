@@ -266,11 +266,18 @@ export type SocialPublishingAccount = {
   displayName: string | null;
   avatarUrl: string | null;
   avatarSource: "provider" | "owner_profile" | null;
+  credentialSource: "hosted_oauth" | "byo";
   status: string;
   scopes: string[];
   lastVerifiedAt: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ManagedXUsageWarning = {
+  usedPercent: number;
+  blocked: boolean;
+  resetsAt: string;
 };
 
 export const SOCIAL_PLATFORMS = [
@@ -492,6 +499,7 @@ type SocialPublicationRow = {
   site_id: string;
   platform: SocialPlatform;
   pub_status: PublicationStatus;
+  scheduled_for: string | null;
   pub_updated_at: string;
   pub_error_code: string | null;
   title: string;
@@ -647,6 +655,7 @@ type SocialPublishingEnv = {
   ME3_API_HOST?: string;
   ME3_SITE_HOST?: string;
   ME3_CUSTOM_DOMAIN?: string;
+  ME3_DEPLOYMENT_MODE?: string;
   ME3_SOCIAL_OAUTH_ORIGIN?: string;
   TOKEN_ENCRYPTION_KEY?: string;
 };
@@ -681,6 +690,303 @@ export async function resolveHostedSocialOAuthOrigin(
   } catch {
     return null;
   }
+}
+
+type ManagedXUsageQuote = {
+  publicationId: string;
+  scheduledFor: string | null;
+  hasUrl: boolean;
+  mediaCount: number;
+  altTextCount: number;
+  videoCount: number;
+};
+
+type ManagedXUsageReservation = {
+  managed: boolean;
+  warning: ManagedXUsageWarning | null;
+};
+
+function isManagedDeployment(env: SocialPublishingEnv): boolean {
+  return env.ME3_DEPLOYMENT_MODE?.trim().toLowerCase() === "managed";
+}
+
+function bodyContainsUrl(body: string): boolean {
+  return /(?:https?:\/\/|www\.)\S+/i.test(body);
+}
+
+function managedXUsageQuote(
+  publicationId: string,
+  scheduledFor: string | null,
+  body: string,
+  assets: SocialMediaAsset[],
+): ManagedXUsageQuote {
+  return {
+    publicationId,
+    scheduledFor,
+    hasUrl: bodyContainsUrl(body),
+    mediaCount: assets.length,
+    altTextCount: assets.filter((asset) => Boolean(asset.altText?.trim())).length,
+    videoCount: assets.filter((asset) => asset.kind === "video").length,
+  };
+}
+
+async function managedXUsageRequest<T>(
+  env: SocialPublishingEnv,
+  path: string,
+  init: RequestInit,
+  fetcher: typeof fetch,
+): Promise<{ response: Response; body: T | null }> {
+  const [origin, headers] = await Promise.all([
+    resolveHostedSocialOAuthOrigin(env),
+    getHostedOAuthInstallationHeaders(env),
+  ]);
+  if (!origin || !headers) {
+    throw new SocialPublishingInputError(
+      "Managed X publishing is not configured",
+      424,
+    );
+  }
+  const response = await fetcher(`${origin}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+      ...(init.headers || {}),
+    },
+  });
+  const body = await response.json().catch(() => null) as T | null;
+  return { response, body };
+}
+
+export async function getManagedXUsageWarning(
+  env: SocialPublishingEnv,
+  fetcher: typeof fetch = fetch,
+): Promise<ManagedXUsageWarning | null> {
+  if (!isManagedDeployment(env)) return null;
+  try {
+    const { response, body } = await managedXUsageRequest<{
+      warning?: ManagedXUsageWarning | null;
+    }>(
+      env,
+      "/api/social/x/usage",
+      { method: "GET" },
+      fetcher,
+    );
+    if (!response.ok) return null;
+    return body?.warning || null;
+  } catch {
+    return null;
+  }
+}
+
+async function reserveManagedXUsage(
+  env: SocialPublishingEnv,
+  quote: ManagedXUsageQuote,
+  fetcher: typeof fetch,
+): Promise<ManagedXUsageReservation> {
+  const { response, body } = await managedXUsageRequest<{
+    allowed?: boolean;
+    warning?: ManagedXUsageWarning | null;
+    resetsAt?: string;
+  }>(
+    env,
+    "/api/social/x/usage/reservations",
+    {
+      method: "POST",
+      body: JSON.stringify(quote),
+    },
+    fetcher,
+  );
+  if (response.status === 429) {
+    const reset = body?.resetsAt
+      ? new Date(body.resetsAt).toLocaleDateString("en", {
+          month: "short",
+          day: "numeric",
+          timeZone: "UTC",
+        })
+      : "next month";
+    throw new SocialPublishingInputError(
+      `X publishing is unavailable until ${reset}.`,
+      429,
+    );
+  }
+  if (!response.ok || body?.allowed !== true) {
+    throw new SocialPublishingInputError(
+      "X publishing is temporarily unavailable",
+      503,
+    );
+  }
+  return { managed: true, warning: body.warning || null };
+}
+
+async function settleManagedXUsage(
+  env: SocialPublishingEnv,
+  publicationId: string,
+  action: "consume" | "release",
+  fetcher: typeof fetch,
+): Promise<void> {
+  const { response } = await managedXUsageRequest(
+    env,
+    `/api/social/x/usage/reservations/${encodeURIComponent(publicationId)}/${action}`,
+    {
+      method: "POST",
+      body: "{}",
+    },
+    fetcher,
+  );
+  if (!response.ok) {
+    throw new SocialPublishingInputError(
+      action === "consume"
+        ? "X publishing is temporarily unavailable"
+        : "Could not release the X publishing reservation",
+      503,
+    );
+  }
+}
+
+async function managedXAccountMetadata(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  accountId: string | null,
+): Promise<Record<string, unknown> | null> {
+  if (!accountId) return null;
+  const account = await env.DB.prepare(
+    `SELECT metadata_json
+     FROM social_accounts
+     WHERE id = ? AND user_id = ? AND platform = 'x'`,
+  )
+    .bind(accountId, ownerId)
+    .first<{ metadata_json: string | null }>();
+  return account ? parseJsonObject(account.metadata_json) : null;
+}
+
+async function reserveManagedXUsageForVersion(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  version: Pick<
+    PostVersionPublicationCandidate,
+    "platform" | "target_account_id" | "body_text" | "asset_manifest_json"
+  >,
+  publicationId: string,
+  scheduledFor: string | null,
+  fetcher: typeof fetch,
+): Promise<ManagedXUsageReservation> {
+  if (version.platform !== "x") return { managed: false, warning: null };
+  const metadata = await managedXAccountMetadata(
+    env,
+    ownerId,
+    version.target_account_id,
+  );
+  if (metadata?.credentialSource !== "hosted_oauth") {
+    return { managed: false, warning: null };
+  }
+  if (!isManagedDeployment(env)) {
+    throw new SocialPublishingInputError(
+      "ME3-managed X publishing is available only with managed hosting",
+      403,
+    );
+  }
+  return reserveManagedXUsage(
+    env,
+    managedXUsageQuote(
+      publicationId,
+      scheduledFor,
+      version.body_text,
+      normalizeMediaManifest(parseJsonArray(version.asset_manifest_json)),
+    ),
+    fetcher,
+  );
+}
+
+async function reserveManagedXUsageForPublication(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  publicationId: string,
+  scheduledFor: string | null,
+  fetcher: typeof fetch,
+  reservationId = publicationId,
+): Promise<ManagedXUsageReservation> {
+  const row = await env.DB.prepare(
+    `SELECT publication.platform, publication.target_account_id_snapshot,
+            publication.body_text_snapshot, publication.asset_manifest_json_snapshot
+     FROM social_publications publication
+     JOIN social_variants version ON version.id = publication.variant_id
+     JOIN social_packages post ON post.id = version.package_id
+     JOIN sites site ON site.id = post.site_id
+     WHERE publication.id = ? AND site.user_id = ?`,
+  )
+    .bind(publicationId, ownerId)
+    .first<{
+      platform: SocialPlatform;
+      target_account_id_snapshot: string | null;
+      body_text_snapshot: string;
+      asset_manifest_json_snapshot: string;
+    }>();
+  if (!row) return { managed: false, warning: null };
+  return reserveManagedXUsageForVersion(
+    env,
+    ownerId,
+    {
+      platform: row.platform,
+      target_account_id: row.target_account_id_snapshot,
+      body_text: row.body_text_snapshot,
+      asset_manifest_json: row.asset_manifest_json_snapshot,
+    },
+    reservationId,
+    scheduledFor,
+    fetcher,
+  );
+}
+
+async function releaseManagedXUsageForPublication(
+  env: SocialPublishingEnv,
+  platform: SocialPlatform,
+  publicationId: string,
+  fetcher: typeof fetch,
+): Promise<void> {
+  if (platform !== "x" || !isManagedDeployment(env)) return;
+  await settleManagedXUsage(env, publicationId, "release", fetcher).catch(
+    () => undefined,
+  );
+}
+
+async function releaseManagedXUsageForAccount(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  accountId: string,
+  fetcher: typeof fetch,
+): Promise<void> {
+  if (!isManagedDeployment(env)) return;
+  const publications = await env.DB.prepare(
+    `SELECT publication.id
+     FROM social_publications publication
+     JOIN social_variants version ON version.id = publication.variant_id
+     JOIN social_packages post ON post.id = version.package_id
+     JOIN sites site ON site.id = post.site_id
+     WHERE publication.target_account_id_snapshot = ?
+       AND site.user_id = ?
+       AND publication.platform = 'x'
+       AND publication.status IN ('scheduled', 'queued')`,
+  )
+    .bind(accountId, ownerId)
+    .all<{ id: string }>();
+  for (const publication of publications.results || []) {
+    await settleManagedXUsage(
+      env,
+      publication.id,
+      "release",
+      fetcher,
+    ).catch(() => undefined);
+  }
+}
+
+function managedXReservationIdForAttempt(
+  publicationId: string,
+  attempt: number,
+): string {
+  return attempt > 1
+    ? `${publicationId}-retry-${attempt}`
+    : publicationId;
 }
 
 export class SocialPublishingGateError extends Error {
@@ -771,6 +1077,10 @@ export async function listSocialPublishingAccounts(
       avatarSource: providerAvatarUrl
         ? "provider" as const
         : ownerAvatarUrl ? "owner_profile" as const : null,
+      credentialSource:
+        metadata.credentialSource === "hosted_oauth"
+          ? "hosted_oauth" as const
+          : "byo" as const,
       status: row.status,
       scopes: parseStringArray(row.scopes_json),
       lastVerifiedAt: row.last_verified_at,
@@ -790,11 +1100,11 @@ export async function disconnectSocialPublishingAccount(
   const accountId = normalizeId(accountIdInput);
   if (!accountId) throw new SocialPublishingInputError("Social account id is required");
   const account = await env.DB.prepare(
-    `SELECT id FROM social_accounts
+    `SELECT id, platform, metadata_json FROM social_accounts
      WHERE id = ? AND user_id = ?`,
   )
     .bind(accountId, ownerId)
-    .first<{ id: string }>();
+    .first<{ id: string; platform: SocialPlatform; metadata_json: string | null }>();
   if (!account) return false;
 
   const pending = await env.DB.prepare(
@@ -830,6 +1140,12 @@ export async function disconnectSocialPublishingAccount(
       undefined,
       outcomeUnknown,
     );
+  }
+  if (
+    account.platform === "x" &&
+    parseJsonObject(account.metadata_json).credentialSource === "hosted_oauth"
+  ) {
+    await releaseManagedXUsageForAccount(env, ownerId, account.id, fetch);
   }
   return true;
 }
@@ -1062,6 +1378,16 @@ export async function completeSocialOAuth(
   const profile = await fetchSocialProfile(platform, token.accessToken, options.fetch);
   const publishingAccessToken = profile.accessToken || token.accessToken;
   const now = new Date().toISOString();
+  const previousAccount =
+    platform === "x" && isManagedDeployment(env)
+      ? await env.DB.prepare(
+          `SELECT id, metadata_json
+           FROM social_accounts
+           WHERE site_id = ? AND platform = 'x' AND platform_account_id = ?`,
+        )
+          .bind(stateRow.site_id, profile.id)
+          .first<{ id: string; metadata_json: string | null }>()
+      : null;
 
   await env.DB.prepare("DELETE FROM social_oauth_states WHERE id = ?")
     .bind(stateRow.id)
@@ -1107,6 +1433,17 @@ export async function completeSocialOAuth(
       now,
     )
     .run();
+  if (
+    previousAccount &&
+    parseJsonObject(previousAccount.metadata_json).credentialSource === "hosted_oauth"
+  ) {
+    await releaseManagedXUsageForAccount(
+      env,
+      stateRow.user_id,
+      previousAccount.id,
+      options.fetch,
+    );
+  }
 
   return buildFrontendRedirect(frontend, stateRow.return_path, { social_connected: platform });
 }
@@ -1936,6 +2273,14 @@ export async function createPostVersionPublication(
   const requestContextJson = publicationRequestContextJson(input.requestContext);
   const publicationId = internal.publicationId || randomToken("socpub");
   const now = new Date().toISOString();
+  const managedXReservation = await reserveManagedXUsageForVersion(
+    env,
+    ownerId,
+    version,
+    publicationId,
+    scheduledFor,
+    fetcher,
+  );
   if (isScheduled) {
     const auditEventId = randomToken("socevt");
     let inserted: {
@@ -2062,6 +2407,11 @@ export async function createPostVersionPublication(
           target_account_id_snapshot: string | null;
         }>();
     } catch (error) {
+      if (managedXReservation.managed) {
+        await settleManagedXUsage(env, publicationId, "release", fetcher).catch(
+          () => undefined,
+        );
+      }
       if (scheduledFor && await findScheduledPublication(env, version.id, scheduledFor)) {
         throw new SocialPublishingInputError(
           "This Version already has a Publication at that time",
@@ -2072,6 +2422,11 @@ export async function createPostVersionPublication(
     }
 
     if (!inserted) {
+      if (managedXReservation.managed) {
+        await settleManagedXUsage(env, publicationId, "release", fetcher).catch(
+          () => undefined,
+        );
+      }
       if (scheduledFor && await findScheduledPublication(env, version.id, scheduledFor)) {
         throw new SocialPublishingInputError(
           "This Version already has a Publication at that time",
@@ -2139,6 +2494,11 @@ export async function createPostVersionPublication(
         )
         .run();
     } catch (error) {
+      if (managedXReservation.managed) {
+        await settleManagedXUsage(env, publicationId, "release", fetcher).catch(
+          () => undefined,
+        );
+      }
       const concurrent = await latestSocialVariantPublication(env, version.id, [
         "queued",
         "publishing",
@@ -2392,6 +2752,24 @@ export async function reschedulePublication(
     );
   }
 
+  const managedXReservation = await reserveManagedXUsageForPublication(
+    env,
+    ownerId,
+    publicationId,
+    scheduledFor,
+    fetch,
+  );
+  const restoreManagedXReservation = async () => {
+    if (!managedXReservation.managed) return;
+    await reserveManagedXUsageForPublication(
+      env,
+      ownerId,
+      publicationId,
+      existing.scheduled_for,
+      fetch,
+    ).catch(() => undefined);
+  };
+
   let updatedAt = new Date().toISOString();
   if (updatedAt === expectedUpdatedAt) {
     updatedAt = new Date(Date.now() + 1).toISOString();
@@ -2472,6 +2850,7 @@ export async function reschedulePublication(
       ),
     ]);
   } catch (error) {
+    await restoreManagedXReservation();
     const conflict = await env.DB.prepare(
       `SELECT id FROM social_publications
        WHERE variant_id = ? AND scheduled_for = ? AND status = 'scheduled' AND id <> ?
@@ -2497,12 +2876,19 @@ export async function reschedulePublication(
     refreshed.timezone !== timezone
   ) {
     if (await findBlockingPostingReservationForPublication(env, existing.id, scheduledFor)) {
+      await restoreManagedXReservation();
       throw new SocialPublishingInputError(
         "This account has another Posting plan too close to that time",
         409,
       );
     }
-    assertPublicationCanBeRescheduled(refreshed);
+    try {
+      assertPublicationCanBeRescheduled(refreshed);
+    } catch (error) {
+      await restoreManagedXReservation();
+      throw error;
+    }
+    await restoreManagedXReservation();
     throw new SocialPublishingInputError(
       "This Publication changed while its schedule was being updated. Refresh and try again.",
       409,
@@ -2594,6 +2980,12 @@ export async function cancelPublication(
       409,
     );
   }
+  await releaseManagedXUsageForPublication(
+    env,
+    publication.platform,
+    publication.id,
+    fetch,
+  );
   return refreshed;
 }
 
@@ -2854,6 +3246,17 @@ async function recoverUnexpectedSocialPublishFailure(
   }
 
   const attempt = await publicationAttemptNumber(env, publicationId);
+  const hostedXConnection =
+    row.platform === "x" &&
+    parseJsonObject(row.account_metadata_json).credentialSource === "hosted_oauth";
+  if (hostedXConnection && isManagedDeployment(env)) {
+    await releaseManagedXUsageForPublication(
+      env,
+      row.platform,
+      managedXReservationIdForAttempt(row.publication_id, attempt),
+      fetch,
+    );
+  }
   const code = "retryable:unexpected_pre_provider_failure";
   const errorMessage =
     "ME3 hit an unexpected failure before the provider publishing request started. It is safe to retry.";
@@ -2932,13 +3335,28 @@ export async function markSocialPublishQueueMessageDeadLettered(
   if (!row || (row.pub_status !== "queued" && row.pub_status !== "publishing")) {
     return false;
   }
-  return failContentPublication(
+  const failed = await failContentPublication(
     env,
     row,
     "retryable:queue_dead_lettered",
     "Social publishing stopped after the queue exhausted its delivery attempts.",
     row.pub_status,
   );
+  if (
+    failed &&
+    row.platform === "x" &&
+    parseJsonObject(row.account_metadata_json).credentialSource === "hosted_oauth" &&
+    isManagedDeployment(env)
+  ) {
+    const attempt = await publicationAttemptNumber(env, row.publication_id);
+    await releaseManagedXUsageForPublication(
+      env,
+      row.platform,
+      managedXReservationIdForAttempt(row.publication_id, attempt),
+      fetch,
+    );
+  }
+  return failed;
 }
 
 export async function publishQueuedPublication(
@@ -2952,6 +3370,31 @@ export async function publishQueuedPublication(
 
   const row = await getQueuedPublicationRow(env, publicationId);
   if (!row) return;
+  const hostedXConnection =
+    row.platform === "x" &&
+    parseJsonObject(row.account_metadata_json).credentialSource === "hosted_oauth";
+  if (
+    row.platform === "x" &&
+    !hostedXConnection &&
+    isManagedDeployment(env)
+  ) {
+    await releaseManagedXUsageForPublication(
+      env,
+      row.platform,
+      row.publication_id,
+      fetcher,
+    );
+  }
+  let managedXReservationId = row.publication_id;
+  const releaseManagedReservation = async () => {
+    if (!hostedXConnection || !isManagedDeployment(env)) return;
+    await releaseManagedXUsageForPublication(
+      env,
+      row.platform,
+      managedXReservationId,
+      fetcher,
+    );
+  };
   if (
     row.pub_status === "scheduled" ||
     row.pub_status === "published" ||
@@ -2988,6 +3431,18 @@ export async function publishQueuedPublication(
 
   if (!gate.ready) {
     await failContentPublication(env, row, gate.status, gateErrorMessage(gate), "queued");
+    await releaseManagedReservation();
+    return;
+  }
+
+  if (hostedXConnection && !isManagedDeployment(env)) {
+    await failContentPublication(
+      env,
+      row,
+      "managed_x_unavailable",
+      "ME3-managed X publishing is available only with managed hosting.",
+      "queued",
+    );
     return;
   }
 
@@ -2999,6 +3454,7 @@ export async function publishQueuedPublication(
       "The exact Post Version must be approved before publishing.",
       "queued",
     );
+    await releaseManagedReservation();
     return;
   }
 
@@ -3010,6 +3466,7 @@ export async function publishQueuedPublication(
       `Connect ${platformLabel(row.platform)} before publishing.`,
       "queued",
     );
+    await releaseManagedReservation();
     return;
   }
 
@@ -3021,6 +3478,7 @@ export async function publishQueuedPublication(
       `${platformLabel(row.platform)} connection is not ready.`,
       "queued",
     );
+    await releaseManagedReservation();
     return;
   }
 
@@ -3050,6 +3508,7 @@ export async function publishQueuedPublication(
       `Reconnect ${platformLabel(row.platform)} before publishing.`,
       "publishing",
     );
+    await releaseManagedReservation();
     return;
   }
 
@@ -3071,6 +3530,7 @@ export async function publishQueuedPublication(
       "publishing",
     );
     if (failed) await revokeSocialVariantApproval(env, row.variant_id);
+    await releaseManagedReservation();
     return;
   }
 
@@ -3094,10 +3554,42 @@ export async function publishQueuedPublication(
       "publishing",
     );
     if (failed && !setupFailure) await revokeSocialVariantApproval(env, row.variant_id);
+    await releaseManagedReservation();
     return;
   }
 
   const attempt = await publicationAttemptNumber(env, row.publication_id);
+  managedXReservationId = managedXReservationIdForAttempt(
+    row.publication_id,
+    attempt,
+  );
+  let managedXReservation: ManagedXUsageReservation = {
+    managed: false,
+    warning: null,
+  };
+  try {
+    managedXReservation = await reserveManagedXUsageForPublication(
+      env,
+      row.user_id,
+      row.publication_id,
+      null,
+      fetcher,
+      managedXReservationId,
+    );
+  } catch (error) {
+    if (error instanceof SocialPublishingInputError && error.status === 429) {
+      await failContentPublication(
+        env,
+        row,
+        "allowance_exhausted",
+        error.message,
+        "publishing",
+      );
+      return;
+    }
+    throw error;
+  }
+
   const publishingEventId = randomToken("socevt");
   const publishingEvent = await env.DB.prepare(
     `INSERT INTO social_publication_events (
@@ -3126,20 +3618,47 @@ export async function publishQueuedPublication(
       row.publication_id,
     )
     .first<{ id: string }>();
-  if (!publishingEvent) return;
+  if (!publishingEvent) {
+    if (managedXReservation.managed) await releaseManagedReservation();
+    return;
+  }
 
-  const result = await adapter.publish({
-    accessToken,
-    accountId: row.platform_account_id,
-    title: row.title,
-    bodyText: row.body,
-    assets,
-    fetcher,
-    markProviderWriteStarted: () =>
-      markSocialProviderWriteStarted(env, row, claim.updated_at),
-  });
+  let managedXCostStarted = false;
+  let result: import("./adapters").SocialPublishAdapterResult;
+  try {
+    result = await adapter.publish({
+      accessToken,
+      accountId: row.platform_account_id,
+      title: row.title,
+      bodyText: row.body,
+      assets,
+      fetcher,
+      markProviderCostStarted: managedXReservation.managed
+        ? async () => {
+            if (managedXCostStarted) return;
+            await settleManagedXUsage(
+              env,
+              managedXReservationId,
+              "consume",
+              fetcher,
+            );
+            managedXCostStarted = true;
+          }
+        : undefined,
+      markProviderWriteStarted: () =>
+        markSocialProviderWriteStarted(env, row, claim.updated_at),
+    });
+  } catch (error) {
+    if (managedXReservation.managed && !managedXCostStarted) {
+      await releaseManagedReservation();
+    }
+    throw error;
+  }
 
   if (!result.ok) {
+    if (managedXReservation.managed && !managedXCostStarted) {
+      await releaseManagedReservation();
+    }
     const failureClass = result.failureClass || "rejected";
     if (failureClass === "retryable" && env.SOCIAL_PUBLISH_QUEUE && attempt < 3) {
       const delaySeconds = attempt === 1 ? 60 : 300;
@@ -3759,6 +4278,7 @@ async function getQueuedPublicationRow(
             pub.site_id,
             pub.platform,
             pub.status AS pub_status,
+            pub.scheduled_for,
             pub.updated_at AS pub_updated_at,
             pub.error_code AS pub_error_code,
             p.post_title_snapshot AS title,
@@ -4349,11 +4869,11 @@ async function revokeSocialVariantApproval(
     .bind(variantId)
     .run();
   const scheduled = await env.DB.prepare(
-    `SELECT id FROM social_publications
+    `SELECT id, platform FROM social_publications
      WHERE variant_id = ? AND status = 'scheduled'`,
   )
     .bind(variantId)
-    .all<{ id: string }>();
+    .all<{ id: string; platform: SocialPlatform }>();
   for (const publication of scheduled.results || []) {
     await env.DB.prepare(
       `UPDATE social_publications
@@ -4370,6 +4890,12 @@ async function revokeSocialVariantApproval(
       eventType: "cancelled",
       payload: { reason: "approval_revoked" },
     });
+    await releaseManagedXUsageForPublication(
+      env,
+      publication.platform,
+      publication.id,
+      fetch,
+    );
   }
 }
 

@@ -88,7 +88,7 @@ const oauthError = computed(() => {
 
 const oauthMessage = computed(() => {
   if (oauthConnected.value === "x") {
-    return "X connected. It will now appear as a draft target.";
+    return "X connected.";
   }
   if (oauthConnected.value === "linkedin") {
     return "LinkedIn connected. It will now appear as a publish target.";
@@ -172,7 +172,7 @@ const modalAccount = computed(() =>
 
 const hostedOAuthAvailable = computed(() => {
   const platform = connectModalPlatform.value;
-  if (!platform || platform === "x") return false;
+  if (!platform) return false;
   return Boolean(
     status.value?.hostedOAuth.configured &&
       status.value.hostedOAuth.platforms.includes(platform),
@@ -182,6 +182,11 @@ const hostedOAuthAvailable = computed(() => {
 const ownAppReady = computed(() => Boolean(modalProviderSetting.value?.configured));
 const managedOnlyPlatform = computed(
   () => connectModalPlatform.value === "youtube" || connectModalPlatform.value === "tiktok",
+);
+const managedXUsageVisible = computed(
+  () =>
+    accountByPlatform.value.x?.credentialSource === "hosted_oauth" &&
+    Boolean(status.value?.managedXUsage),
 );
 
 function reportSocialError(error: unknown, fallback: string) {
@@ -351,6 +356,14 @@ watch(() => props.siteId, () => void reloadAccounts());
 <template>
   <section class="social-panel">
     <h2>Connect social accounts</h2>
+    <p
+      v-if="managedXUsageVisible"
+      class="social-connect-modal__status social-x-usage"
+      role="status"
+      aria-live="polite"
+    >
+      X usage: {{ status?.managedXUsage?.usedPercent }}%
+    </p>
 
     <div class="social-connect-row" role="group" aria-label="Social accounts">
       <div v-for="item in platforms" :key="item.id" class="social-connect-card">
@@ -486,37 +499,6 @@ watch(() => props.siteId, () => void reloadAccounts());
           </button>
         </div>
 
-        <aside
-          v-if="connectModalPlatform === 'x'"
-          class="x-funding-notice"
-          aria-labelledby="x-funding-title"
-        >
-          <strong id="x-funding-title">Your X developer account pays for API usage</strong>
-          <p>
-            X API access is pay-per-use. You fund and manage the credits used by
-            ME3 through your own X developer account.
-          </p>
-          <div class="x-funding-notice__links">
-            <a
-              href="https://docs.x.com/x-api/getting-started/pricing"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Review X API pricing
-            </a>
-            <a
-              href="https://console.x.com"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Open X Developer Console
-            </a>
-          </div>
-          <label class="x-funding-notice__acknowledgement">
-            <input v-model="xFundingAcknowledged" type="checkbox" />
-            <span>I understand that X API usage is charged to my X developer account.</span>
-          </label>
-        </aside>
         <p v-if="modalAccount && modalAccount.status !== 'active'" class="social-connect-modal__status" role="status">
           This account needs to be reconnected before publishing.
         </p>
@@ -525,7 +507,6 @@ watch(() => props.siteId, () => void reloadAccounts());
           v-if="hostedOAuthAvailable"
           class="social-connect-option social-connect-option--managed"
         >
-          <strong>Connect with ME3</strong>
           <button
             type="button"
             class="social-connect-option__button"
@@ -553,6 +534,13 @@ watch(() => props.siteId, () => void reloadAccounts());
             <strong>{{ hostedOAuthAvailable ? "Advanced: use my own app" : "App credentials" }}</strong>
             <span v-if="ownAppReady">Configured</span>
           </summary>
+          <label
+            v-if="connectModalPlatform === 'x'"
+            class="x-funding-notice__acknowledgement"
+          >
+            <input v-model="xFundingAcknowledged" type="checkbox" />
+            <span>I pay X API charges.</span>
+          </label>
           <label>
             <span>Client ID</span>
             <input
@@ -624,6 +612,10 @@ watch(() => props.siteId, () => void reloadAccounts());
   font-size: 16px;
   font-weight: 600;
   margin: 0 0 16px;
+}
+
+.social-x-usage {
+  margin: -8px 0 16px;
 }
 
 .social-connect-row {
@@ -847,8 +839,8 @@ watch(() => props.siteId, () => void reloadAccounts());
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -862,39 +854,6 @@ watch(() => props.siteId, () => void reloadAccounts());
   background: var(--color-bg-muted);
 }
 
-.x-funding-notice {
-  margin: 16px 20px 18px;
-  padding: 14px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 8px);
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-  color: var(--ui-text, var(--color-text));
-}
-
-.x-funding-notice p {
-  margin: 6px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.x-funding-notice__links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 18px;
-  margin-top: 8px;
-}
-
-.x-funding-notice__links a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  color: var(--ui-accent-strong, var(--color-accent));
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.x-funding-notice__links a:focus-visible,
 .x-funding-notice__acknowledgement input:focus-visible {
   outline: 2px solid var(--ui-accent, var(--color-accent));
   outline-offset: 2px;
@@ -932,7 +891,7 @@ watch(() => props.siteId, () => void reloadAccounts());
 .social-connect-option {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 16px;
   padding: 14px;
 }
@@ -946,7 +905,7 @@ watch(() => props.siteId, () => void reloadAccounts());
 
 .social-connect-option__button,
 .social-own-app__button {
-  min-height: 36px;
+  min-height: 44px;
   padding: 0 14px;
   border: 0;
   border-radius: 8px;

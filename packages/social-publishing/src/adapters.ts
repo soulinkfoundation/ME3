@@ -32,6 +32,7 @@ export type SocialPublishAdapter = {
     bodyText: string;
     assets: SocialMediaAsset[];
     fetcher: typeof fetch;
+    markProviderCostStarted?: () => Promise<void>;
     markProviderWriteStarted?: () => Promise<void>;
   }): Promise<SocialPublishAdapterResult>;
 };
@@ -788,6 +789,12 @@ const xAdapter: SocialPublishAdapter = {
 
     const mediaIds: string[] = [];
     const mediaResponses: unknown[] = [];
+    let providerCostStarted = false;
+    const markProviderCostStarted = async () => {
+      if (providerCostStarted) return;
+      await input.markProviderCostStarted?.();
+      providerCostStarted = true;
+    };
     const videoAsset = input.assets.find((asset) => asset.kind === "video");
     if (videoAsset) {
       const upload = await uploadXVideo(input, videoAsset);
@@ -904,6 +911,7 @@ const xAdapter: SocialPublishAdapter = {
       if (!altText) continue;
       let metadataResponse: Response;
       try {
+        await markProviderCostStarted();
         metadataResponse = await input.fetcher("https://api.x.com/2/media/metadata", {
           method: "POST",
           headers: xHeaders(input.accessToken),
@@ -937,6 +945,7 @@ const xAdapter: SocialPublishAdapter = {
     }
 
     let response: Response;
+    await markProviderCostStarted();
     await input.markProviderWriteStarted?.();
     try {
       response = await input.fetcher("https://api.x.com/2/tweets", {
