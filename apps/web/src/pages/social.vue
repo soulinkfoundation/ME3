@@ -116,10 +116,18 @@ const visiblePosts = computed(() =>
     .filter((detail) =>
       visibleVersionsFor(detail).length > 0
     )
-    .sort(
-      (left, right) =>
-        Date.parse(right.post.updatedAt) - Date.parse(left.post.updatedAt),
-    ),
+    .sort((left, right) => {
+      if (activeMode.value === "scheduled") {
+        const leftScheduledAt = scheduledDateFor(left);
+        const rightScheduledAt = scheduledDateFor(right);
+        if (leftScheduledAt && rightScheduledAt) {
+          return Date.parse(leftScheduledAt) - Date.parse(rightScheduledAt);
+        }
+        if (leftScheduledAt) return -1;
+        if (rightScheduledAt) return 1;
+      }
+      return Date.parse(right.post.updatedAt) - Date.parse(left.post.updatedAt);
+    }),
 );
 
 const modeTabs = computed(() =>
@@ -520,6 +528,14 @@ function postStatus(detail: SocialPostDetail): string {
   if (states.includes("Published")) return "Published";
   if (states.includes("Approved")) return "Approved";
   return "Draft";
+}
+
+function scheduledDateFor(detail: SocialPostDetail): string | null {
+  const scheduledDates = visibleVersionsFor(detail)
+    .map((version) => version.scheduledFor)
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+  return scheduledDates[0] || null;
 }
 
 function formatDate(value: string | null): string {
@@ -940,7 +956,8 @@ async function loadLocalDemo() {
   }
 }
 
-async function deleteDraft(detail = selectedPost.value) {
+async function deleteDraft() {
+  const detail = selectedPost.value;
   if (!detail || !canDeletePost(detail) || saving.value) return;
   const hasFailedHistory = detail.versions.some((version) =>
     version.publicationStatus === "failed" || version.publicationStatus === "cancelled",
@@ -1469,7 +1486,18 @@ function currentQueryParam(name: string): string | null {
                 @click="selectPost(detail)"
               >
                 <span class="post-row__meta">
-                  <time :datetime="detail.post.updatedAt">{{ formatDate(detail.post.updatedAt) }}</time>
+                  <span
+                    v-if="activeMode === 'scheduled' && scheduledDateFor(detail)"
+                    class="post-row__schedule"
+                  >
+                    <span>Scheduled for</span>
+                    <time :datetime="scheduledDateFor(detail)!">
+                      {{ formatDate(scheduledDateFor(detail)) }}
+                    </time>
+                  </span>
+                  <time v-else :datetime="detail.post.updatedAt">
+                    {{ formatDate(detail.post.updatedAt) }}
+                  </time>
                 </span>
                 <strong>{{ detail.post.ideaText }}</strong>
                 <span class="post-row__footer">
@@ -1488,21 +1516,6 @@ function currentQueryParam(name: string): string | null {
                   <span class="row-status">{{ postStatus(detail) }}</span>
                 </span>
               </button>
-              <Button
-                v-if="selectedPostId === detail.post.id && canDeletePost(detail)"
-                class="post-row__delete"
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                type="button"
-                aria-label="Delete selected draft"
-                title="Delete draft"
-                :disabled="saving"
-                @click="deleteDraft(detail)"
-              >
-                <UiIcon name="Trash2" :size="16" aria-hidden="true" />
-              </Button>
             </article>
           </template>
           </section>
@@ -1532,20 +1545,6 @@ function currentQueryParam(name: string): string | null {
                 View source <UiIcon name="ExternalLink" :size="14" aria-hidden="true" />
               </a>
             </div>
-            <Button
-              v-if="canDeleteDraft"
-              color="ghost"
-              shape="soft"
-              size="compact"
-              icon-only
-              type="button"
-              aria-label="Delete draft"
-              title="Delete draft"
-              :disabled="saving"
-              @click="deleteDraft"
-            >
-              <UiIcon name="Trash2" :size="17" aria-hidden="true" />
-            </Button>
           </header>
 
           <aside
@@ -1671,6 +1670,19 @@ function currentQueryParam(name: string): string | null {
                 <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || scheduling || !canSchedule" @click="openSchedule">
                   <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
                   Schedule
+                </Button>
+                <Button
+                  v-if="canDeleteDraft"
+                  class="editor-actions__delete"
+                  color="danger"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="saving || scheduling"
+                  @click="deleteDraft"
+                >
+                  <UiIcon name="Trash2" :size="16" aria-hidden="true" />
+                  Delete draft
                 </Button>
               </div>
               <p v-if="publishError" class="form-error editor-action-error" role="alert" aria-live="assertive">{{ publishError }}</p>
@@ -2422,17 +2434,6 @@ function currentQueryParam(name: string): string | null {
   outline-offset: -2px;
 }
 
-.post-row__delete {
-  position: absolute;
-  z-index: 1;
-  top: 8px;
-  right: 8px;
-}
-
-.post-row--active .post-row__meta {
-  padding-right: 38px;
-}
-
 .post-row__meta,
 .post-row__footer,
 .detail-meta,
@@ -2443,6 +2444,19 @@ function currentQueryParam(name: string): string | null {
   gap: 8px;
   color: var(--ui-text-muted);
   font-size: 0.78rem;
+}
+
+.post-row__schedule {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.post-row__schedule time {
+  color: var(--ui-text);
+  font-size: 0.86rem;
+  font-weight: 750;
 }
 
 .post-row strong {
@@ -2466,6 +2480,10 @@ function currentQueryParam(name: string): string | null {
   border-radius: 999px;
   color: var(--ui-text-muted);
   font-size: 0.72rem;
+}
+
+.editor-actions__delete {
+  margin-inline-start: auto;
 }
 
 .platform-chip {
@@ -3935,6 +3953,10 @@ input:focus {
 
   .editor-actions {
     display: grid;
+  }
+
+  .editor-actions__delete {
+    margin-inline-start: 0;
   }
 
   .library-filters-dialog .library-filter-grid {

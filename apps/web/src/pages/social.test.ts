@@ -213,6 +213,7 @@ describe("SocialPage", () => {
       "Save Draft",
       "Post now",
       "Schedule",
+      "Delete draft",
     ]);
     const schedule = actions.findAll("button")
       .find((button) => button.text().trim() === "Schedule");
@@ -223,6 +224,111 @@ describe("SocialPage", () => {
     expect(wrapper.get(".social-schedule-dialog h2").text()).toBe("Schedule post");
     expect(wrapper.find(".social-schedule-dialog input[type='radio']").exists()).toBe(false);
     expect(wrapper.get(".social-schedule-dialog").text()).not.toContain("Post now");
+  });
+
+  it("keeps one labelled delete action beside publishing actions and deletes the selected draft", async () => {
+    vi.mocked(api.delete).mockResolvedValue({ ok: true });
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const deleteActions = wrapper.findAll("button")
+      .filter((button) => button.text().trim() === "Delete draft");
+    expect(deleteActions).toHaveLength(1);
+    expect(deleteActions[0]!.element.closest(".editor-actions")).not.toBeNull();
+    expect(wrapper.find(".detail-header button").exists()).toBe(false);
+    expect(wrapper.find(".post-row > button:not(.post-row__select)").exists()).toBe(false);
+
+    await deleteActions[0]!.trigger("click");
+    await flushPromises();
+
+    expect(confirm).toHaveBeenCalledWith("Delete “A social post”? This cannot be undone.");
+    expect(api.delete).toHaveBeenCalledWith(
+      "/social/posts/post-1?expectedUpdatedAt=2026-07-18T07%3A00%3A00Z",
+    );
+    expect(wrapper.find(".post-detail").exists()).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("shows and orders scheduled posts by their scheduled date and time", async () => {
+    const earlyScheduledAt = "2026-07-29T08:15:00.000Z";
+    const lateScheduledAt = "2026-07-30T16:45:00.000Z";
+    const scheduledPosts = [
+      {
+        ...post,
+        post: {
+          ...post.post,
+          id: "post-later",
+          ideaText: "Later scheduled post",
+          updatedAt: "2026-07-26T09:00:00.000Z",
+        },
+        versions: [{
+          ...post.versions[0],
+          id: "version-later",
+          postId: "post-later",
+          scheduledFor: lateScheduledAt,
+          publicationStatus: "scheduled" as const,
+        }],
+      },
+      {
+        ...post,
+        post: {
+          ...post.post,
+          id: "post-earlier",
+          ideaText: "Earlier scheduled post",
+          updatedAt: "2026-07-25T09:00:00.000Z",
+        },
+        versions: [{
+          ...post.versions[0],
+          id: "version-earlier",
+          postId: "post-earlier",
+          scheduledFor: earlyScheduledAt,
+          publicationStatus: "scheduled" as const,
+        }],
+      },
+    ];
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: scheduledPosts });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("linkedin", {
+              schedule: true,
+              deliveryMode: "direct_publish",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    const scheduledTab = wrapper.findAll(".workspace-tabs button")
+      .find((button) => button.text().includes("Scheduled"));
+    expect(scheduledTab).toBeTruthy();
+    await scheduledTab!.trigger("click");
+    await flushPromises();
+
+    const rows = wrapper.findAll(".post-row");
+    expect(rows.map((row) => row.get("strong").text())).toEqual([
+      "Earlier scheduled post",
+      "Later scheduled post",
+    ]);
+    expect(rows[0]!.get(".post-row__schedule").text()).toContain("Scheduled for");
+    expect(rows[0]!.get(".post-row__schedule time").attributes("datetime"))
+      .toBe(earlyScheduledAt);
+    expect(rows[1]!.get(".post-row__schedule time").attributes("datetime"))
+      .toBe(lateScheduledAt);
   });
 
   it("requires an explicit destination choice and uses a platform preview", async () => {
