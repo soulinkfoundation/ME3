@@ -41,13 +41,14 @@ describe("fixed live model evaluation", () => {
     ).toBe(true);
   });
 
-  it("keeps one versioned 30-task suite across the required categories", () => {
-    expect(FIXED_MODEL_EVALUATION_SUITE_VERSION).toBe("me3-fixed-30-v1");
-    expect(FIXED_MODEL_EVALUATION_TASKS).toHaveLength(30);
-    expect(new Set(FIXED_MODEL_EVALUATION_TASKS.map((task) => task.id)).size).toBe(30);
+  it("keeps one versioned 35-task suite across the required categories", () => {
+    expect(FIXED_MODEL_EVALUATION_SUITE_VERSION).toBe("me3-fixed-35-v2");
+    expect(FIXED_MODEL_EVALUATION_TASKS).toHaveLength(35);
+    expect(new Set(FIXED_MODEL_EVALUATION_TASKS.map((task) => task.id)).size).toBe(35);
     expect(new Set(FIXED_MODEL_EVALUATION_TASKS.map((task) => task.category))).toEqual(
       new Set([
         "conversation",
+        "character",
         "personal_context",
         "planning_writing",
         "tool_selection",
@@ -57,6 +58,16 @@ describe("fixed live model evaluation", () => {
         "structured_output",
       ]),
     );
+    expect(
+      FIXED_MODEL_EVALUATION_TASKS.filter((task) => task.category === "character")
+        .map((task) => task.id),
+    ).toEqual([
+      "character-honest-disagreement",
+      "character-nonhuman-identity",
+      "character-psychological-boundary",
+      "character-spiritual-boundary",
+      "character-factual-psychology",
+    ]);
     expect(
       FIXED_MODEL_EVALUATION_CANDIDATES.filter((candidate) => candidate.enabledByDefault)
         .map((candidate) => candidate.id),
@@ -102,6 +113,9 @@ describe("fixed live model evaluation", () => {
     const serialized = JSON.stringify(report);
 
     expect(run).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(run.mock.calls[0]?.[1])).toContain(
+      "super-intelligent search-and-rescue working dog",
+    );
     expect(report.candidates[0]?.results[0]).toMatchObject({
       taskId: "metadata-boundary",
       status: "passed",

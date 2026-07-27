@@ -39,6 +39,8 @@ In a Deploy-to-Cloudflare copied repository, run **Actions → Update ME3 → Ru
 
 Point your ME3 or any AI at this [how-to-me3](docs/how-to-me3.md) to find out how to configure your custom domain, run the app locally, create your own plugin and more.
 
+ME3's stable agent character is defined in the [ME3 Character Contract](docs/me3-character.md).
+
 ### 😘 Support
 
 ME3 is free and open source. To help support ongoing development and maintenance, visit the [Soulink Foundation](https://soulinkfoundation.org/support)

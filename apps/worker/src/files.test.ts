@@ -5,6 +5,7 @@ import {
   createDriveMultipartUpload,
   deleteDriveFile,
   getDriveFileContentResponse,
+  updateDriveFile,
   uploadDriveMultipartPart,
 } from "./files";
 import type { Env } from "./types";
@@ -28,18 +29,27 @@ const readyFile = {
 };
 
 function createEnv(options: {
+  assistantStorageReference?: boolean;
   deleteObject?: () => Promise<void>;
   getObject?: (key: string, options?: unknown) => Promise<unknown>;
+  putObject?: (key: string, value: unknown, options?: unknown) => Promise<unknown>;
 } = {}) {
   const update = vi.fn(async () => ({ meta: { changes: 1 } }));
   const deleteObject = vi.fn(options.deleteObject || (async () => undefined));
   const getObject = vi.fn(options.getObject || (async () => null));
+  const putObject = vi.fn(options.putObject || (async () => undefined));
   const db = {
     prepare(sql: string) {
       return {
         bind() {
           return {
-            first: async () => (sql.includes("SELECT") ? readyFile : null),
+            first: async () => {
+              if (sql.includes("FROM assistant_attachments")) {
+                return options.assistantStorageReference ? { id: "attachment-1" } : null;
+              }
+              if (sql.startsWith("SELECT id FROM drive_files")) return null;
+              return sql.includes("SELECT") ? readyFile : null;
+            },
             run: update,
           };
         },
@@ -48,9 +58,13 @@ function createEnv(options: {
   };
 
   return {
-    env: { DB: db, SITE_ASSETS: { delete: deleteObject, get: getObject } } as unknown as Env,
+    env: {
+      DB: db,
+      SITE_ASSETS: { delete: deleteObject, get: getObject, put: putObject },
+    } as unknown as Env,
     deleteObject,
     getObject,
+    putObject,
     update,
   };
 }
@@ -196,6 +210,36 @@ describe("deleteDriveFile", () => {
 
     await expect(deleteDriveFile(env, "owner-1", "file-1")).rejects.toThrow(storageError);
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it("keeps an R2 object that is also referenced by an assistant attachment", async () => {
+    const { env, deleteObject, update } = createEnv({
+      assistantStorageReference: true,
+    });
+
+    await expect(deleteDriveFile(env, "owner-1", "file-1")).resolves.toEqual({
+      ok: true,
+      fileId: "file-1",
+    });
+
+    expect(deleteObject).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("updateDriveFile", () => {
+  it("renames a shared assistant image without copying or deleting its R2 object", async () => {
+    const { env, deleteObject, getObject, putObject } = createEnv({
+      assistantStorageReference: true,
+    });
+
+    await expect(
+      updateDriveFile(env, "owner-1", "file-1", { filename: "renamed.png" }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(getObject).not.toHaveBeenCalled();
+    expect(putObject).not.toHaveBeenCalled();
+    expect(deleteObject).not.toHaveBeenCalled();
   });
 });
 

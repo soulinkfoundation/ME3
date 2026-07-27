@@ -684,7 +684,14 @@ export async function updateDriveFile(
     await assertFileNameAvailable(env, ownerId, folderId, filename, current.id);
   }
 
-  const nextStorageKey = buildDriveStorageKey(ownerId, folder?.path || "", current.id, filename);
+  const isSharedAssistantAsset = await isAssistantAttachmentStorageKey(
+    env,
+    ownerId,
+    current.storage_key,
+  );
+  const nextStorageKey = isSharedAssistantAsset
+    ? current.storage_key
+    : buildDriveStorageKey(ownerId, folder?.path || "", current.id, filename);
   const storageKeyChanged = nextStorageKey !== current.storage_key;
   let copiedToNextKey = false;
 
@@ -753,7 +760,14 @@ export async function deleteDriveFile(
     throw new DriveInputError("File storage is not configured.", 503);
   }
 
-  await env.SITE_ASSETS.delete(current.storage_key);
+  const isSharedAssistantAsset = await isAssistantAttachmentStorageKey(
+    env,
+    ownerId,
+    current.storage_key,
+  );
+  if (!isSharedAssistantAsset) {
+    await env.SITE_ASSETS.delete(current.storage_key);
+  }
 
   const result = await env.DB.prepare(
     `UPDATE drive_files
@@ -1017,6 +1031,22 @@ function isTextPreviewKind(value: DrivePreviewKind): value is "text" | "markdown
 
 function shouldExtractText(previewKind: DrivePreviewKind, size: number): boolean {
   return isTextPreviewKind(previewKind) && size <= MAX_PREVIEW_BYTES;
+}
+
+async function isAssistantAttachmentStorageKey(
+  env: Pick<Env, "DB">,
+  ownerId: string,
+  storageKey: string,
+): Promise<boolean> {
+  const attachment = await env.DB.prepare(
+    `SELECT id
+     FROM assistant_attachments
+     WHERE owner_id = ? AND storage_key = ? AND status = 'ready'
+     LIMIT 1`,
+  )
+    .bind(ownerId, storageKey)
+    .first<{ id: string }>();
+  return Boolean(attachment?.id);
 }
 
 async function queryDriveFolders(

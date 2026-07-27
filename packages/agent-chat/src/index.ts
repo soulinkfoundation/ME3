@@ -34,6 +34,7 @@ import {
   parseEmailAddressHeader,
 } from "../../../shared/email-headers";
 import { classifyAssistantImageIntent } from "./image-intent";
+import { ME3_BASE_CHARACTER_PROMPT } from "./base-character";
 import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL, modelSupportsCapability, modelSupportsImageInput, type AssistantImageCapability } from "./model-capabilities";
 import {
   modelErrorMessage,
@@ -2866,6 +2867,16 @@ async function runAssistantImageGeneration(
     attachmentId,
   }).catch(() => undefined);
 
+  await saveGeneratedAssistantImageToFiles(env, {
+    ownerId: input.ownerId,
+    threadId: input.threadId,
+    attachmentId,
+    filename,
+    mimeType,
+    bytes,
+    storageKey,
+  }).catch(() => undefined);
+
   const asset: AgentChatGeneratedImageAsset = {
     id: attachmentId,
     attachmentId,
@@ -2891,6 +2902,97 @@ async function runAssistantImageGeneration(
       },
     ],
   };
+}
+
+const ASSISTANT_GENERATED_IMAGES_FOLDER = "Generated Images";
+const ASSISTANT_GENERATED_IMAGES_PATH = "Generated-Images";
+
+async function saveGeneratedAssistantImageToFiles(
+  env: CoreAgentChatEnv,
+  input: {
+    ownerId: string;
+    threadId: string | null;
+    attachmentId: string;
+    filename: string;
+    mimeType: string;
+    bytes: Uint8Array;
+    storageKey: string;
+  },
+): Promise<void> {
+  let folder = await env.DB.prepare(
+    `SELECT id
+     FROM drive_folders
+     WHERE owner_id = ? AND parent_id IS NULL AND status = 'active'
+       AND name = ? COLLATE NOCASE
+     LIMIT 1`,
+  )
+    .bind(input.ownerId, ASSISTANT_GENERATED_IMAGES_FOLDER)
+    .first<{ id: string }>();
+
+  if (!folder) {
+    const folderId = crypto.randomUUID();
+    try {
+      await env.DB.prepare(
+        `INSERT INTO drive_folders
+           (id, owner_id, parent_id, name, path, status)
+         VALUES (?, ?, NULL, ?, ?, 'active')`,
+      )
+        .bind(
+          folderId,
+          input.ownerId,
+          ASSISTANT_GENERATED_IMAGES_FOLDER,
+          ASSISTANT_GENERATED_IMAGES_PATH,
+        )
+        .run();
+      folder = { id: folderId };
+    } catch {
+      folder = await env.DB.prepare(
+        `SELECT id
+         FROM drive_folders
+         WHERE owner_id = ? AND parent_id IS NULL AND status = 'active'
+           AND name = ? COLLATE NOCASE
+         LIMIT 1`,
+      )
+        .bind(input.ownerId, ASSISTANT_GENERATED_IMAGES_FOLDER)
+        .first<{ id: string }>();
+      if (!folder) throw new Error("Could not create the Generated Images folder.");
+    }
+  }
+
+  const fileId = crypto.randomUUID();
+  const sha256 = await assistantFilesSha256(input.bytes);
+  const metadata = {
+    source: "assistant-image-generation",
+    assistantAttachmentId: input.attachmentId,
+    threadId: input.threadId,
+    sharedStorage: true,
+  };
+
+  await env.DB.prepare(
+    `INSERT INTO drive_files
+       (id, owner_id, folder_id, filename, mime_type, size, storage_key, sha256,
+        status, preview_kind, metadata_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', 'image', ?)`,
+  )
+    .bind(
+      fileId,
+      input.ownerId,
+      folder.id,
+      input.filename,
+      input.mimeType,
+      input.bytes.byteLength,
+      input.storageKey,
+      sha256,
+      JSON.stringify(metadata),
+    )
+    .run();
+}
+
+async function assistantFilesSha256(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", toArrayBuffer(bytes)),
+  );
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function runWorkersAiImageGeneration(
@@ -5503,7 +5605,8 @@ function buildChatMessages(
   const ownerName = owner?.name?.trim() || owner?.username?.trim() || "the owner";
   const assistantName = normalizeAssistantDisplayName(owner?.assistant_name);
   const system = [
-    "You are a concise personal/business assistant running inside the owner's private ME3 installation.",
+    ME3_BASE_CHARACTER_PROMPT,
+    "You are running inside the owner's private ME3 installation.",
     `Your assistant display name is ${JSON.stringify(assistantName)}.`,
     "If asked who you are or what your name is, use the assistant display name.",
     `The owner is ${ownerName}.`,

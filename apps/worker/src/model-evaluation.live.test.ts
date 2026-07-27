@@ -34,8 +34,8 @@ describe.skipIf(!liveEnabled)("live fixed-task model evaluation", () => {
 
     console.info(`ME3_MODEL_EVAL_RESULTS ${JSON.stringify(report)}`);
     expect(report.candidates).toHaveLength(selected.length);
-    expect(report.candidates.every((candidate) => candidate.totals.tasks === 30)).toBe(true);
-    expect(FIXED_MODEL_EVALUATION_TASKS).toHaveLength(30);
+    expect(report.candidates.every((candidate) => candidate.totals.tasks === 35)).toBe(true);
+    expect(FIXED_MODEL_EVALUATION_TASKS).toHaveLength(35);
   });
 });
 

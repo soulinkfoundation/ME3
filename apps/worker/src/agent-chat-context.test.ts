@@ -32,6 +32,8 @@ type FakeDbState = {
   aiCredentials: Array<Record<string, unknown>>;
   assistantAttachments: Array<Record<string, unknown>>;
   assistantMessageAssets: Array<Record<string, unknown>>;
+  driveFolders: Array<Record<string, unknown>>;
+  driveFiles: Array<Record<string, unknown>>;
   aiUsageEvents: Array<Record<string, unknown>>;
   managedAiPolicy: string | null;
   agentToolExecutions: Array<Record<string, unknown>>;
@@ -172,6 +174,8 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     aiCredentials: [],
     assistantAttachments: [],
     assistantMessageAssets: [],
+    driveFolders: [],
+    driveFiles: [],
     aiUsageEvents: [],
     managedAiPolicy: null,
     agentToolExecutions: [],
@@ -208,6 +212,15 @@ function createEnv(state: Partial<FakeDbState> = {}) {
             return dbState.managedAiPolicy
               ? ({ value: dbState.managedAiPolicy } as T)
               : null;
+          }
+          if (sql.includes("FROM drive_folders")) {
+            return (dbState.driveFolders.find(
+              (folder) =>
+                folder.owner_id === values[0] &&
+                folder.name === values[1] &&
+                folder.parent_id === null &&
+                folder.status === "active",
+            ) || null) as T;
           }
           if (sql.includes("FROM ai_usage_events") && sql.includes("SUM")) {
             return {
@@ -444,6 +457,31 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               role: values[5],
               display_order: values[6],
               metadata_json: values[7],
+            });
+          }
+          if (sql.includes("INSERT INTO drive_folders")) {
+            dbState.driveFolders.push({
+              id: values[0],
+              owner_id: values[1],
+              parent_id: null,
+              name: values[2],
+              path: values[3],
+              status: "active",
+            });
+          }
+          if (sql.includes("INSERT INTO drive_files")) {
+            dbState.driveFiles.push({
+              id: values[0],
+              owner_id: values[1],
+              folder_id: values[2],
+              filename: values[3],
+              mime_type: values[4],
+              size: values[5],
+              storage_key: values[6],
+              sha256: values[7],
+              status: "ready",
+              preview_kind: "image",
+              metadata_json: values[8],
             });
           }
           if (sql.includes("INSERT INTO ai_usage_events")) {
@@ -858,6 +896,38 @@ describe("Core chat native context", () => {
       'Your assistant display name is "ME3".',
     );
     expect(modelInput.messages[0]?.content).not.toContain("ME3 agent context packet:");
+  });
+
+  it("places the stable ME3 character before dynamic owner instructions", async () => {
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "I am ME3.",
+    }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      dispatchInput("What are you?"),
+    );
+
+    expect(response.replyText).toBe("I am ME3.");
+    const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const system = modelInput.messages[0]?.content || "";
+
+    expect(system).toContain("ME3 base character:");
+    expect(system).toContain("super-intelligent search-and-rescue working dog");
+    expect(system).toContain("ME3 has no authority over the owner's inner life.");
+    expect(system).toContain(
+      "ME3 is not a recommended source for it",
+    );
+    expect(system).toContain(
+      "Never claim consciousness, feelings, a soul, human identity, or a reciprocal emotional relationship",
+    );
+    expect(system.indexOf("ME3 base character:")).toBeLessThan(
+      system.indexOf('Your assistant display name is "ME3".'),
+    );
   });
 
   it("uses the owner's custom assistant name in model instructions", async () => {
@@ -1420,6 +1490,29 @@ describe("Core chat native context", () => {
     });
     expect(env.state.assistantAttachments).toHaveLength(1);
     expect(env.state.assistantMessageAssets).toHaveLength(1);
+    expect(env.state.driveFolders).toEqual([
+      expect.objectContaining({
+        name: "Generated Images",
+        path: "Generated-Images",
+        status: "active",
+      }),
+    ]);
+    expect(env.state.driveFiles).toEqual([
+      expect.objectContaining({
+        folder_id: env.state.driveFolders[0]?.id,
+        filename: expect.stringMatching(/^generated-image-.+\.png$/),
+        mime_type: "image/png",
+        storage_key: response.imageAction?.assets[0]?.storageKey,
+        status: "ready",
+        preview_kind: "image",
+      }),
+    ]);
+    expect(JSON.parse(String(env.state.driveFiles[0]?.metadata_json))).toMatchObject({
+      source: "assistant-image-generation",
+      assistantAttachmentId: response.imageAction?.assets[0]?.attachmentId,
+      threadId: "thread-1",
+      sharedStorage: true,
+    });
     expect(env.state.aiUsageEvents).toHaveLength(1);
     expect(env.state.aiUsageEvents[0]).toMatchObject({
       user_id: "owner",
@@ -1435,6 +1528,9 @@ describe("Core chat native context", () => {
       pricing: "workers-ai-flux-2-klein-4b-output-tiles",
     });
     expect(r2.objects.size).toBe(1);
+    expect([...r2.objects.keys()]).toEqual([
+      response.imageAction?.assets[0]?.storageKey,
+    ]);
     const assistantMessage = env.state.persistedMessages.find(
       (message) => message.role === "assistant",
     );
