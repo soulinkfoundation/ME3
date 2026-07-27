@@ -1364,18 +1364,7 @@ app.notFound(async (c) => {
     return servePublicSiteRequest(c.env, c.req.raw);
   }
   if (c.env.ASSETS) {
-    const response = await c.env.ASSETS.fetch(c.req.raw);
-    const pathname = new URL(c.req.url).pathname;
-    if (isOwnerAppFingerprintedAssetRequest(c, pathname)) {
-      const headers = new Headers(response.headers);
-      headers.set("Cache-Control", "public, max-age=31536000, immutable");
-      return new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers,
-      });
-    }
-    return response;
+    return c.env.ASSETS.fetch(c.req.raw);
   }
   return c.text("Not found", 404);
 });
@@ -1650,16 +1639,6 @@ function isManagedOwnerAppStaticAssetRequest(
     pathname === "/sw.js" ||
     pathname === "/me3-logo-light.png" ||
     pathname === "/me3-logo-dark.png"
-  );
-}
-
-function isOwnerAppFingerprintedAssetRequest(
-  c: AppContext,
-  pathname: string,
-): boolean {
-  return (
-    pathname.startsWith("/assets/") &&
-    isOwnerSurfaceRequest(c, pathname)
   );
 }
 
