@@ -17,6 +17,9 @@ dist/
 # Owner-private portability staging
 .me3-portable/
 
+# Local web-research evaluation outputs
+.me3-evals/
+
 # Logs
 *.log
 logs/

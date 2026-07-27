@@ -14,6 +14,7 @@
     "destroy:cloudflare": "node scripts/uninstall-cloudflare.mjs",
     "generate:llms": "node scripts/generate-llms.mjs",
     "eval:models": "node scripts/evaluate-models.mjs",
+    "eval:web-research": "node --import tsx scripts/evaluate-web-research.mjs",
     "update:check": "node scripts/check-updates.mjs",
     "update:core": "node scripts/update-core.mjs",
     "update:doctor": "node scripts/update-doctor.mjs",
@@ -53,6 +54,7 @@
     }
   },
   "devDependencies": {
+    "tsx": "^4.20.6",
     "typescript": "^5.3.3",
     "wrangler": "^4.103.0"
   },
