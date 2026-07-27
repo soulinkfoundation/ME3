@@ -1,6 +1,9 @@
 import type { DbAiModelDefault, DbAiProviderCredential, Env } from "./types";
-import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL } from "@me3-core/plugin-agent-chat";
-import { normalizeMe3DeploymentMode } from "@me3-core/plugin-agent-chat";
+import {
+  DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+  DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+  normalizeMe3DeploymentMode,
+} from "@me3-core/plugin-agent-chat";
 import {
   INSTALL_ENCRYPTION_KEY_NAME,
   getOrCreateInstallEncryptionKey,
@@ -121,7 +124,7 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     id: "openai",
     label: "OpenAI",
     description:
-      "Stores an owner-supplied OpenAI key for general chat, extraction, and reasoning routes.",
+      "Uses OpenAI for chat, extraction, reasoning, and image-generation routes.",
     setupLabel: "OpenAI API key",
     supportsApiKey: true,
     secretLabel: "API key",
@@ -131,7 +134,7 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
       chat: "gpt-4o",
       reasoning: "gpt-5.5",
       extraction: "gpt-4o",
-      image_generation: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+      image_generation: DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
     },
   },
   {
@@ -561,6 +564,25 @@ function resolveRoute(
   env: Env,
   fallbackRoute?: AiModelRouteRecord,
 ): AiModelRouteRecord {
+  if (
+    routeId === "image_generation" &&
+    normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) === "managed"
+  ) {
+    const adapter = getProviderAdapter("openai")!;
+    const provider = providers.find((candidate) => candidate.id === adapter.id);
+    const configured = Boolean(provider?.configured);
+    return {
+      id: routeId,
+      label: ROUTE_LABELS[routeId],
+      providerId: adapter.id,
+      providerLabel: adapter.label,
+      model: DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+      configured,
+      setupRequired: !configured,
+      source: "recommended",
+    };
+  }
+
   const envKeys = ROUTE_ENV_KEYS[routeId];
   const envModel = normalizeModel(env[envKeys.model]) || normalizeModel(env.ME3_AI_MODEL);
   const storedProviderId = normalizeProviderId(storedDefault?.provider_id);

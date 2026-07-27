@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Stripe from "stripe";
 import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
 import {
+  DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
   DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
   allowsAgentChatRawModelSelection,
   normalizeMe3DeploymentMode,
@@ -10984,6 +10985,40 @@ describe("ME3 Worker auth", () => {
         }),
       ]),
     );
+  });
+
+  it("reports GPT Image 2 as the managed image route without route variables", async () => {
+    const env = createEnv();
+    env.ME3_DEPLOYMENT_MODE = "managed";
+    env.OPENAI_API_KEY = "sk-managed-openai";
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/ai-settings", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      deploymentMode: string;
+      defaults: {
+        image_generation: {
+          providerId: string;
+          model: string;
+          configured: boolean;
+          source: string;
+        };
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.deploymentMode).toBe("managed");
+    expect(body.defaults.image_generation).toMatchObject({
+      providerId: "openai",
+      model: DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+      configured: true,
+      source: "recommended",
+    });
   });
 
   it("saves encrypted AI provider keys and model defaults", async () => {

@@ -10,7 +10,10 @@ const MANAGED_MODELS = [
   "openai/gpt-5.5",
 ] as const;
 const MANAGED_FALLBACK_MODELS = ["zai-org/glm-4.7-flash"] as const;
-const MANAGED_IMAGE_MODELS = ["black-forest-labs/flux-2-klein-4b"] as const;
+const MANAGED_IMAGE_MODELS = [
+  "black-forest-labs/flux-2-klein-4b",
+  "gpt-image-2",
+] as const;
 
 export type ManagedAiModelOption = {
   id: string;
@@ -131,7 +134,7 @@ export async function syncManagedAiUsage(
        WHERE (
            (kind = 'text' AND lower(replace(model, '@cf/', '')) IN (?, ?, ?, ?))
            OR
-           (kind = 'image' AND lower(replace(model, '@cf/', '')) IN (?))
+           (kind = 'image' AND lower(replace(model, '@cf/', '')) IN (?, ?))
          )
          AND created_at >= datetime('now', '-35 days')
          AND json_extract(metadata_json, '$.managedBillingReportedAt') IS NULL

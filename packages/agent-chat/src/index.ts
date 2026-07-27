@@ -35,7 +35,18 @@ import {
 } from "../../../shared/email-headers";
 import { classifyAssistantImageIntent } from "./image-intent";
 import { ME3_BASE_CHARACTER_PROMPT } from "./base-character";
-import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL, modelSupportsCapability, modelSupportsImageInput, type AssistantImageCapability } from "./model-capabilities";
+import {
+  DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+  DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+  modelSupportsCapability,
+  modelSupportsImageInput,
+  type AssistantImageCapability,
+} from "./model-capabilities";
+import {
+  estimateAssistantImageUsage,
+  runAssistantImageProviderGeneration,
+  type AssistantImageGenerationUsage,
+} from "./image-generation-runtime";
 import {
   modelErrorMessage,
   runModelTurn,
@@ -169,6 +180,7 @@ export {
 } from "./image-intent";
 
 export {
+  DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
   DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
   modelSupportsCapability,
   modelSupportsImageInput,
@@ -409,15 +421,6 @@ type PendingAssistantMessageAssetLink = {
   role: "generated_output" | "input_reference";
   displayOrder: number;
   metadata: Record<string, unknown>;
-};
-
-type WorkersAiImageUsageEstimate = {
-  width: number;
-  height: number;
-  outputTiles: number;
-  costUsd: number;
-  neurons: number;
-  pricing: string;
 };
 
 export type AgentChatModelAttemptTrace = {
@@ -2572,7 +2575,7 @@ async function maybeHandleAssistantImageTurn(
         kind: "blocked",
         reason: "image_generation_route_incompatible",
         replyText:
-          "The configured image route does not support image generation. Use Workers AI FLUX.2 [dev] or another tested image model.",
+          "The configured image route does not support image generation. Use GPT Image 2 or another tested image model.",
         route,
       }),
     };
@@ -2660,7 +2663,6 @@ async function maybeHandleAssistantImageTurn(
       }),
     };
   }
-
 }
 
 function describeAssistantImageGenerationFailure(error: unknown): {
@@ -2669,7 +2671,11 @@ function describeAssistantImageGenerationFailure(error: unknown): {
   debugError: string;
 } {
   const debugError = modelErrorMessage(error) || "Image generation failed";
-  if (/\b3030\b|output has been flagged/i.test(debugError)) {
+  if (
+    /\b3030\b|output has been flagged|moderation_blocked|image_generation_user_error/i.test(
+      debugError,
+    )
+  ) {
     return {
       reason: "image_generation_provider_moderation",
       replyText:
@@ -2796,16 +2802,17 @@ async function runAssistantImageGeneration(
   assets: AgentChatGeneratedImageAsset[];
   messageAssetLinks: PendingAssistantMessageAssetLink[];
 }> {
-  if (input.route.providerId !== "workers-ai") {
-    throw new Error(`${input.route.providerId} image generation is not supported yet.`);
-  }
-  if (!input.route.ai) throw new Error("Workers AI binding is not configured.");
   if (!env.SITE_ASSETS) throw new Error("SITE_ASSETS R2 binding is not configured.");
 
-  const { bytes, mimeType, revisedPrompt } = await runWorkersAiImageGeneration(
-    input.route,
-    input.prompt,
-  );
+  const { bytes, mimeType, revisedPrompt, usage } =
+    await runAssistantImageProviderGeneration(
+      input.route,
+      input.prompt,
+      {
+        width: DEFAULT_IMAGE_GENERATION_WIDTH,
+        height: DEFAULT_IMAGE_GENERATION_HEIGHT,
+      },
+    );
   const attachmentId = crypto.randomUUID();
   const extension = extensionForMimeType(mimeType);
   const filename = `generated-image-${attachmentId}.${extension}`;
@@ -2863,6 +2870,7 @@ async function runAssistantImageGeneration(
     model: input.route.model,
     width: DEFAULT_IMAGE_GENERATION_WIDTH,
     height: DEFAULT_IMAGE_GENERATION_HEIGHT,
+    usage,
     turnId: input.turnId,
     attachmentId,
   }).catch(() => undefined);
@@ -2995,32 +3003,6 @@ async function assistantFilesSha256(bytes: Uint8Array): Promise<string> {
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function runWorkersAiImageGeneration(
-  route: AiRoute,
-  prompt: string,
-): Promise<{ bytes: Uint8Array; mimeType: string; revisedPrompt: string | null }> {
-  const form = new FormData();
-  form.append("prompt", prompt);
-  form.append("width", String(DEFAULT_IMAGE_GENERATION_WIDTH));
-  form.append("height", String(DEFAULT_IMAGE_GENERATION_HEIGHT));
-  const formResponse = new Response(form);
-  const body = formResponse.body;
-  const contentType = formResponse.headers.get("content-type");
-  if (!body || !contentType) {
-    throw new Error("Could not prepare Workers AI image request.");
-  }
-  const result = await route.ai!.run(
-    route.model,
-    {
-      multipart: {
-        body,
-        contentType,
-      },
-    },
-  );
-  return normalizeWorkersAiImageResult(result);
-}
-
 async function recordAssistantImageUsage(
   env: CoreAgentChatEnv,
   input: {
@@ -3029,13 +3011,15 @@ async function recordAssistantImageUsage(
     model: string;
     width: number;
     height: number;
+    usage: AssistantImageGenerationUsage | null;
     turnId: string;
     attachmentId: string;
   },
 ): Promise<void> {
-  const estimate = estimateWorkersAiImageUsage(input.model, {
+  const estimate = estimateAssistantImageUsage(input.providerId, input.model, {
     width: input.width,
     height: input.height,
+    usage: input.usage,
   });
   await env.DB.prepare(
     `INSERT INTO ai_usage_events (
@@ -3043,154 +3027,28 @@ async function recordAssistantImageUsage(
        successful_request_count, failed_request_count, tokens_in, tokens_out,
        estimated_cost_usd, metadata_json, created_at
      )
-     VALUES (?, ?, 'local', 'image', ?, ?, 1, 1, 0, 0, 0, ?, ?, ?)`,
+     VALUES (?, ?, 'local', 'image', ?, ?, 1, 1, 0, ?, ?, ?, ?, ?)`,
   )
     .bind(
       crypto.randomUUID(),
       input.ownerId,
       input.providerId,
       input.model,
+      estimate.inputTokens,
+      estimate.outputTokens,
       estimate.costUsd,
       JSON.stringify({
         estimated: true,
         pricing: estimate.pricing,
         width: estimate.width,
         height: estimate.height,
-        outputTiles: estimate.outputTiles,
-        neurons: estimate.neurons,
+        ...estimate.metadata,
         turnId: input.turnId,
         attachmentId: input.attachmentId,
       }),
       new Date().toISOString(),
     )
     .run();
-}
-
-function estimateWorkersAiImageUsage(
-  model: string,
-  input: { width: number; height: number },
-): WorkersAiImageUsageEstimate {
-  const width = Math.max(1, Math.trunc(input.width));
-  const height = Math.max(1, Math.trunc(input.height));
-  const outputTiles = Math.max(1, Math.ceil(width / 512) * Math.ceil(height / 512));
-  const normalizedModel = model.trim().toLowerCase();
-
-  if (normalizedModel === "@cf/black-forest-labs/flux-2-klein-4b") {
-    return {
-      width,
-      height,
-      outputTiles,
-      costUsd: outputTiles * 0.000287,
-      neurons: outputTiles * 26.05,
-      pricing: "workers-ai-flux-2-klein-4b-output-tiles",
-    };
-  }
-
-  if (normalizedModel === "@cf/black-forest-labs/flux-2-dev") {
-    const assumedSteps = 25;
-    return {
-      width,
-      height,
-      outputTiles,
-      costUsd: outputTiles * assumedSteps * 0.00041,
-      neurons: outputTiles * assumedSteps * 37.5,
-      pricing: "workers-ai-flux-2-dev-output-tiles-assumed-25-steps",
-    };
-  }
-
-  return {
-    width,
-    height,
-    outputTiles,
-    costUsd: 0,
-    neurons: 0,
-    pricing: "unknown-workers-ai-image-model",
-  };
-}
-
-async function normalizeWorkersAiImageResult(
-  result: unknown,
-): Promise<{ bytes: Uint8Array; mimeType: string; revisedPrompt: string | null }> {
-  if (result instanceof Response) {
-    const bytes = new Uint8Array(await result.arrayBuffer());
-    return {
-      bytes,
-      mimeType: inferImageMimeType(bytes, result.headers.get("content-type")),
-      revisedPrompt: null,
-    };
-  }
-
-  if (result instanceof ArrayBuffer) {
-    const bytes = new Uint8Array(result);
-    return { bytes, mimeType: inferImageMimeType(bytes, null), revisedPrompt: null };
-  }
-
-  if (ArrayBuffer.isView(result)) {
-    const bytes = new Uint8Array(
-      result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength),
-    );
-    return { bytes, mimeType: inferImageMimeType(bytes, null), revisedPrompt: null };
-  }
-
-  if (result && typeof result === "object") {
-    const record = result as Record<string, unknown>;
-    const imageBase64 =
-      normalizeNullableText(record.image) ||
-      normalizeNullableText(record.data) ||
-      normalizeNullableText(record.result);
-    if (imageBase64) {
-      const bytes = decodeBase64Image(imageBase64);
-      return {
-        bytes,
-        mimeType: inferImageMimeType(bytes, normalizeNullableText(record.mimeType)),
-        revisedPrompt:
-          normalizeNullableText(record.revised_prompt) ||
-          normalizeNullableText(record.revisedPrompt),
-      };
-    }
-  }
-
-  throw new Error("Workers AI image response did not include image bytes.");
-}
-
-function decodeBase64Image(value: string): Uint8Array {
-  const normalized = value.includes(",") ? value.split(",").pop() || "" : value;
-  const binary = atob(normalized.replace(/\s/g, ""));
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  if (bytes.byteLength === 0) {
-    throw new Error("Workers AI returned an empty image.");
-  }
-  return bytes;
-}
-
-function inferImageMimeType(bytes: Uint8Array, fallback: string | null): string {
-  const normalizedFallback = fallback?.split(";")[0]?.trim().toLowerCase() || "";
-  if (normalizedFallback.startsWith("image/")) return normalizedFallback;
-  if (
-    bytes[0] === 0x89 &&
-    bytes[1] === 0x50 &&
-    bytes[2] === 0x4e &&
-    bytes[3] === 0x47
-  ) {
-    return "image/png";
-  }
-  if (bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
-  if (
-    bytes[0] === 0x52 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x46 &&
-    bytes[8] === 0x57 &&
-    bytes[9] === 0x45 &&
-    bytes[10] === 0x42 &&
-    bytes[11] === 0x50
-  ) {
-    return "image/webp";
-  }
-  return "image/png";
 }
 
 function extensionForMimeType(mimeType: string): "png" | "jpg" | "webp" {
@@ -5054,7 +4912,10 @@ export const MANAGED_AI_MODELS = [
 ] as const;
 const MANAGED_AI_MODEL_SET = new Set<string>(MANAGED_AI_MODELS);
 const MANAGED_AI_FALLBACK_MODELS = ["zai-org/glm-4.7-flash"] as const;
-const MANAGED_AI_IMAGE_MODELS = ["black-forest-labs/flux-2-klein-4b"] as const;
+const MANAGED_AI_IMAGE_MODELS = [
+  "black-forest-labs/flux-2-klein-4b",
+  DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+] as const;
 const MANAGED_AI_BILLABLE_TEXT_MODEL_SET = new Set<string>([
   ...MANAGED_AI_MODELS,
   ...MANAGED_AI_FALLBACK_MODELS,
@@ -5132,7 +4993,7 @@ async function isManagedEverydayBudgetExceeded(
          AND (
            (kind = 'text' AND lower(replace(model, '@cf/', '')) IN (?, ?, ?, ?))
            OR
-           (kind = 'image' AND lower(replace(model, '@cf/', '')) IN (?))
+           (kind = 'image' AND lower(replace(model, '@cf/', '')) IN (?, ?))
          )
          AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')`,
     )
@@ -5273,6 +5134,16 @@ async function resolveImageGenerationRoute(
   selectedModel: AgentChatModelSelection | null | undefined,
   capability: AssistantImageCapability,
 ): Promise<AiRoute | null> {
+  if (normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) === "managed") {
+    return buildAiRoute(
+      env,
+      ownerId,
+      "openai",
+      DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+      null,
+    );
+  }
+
   const selectedProvider = normalizeProviderId(selectedModel?.providerId);
   const selectedModelName = normalizeModel(selectedModel?.model);
   if (

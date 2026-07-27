@@ -68,8 +68,6 @@ const routes = {
   ME3_AI_CHAT_BACKUP_MODEL: "@cf/zai-org/glm-4.7-flash",
   ME3_AI_REASONING_PROVIDER: "workers-ai",
   ME3_AI_REASONING_MODEL: "@cf/zai-org/glm-5.2",
-  ME3_AI_IMAGE_GENERATION_PROVIDER: "workers-ai",
-  ME3_AI_IMAGE_GENERATION_MODEL: "@cf/black-forest-labs/flux-2-klein-4b",
   ...(managedPublicOrigin
     ? {
         CORE_WEB_ORIGIN: managedPublicOrigin,
@@ -90,6 +88,12 @@ assertNoPublicRouteDeclarations(config);
 
 config = config.replace(/^name\s*=\s*"[^"]+"/m, `name = "${workerName}"`);
 config = config.replace(/^ME3_DEPLOYMENT_MODE\s*=.*$/m, 'ME3_DEPLOYMENT_MODE = "managed"');
+for (const key of [
+  "ME3_AI_IMAGE_GENERATION_PROVIDER",
+  "ME3_AI_IMAGE_GENERATION_MODEL",
+]) {
+  config = config.replace(new RegExp(`^${key}\\s*=.*(?:\\r?\\n|$)`, "gm"), "");
+}
 config = config.replace(
   /^(\s*(?:queue|dead_letter_queue)\s*=\s*)"([^"]+)"\s*$/gm,
   (_line, assignment, queueName) => `${assignment}"${managedQueueName(workerName, queueName)}"`,

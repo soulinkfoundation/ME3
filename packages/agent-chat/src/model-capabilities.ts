@@ -27,6 +27,7 @@ type AiModelCapabilityRecord = {
 
 export const DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL =
   "@cf/black-forest-labs/flux-2-klein-4b";
+export const DEFAULT_OPENAI_IMAGE_GENERATION_MODEL = "gpt-image-2";
 
 const AI_MODEL_CAPABILITY_RECORDS: readonly AiModelCapabilityRecord[] = [
   {
@@ -48,6 +49,16 @@ const AI_MODEL_CAPABILITY_RECORDS: readonly AiModelCapabilityRecord[] = [
     providerId: "openai",
     model: "gpt-5.5",
     capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "openai",
+    model: DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+    capabilities: ["image_generation"],
+    image: {
+      generation: true,
+      sizes: ["1024x1024"],
+      formats: ["png"],
+    },
   },
   {
     providerId: "workers-ai",

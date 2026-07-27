@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
   DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
   classifyAssistantImageIntent,
   dispatchAgentSandboxTurn,
@@ -490,9 +491,11 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               user_id: values[1],
               provider: values[2],
               model: values[3],
-              estimated_cost_usd: values[4],
-              metadata_json: values[5],
-              created_at: values[6],
+              tokens_in: values[4],
+              tokens_out: values[5],
+              estimated_cost_usd: values[6],
+              metadata_json: values[7],
+              created_at: values[8],
             });
           }
           if (sql.includes("INTO user_reminders")) {
@@ -1380,6 +1383,13 @@ describe("Core chat native context", () => {
   it("classifies image generation without treating prompt drafting or image analysis as generation", () => {
     expect(
       modelSupportsCapability(
+        "openai",
+        DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+        "image_generation",
+      ),
+    ).toBe(true);
+    expect(
+      modelSupportsCapability(
         "workers-ai",
         DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
         "image_generation",
@@ -1540,6 +1550,126 @@ describe("Core chat native context", () => {
         assets: [expect.objectContaining({ mimeType: "image/png" })],
       },
     });
+  });
+
+  it("uses GPT Image 2 for managed image generation and preserves the mobile attachment contract", async () => {
+    const tinyPngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzvKswAAAABJRU5ErkJggg==";
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({
+          data: [{ b64_json: tinyPngBase64 }],
+          usage: {
+            input_tokens: 7,
+            output_tokens: 1_800,
+            total_tokens: 1_807,
+          },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const aiRun = vi.fn();
+    const env = createEnv({
+      aiDefaults: [
+        {
+          user_id: "owner",
+          use_case: "image_generation",
+          provider_id: "workers-ai",
+          model: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+        },
+      ],
+    });
+    const r2 = createR2Bucket();
+
+    try {
+      const response = await dispatchAgentSandboxTurn(
+        {
+          ...env,
+          AI: { run: aiRun },
+          SITE_ASSETS: r2.bucket,
+          OPENAI_API_KEY: "sk-managed-openai",
+          ME3_DEPLOYMENT_MODE: "managed",
+          ME3_AI_IMAGE_GENERATION_PROVIDER: "workers-ai",
+          ME3_AI_IMAGE_GENERATION_MODEL:
+            DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+        } as never,
+        createStorage(),
+        {
+          ...dispatchInput("Generate an image of a quiet writing desk."),
+          threadId: "thread-1",
+          selectedModel: {
+            providerId: "workers-ai",
+            model: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+          },
+        },
+      );
+      const [request, init] = fetchMock.mock.calls[0] as [
+        RequestInfo | URL,
+        RequestInit,
+      ];
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+
+      expect(aiRun).not.toHaveBeenCalled();
+      expect(String(request)).toBe(
+        "https://api.openai.com/v1/images/generations",
+      );
+      expect(init.headers).toMatchObject({
+        Authorization: "Bearer sk-managed-openai",
+        "Content-Type": "application/json",
+      });
+      expect(body).toMatchObject({
+        model: DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+        size: "1024x1024",
+        quality: "medium",
+        n: 1,
+      });
+      expect(response).toMatchObject({
+        model: DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+        source: "openai",
+        imageAction: {
+          kind: "generated",
+          status: "complete",
+          providerId: "openai",
+          model: DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+          assets: [
+            {
+              mimeType: "image/png",
+              url: expect.stringContaining("/api/assistant/attachments/"),
+            },
+          ],
+        },
+      });
+      expect(response.imageAction?.assets[0]).toEqual(
+        expect.objectContaining({
+          id: expect.any(String),
+          attachmentId: expect.any(String),
+          name: expect.stringMatching(/^generated-image-.+\.png$/),
+          size: expect.any(Number),
+          storageKey: expect.any(String),
+        }),
+      );
+      expect(env.state.aiUsageEvents).toEqual([
+        expect.objectContaining({
+          user_id: "owner",
+          provider: "openai",
+          model: DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
+          tokens_in: 7,
+          tokens_out: 1_800,
+        }),
+      ]);
+      expect(
+        Number(env.state.aiUsageEvents[0]?.estimated_cost_usd),
+      ).toBeCloseTo(0.054035);
+      expect(
+        JSON.parse(String(env.state.aiUsageEvents[0]?.metadata_json)),
+      ).toMatchObject({
+        quality: "medium",
+        usageReported: true,
+        totalTokens: 1_807,
+        pricing: "openai-gpt-image-2-token-rates-2026-07",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("explains provider moderation failures without blaming asset storage", async () => {

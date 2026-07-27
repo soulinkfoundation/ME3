@@ -191,6 +191,20 @@ jobs:
           pnpm exec wrangler secret put SETUP_PASSWORD --config wrangler.toml < "$password_file"
           rm -f "$password_file"
 
+      - name: Install the hosted image provider secret
+        working-directory: source
+        env:
+          ME3_MANAGED_OPENAI_API_KEY: ${{ secrets.ME3_MANAGED_OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          set +x
+          test -n "$ME3_MANAGED_OPENAI_API_KEY"
+          key_file="$RUNNER_TEMP/me3-openai-api-key"
+          printf '%s' "$ME3_MANAGED_OPENAI_API_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          pnpm exec wrangler secret put OPENAI_API_KEY --config wrangler.toml < "$key_file"
+          rm -f "$key_file"
+
       - name: Publish the managed Worker
         run: |
           set -euo pipefail

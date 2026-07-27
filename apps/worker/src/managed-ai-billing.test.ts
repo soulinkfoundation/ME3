@@ -88,13 +88,24 @@ describe("managed Everyday AI billing", () => {
         created_at: new Date().toISOString(),
       },
       {
-        id: "image-usage",
+        id: "legacy-image-usage",
         provider: "workers-ai",
         model: "@cf/black-forest-labs/flux-2-klein-4b",
         kind: "image",
         tokens_in: 0,
         tokens_out: 0,
         estimated_cost_usd: 0.001148,
+        metadata_json: "{}",
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: "gpt-image-usage",
+        provider: "openai",
+        model: "gpt-image-2",
+        kind: "image",
+        tokens_in: 7,
+        tokens_out: 1_800,
+        estimated_cost_usd: 0.054035,
         metadata_json: "{}",
         created_at: new Date().toISOString(),
       },
@@ -161,9 +172,16 @@ describe("managed Everyday AI billing", () => {
         model: "zai-org/glm-4.7-flash",
       }),
       expect.objectContaining({
-        id: "image-usage",
+        id: "legacy-image-usage",
         kind: "image",
         model: "black-forest-labs/flux-2-klein-4b",
+      }),
+      expect.objectContaining({
+        id: "gpt-image-usage",
+        kind: "image",
+        model: "gpt-image-2",
+        inputTokens: 7,
+        outputTokens: 1_800,
       }),
     ]);
   });

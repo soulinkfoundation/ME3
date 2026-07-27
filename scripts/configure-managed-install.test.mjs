@@ -17,6 +17,8 @@ test("configures a private managed Worker without raw model selection", () => {
       "",
       "[vars]",
       'ME3_DEPLOYMENT_MODE = "self_hosted"',
+      'ME3_AI_IMAGE_GENERATION_PROVIDER = "workers-ai"',
+      'ME3_AI_IMAGE_GENERATION_MODEL = "@cf/black-forest-labs/flux-2-klein-4b"',
       "",
     ].join("\n"),
   );
@@ -42,11 +44,8 @@ test("configures a private managed Worker without raw model selection", () => {
     assert.match(output, /^CORE_API_ORIGIN = "https:\/\/owner\.me3\.app"$/m);
     assert.match(output, /^ME3_AI_CHAT_PROVIDER = "workers-ai"$/m);
     assert.match(output, /^ME3_AI_CHAT_MODEL = "moonshotai\/kimi-k3"$/m);
-    assert.match(output, /^ME3_AI_IMAGE_GENERATION_PROVIDER = "workers-ai"$/m);
-    assert.match(
-      output,
-      /^ME3_AI_IMAGE_GENERATION_MODEL = "@cf\/black-forest-labs\/flux-2-klein-4b"$/m,
-    );
+    assert.doesNotMatch(output, /ME3_AI_IMAGE_GENERATION_PROVIDER/);
+    assert.doesNotMatch(output, /ME3_AI_IMAGE_GENERATION_MODEL/);
     assert.doesNotMatch(output, /ME3_AI_RAW_MODEL_SELECTION_ENABLED/);
   } finally {
     rmSync(directory, { recursive: true, force: true });

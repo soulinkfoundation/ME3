@@ -66,13 +66,30 @@ test("reuses frozen resources and contains no first-install or destructive opera
     /provision-managed-queues\.mjs/,
     /attach-managed-custom-domain\.mjs/,
     /recover-managed-provision-manifest\.mjs/,
-    /wrangler secret put/,
     /wrangler d1 create/,
     /wrangler r2 bucket create/,
     /wrangler delete/,
   ]) {
     assert.doesNotMatch(workflow, unsafe);
   }
+});
+
+test("installs only the hosted OpenAI secret before deploying the target", () => {
+  const installSecret = getStep("Install the hosted image provider secret");
+  const deploy = getStep("Deploy the target to the existing Worker");
+  const secretWrites = workflow.match(/wrangler secret put/g) || [];
+
+  assert.equal(secretWrites.length, 1);
+  assert.match(
+    installSecret,
+    /ME3_MANAGED_OPENAI_API_KEY: \$\{\{ secrets\.ME3_MANAGED_OPENAI_API_KEY \}\}/,
+  );
+  assert.match(
+    installSecret,
+    /wrangler secret put OPENAI_API_KEY --config wrangler\.toml/,
+  );
+  assert.doesNotMatch(installSecret, /ME3_AI_IMAGE_GENERATION_/);
+  assert.ok(workflow.indexOf(installSecret) < workflow.indexOf(deploy));
 });
 
 test("refuses stale state before migration and re-attests resources and live target after deploy", () => {
@@ -138,6 +155,7 @@ test("does not expose deploy or callback credentials to install and build", () =
   for (const step of [install, build]) {
     assert.doesNotMatch(step, /CLOUDFLARE_API_TOKEN/);
     assert.doesNotMatch(step, /ME3_MANAGED_UPGRADE_CALLBACK_SECRET/);
+    assert.doesNotMatch(step, /ME3_MANAGED_OPENAI_API_KEY/);
   }
 });
 
