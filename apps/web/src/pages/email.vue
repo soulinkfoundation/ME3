@@ -3221,7 +3221,7 @@ onBeforeUnmount(() => {
     class="agent-page"
     :class="{ 'agent-page--with-mobile-controls': isEmailTab(activeTab) }"
   >
-    <Teleport to="#app-side-nav-mobile-page-controls">
+    <Teleport to="#app-side-nav-mobile-page-controls" defer>
       <form
         v-if="isEmailTab(activeTab)"
         class="mail-search mail-search--mobile-nav"

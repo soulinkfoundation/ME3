@@ -792,7 +792,11 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
 
 <template>
   <main class="files-page">
-    <Teleport v-if="r2Available" to="#app-side-nav-mobile-page-controls">
+    <Teleport
+      v-if="r2Available"
+      to="#app-side-nav-mobile-page-controls"
+      defer
+    >
       <div class="files-mobile-controls">
         <form class="files-search" role="search" @submit.prevent="loadItems">
           <UiIcon name="Search" :size="16" aria-hidden="true" />

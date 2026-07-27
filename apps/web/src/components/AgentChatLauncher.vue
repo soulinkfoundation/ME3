@@ -12,6 +12,7 @@ import {
   type AgentChatActionCard,
 } from "../utils/agentChat";
 import { renderAssistantMarkdown } from "../utils/assistantMarkdown";
+import { ASSISTANT_AVATAR_SRC } from "../utils/assistantBranding";
 import UiIcon from "./UiIcon.vue";
 
 type AgentSandboxResponse = {
@@ -261,7 +262,12 @@ onMounted(async () => {
         :aria-expanded="false"
         @click="toggleChat"
       >
-        <span class="agent-launcher-icon" aria-hidden="true">🤖</span>
+        <img
+          class="agent-launcher-icon"
+          :src="ASSISTANT_AVATAR_SRC"
+          alt=""
+          aria-hidden="true"
+        />
       </button>
 
       <div
@@ -392,8 +398,8 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 70px;
-  height: 70px;
+  width: 88px;
+  height: 88px;
   padding: 0;
   border: none;
   border-radius: 999px;
@@ -407,10 +413,10 @@ onMounted(async () => {
 
 .agent-launcher-icon {
   display: block;
-  font-size: 40px;
+  width: 78px;
+  height: 78px;
+  object-fit: contain;
   line-height: 1;
-  font-family:
-    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   animation: agent-launcher-float 2.4s ease-in-out infinite;
 }
 

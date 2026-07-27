@@ -50,7 +50,7 @@ function switchContactMailboxTab(tabId: string) {
 
 <template>
   <main class="agent-page contacts-page">
-    <Teleport to="#app-side-nav-mobile-page-controls">
+    <Teleport to="#app-side-nav-mobile-page-controls" defer>
       <form class="contacts-mobile-nav" role="search" @submit.prevent>
         <label class="contacts-mobile-nav__label" for="contacts-search-input-top">
           Search contacts

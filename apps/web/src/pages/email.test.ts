@@ -1,5 +1,6 @@
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { defineComponent, h } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EmailPage from "./email.vue";
 import { api } from "../api";
@@ -211,6 +212,29 @@ describe("EmailPage", () => {
     vi.mocked(api.post).mockResolvedValue({ ok: true });
     vi.mocked(api.put).mockResolvedValue({ ok: true });
     vi.mocked(api.delete).mockResolvedValue({ ok: true });
+  });
+
+  it("defers app-shell mobile controls until their target is mounted", async () => {
+    document.body.innerHTML = "";
+    const ShellHarness = defineComponent({
+      setup() {
+        return () =>
+          h("div", [
+            h("div", { id: "app-side-nav-mobile-page-controls" }),
+            h(EmailPage),
+          ]);
+      },
+    });
+
+    const wrapper = mount(ShellHarness, { attachTo: document.body });
+    await flushPromises();
+
+    expect(
+      document.querySelector(
+        "#app-side-nav-mobile-page-controls #mail-search-input-mobile-nav",
+      ),
+    ).not.toBeNull();
+    expect(wrapper.text()).toContain("ME3");
   });
 
   it("reveals the empty list after bulk trash removes the open message", async () => {

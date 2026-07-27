@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import UiIcon from "./UiIcon.vue";
+import { ASSISTANT_AVATAR_SRC } from "../utils/assistantBranding";
 import {
   APP_FEATURE_ICONS,
   appFeatureForPath,
@@ -168,9 +169,12 @@ watch(navDrawerOpen, (isOpen) => {
           title="Assistant"
           @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS.assistant
-          }}</span>
+          <img
+            class="app-side-nav__assistant-icon"
+            :src="ASSISTANT_AVATAR_SRC"
+            alt=""
+            aria-hidden="true"
+          />
           <span class="sr-only">Assistant</span>
         </RouterLink>
 
@@ -445,5 +449,15 @@ watch(navDrawerOpen, (isOpen) => {
   font-family:
     "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   transition: color 0.15s ease;
+}
+
+.app-side-nav__assistant-icon {
+  display: block;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin-right: -6px;
+  transform: translateX(-3px);
+  object-fit: contain;
 }
 </style>

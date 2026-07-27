@@ -2946,7 +2946,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ops-page calendar-spike">
-    <Teleport to="#app-side-nav-mobile-page-controls">
+    <Teleport to="#app-side-nav-mobile-page-controls" defer>
       <div
         v-if="isCompactCalendar && !initialCalendarLoading && !showCalendarUnavailable"
         class="cal-mobile-nav-controls"

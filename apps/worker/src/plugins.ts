@@ -1106,6 +1106,7 @@ const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
+  showInPluginList: false,
   defaultEnabled: false,
   releaseStage: "available",
   activationAllowed: true,

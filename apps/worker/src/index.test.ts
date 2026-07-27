@@ -9721,6 +9721,7 @@ describe("ME3 Worker auth", () => {
         }),
         expect.objectContaining({
           id: "me3.landing-pages",
+          showInPluginList: false,
           status: "available",
           implementationStatus: "bundled",
           releaseStage: "available",
@@ -9746,6 +9747,7 @@ describe("ME3 Worker auth", () => {
       "me3.journal",
       "me3.calendar",
       "me3.local-executor",
+      "me3.landing-pages",
     ]);
     const socialPlugin = body.plugins.find(
       (plugin) => plugin.id === "me3.social-publishing",

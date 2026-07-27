@@ -9,7 +9,7 @@ import {
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { definePage } from "unplugin-vue-router/runtime";
-import { ApiError, api, type ApiStreamEvent } from "../../api";
+import { api, type ApiStreamEvent } from "../../api";
 import Button from "../../components/Button.vue";
 import LandingGrids from "../../components/LandingGrids.vue";
 import PageLoading from "../../components/PageLoading.vue";
@@ -45,6 +45,7 @@ import {
   type AiAgentModelProviderId,
 } from "../../utils/aiModelCatalog";
 import type { UiIconName } from "../../utils/icons";
+import { ASSISTANT_AVATAR_SRC } from "../../utils/assistantBranding";
 
 definePage({
   meta: {
@@ -568,25 +569,6 @@ type AssistantSettingsResponse = {
   displayName: string;
 };
 type AssistantSettingsSection = "context" | "activity";
-type AssistantSkill = {
-  id: string;
-  name: string;
-  description: string | null;
-  sourceKind: "url" | "repo" | "upload" | "core" | "plugin";
-  sourceRef: string | null;
-  status: "active" | "disabled" | "invalid";
-  trustLevel: "core" | "plugin" | "user";
-  triggerHints: string[];
-  hasSkillMarkdown: boolean;
-  validationErrors: string[];
-  scriptsAvailable: boolean;
-  updatedAt: string;
-};
-type AssistantSkillsResponse = { skills: AssistantSkill[] };
-type AssistantSkillCreateResponse = {
-  skill: AssistantSkill;
-  skills?: AssistantSkill[];
-};
 type AssistantActivityViewItem = {
   id: string;
   kind: string;
@@ -695,8 +677,6 @@ const archivedAssistantThreadsError = ref("");
 const assistantProjects = ref<MissionProject[]>([]);
 const assistantProjectsLoading = ref(false);
 const assistantProjectsError = ref("");
-const assistantThreadSearchDraft = ref("");
-const assistantThreadSearch = ref("");
 const assistantThreadActionId = ref<string | null>(null);
 const assistantHistoryCollapsed = ref(false);
 const assistantHistoryDrawerOpen = ref(false);
@@ -712,12 +692,6 @@ const assistantSettings = ref<AssistantSettingsResponse>({
 const assistantNameDraft = ref("");
 const assistantNameSaving = ref(false);
 const assistantNameNotice = ref("");
-const assistantSkillsModalOpen = ref(false);
-const assistantSkillUrlDraft = ref("");
-const assistantSkills = ref<AssistantSkill[]>([]);
-const assistantSkillsLoading = ref(false);
-const assistantSkillsError = ref("");
-const assistantSkillActionId = ref("");
 const assistantMemory = ref<MissionMemory[]>([]);
 const assistantSources = ref<MissionContextSource[]>([]);
 const assistantContextLoading = ref(false);
@@ -759,7 +733,6 @@ const {
   onTranscript: insertVoiceTranscript,
 });
 let assistantAbortController: AbortController | null = null;
-let assistantThreadSearchDebounceId: number | null = null;
 
 const defaultDailyBriefingTemplate =
   "{{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
@@ -1139,9 +1112,6 @@ const assistantProjectThreadGroups = computed(() =>
 const assistantUngroupedThreads = computed(() =>
   assistantThreads.value.filter((thread) => !thread.projectId),
 );
-const assistantThreadSearchActive = computed(
-  () => assistantThreadSearch.value.trim().length > 0,
-);
 const assistantThreadListEmpty = computed(
   () =>
     !assistantThreadsLoading.value &&
@@ -1250,16 +1220,6 @@ const assistantSettingsTabs = computed<
   },
 ]);
 
-const installedAssistantSkills = computed(() =>
-  assistantSkills.value.filter((skill) => skill.status !== "disabled"),
-);
-
-const canInstallAssistantSkill = computed(
-  () =>
-    assistantSkillUrlDraft.value.trim().length > 0 &&
-    !assistantSkillActionId.value,
-);
-
 const canSendAssistantMessage = computed(
   () =>
     (assistantDraft.value.trim().length > 0 ||
@@ -1284,7 +1244,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearAssistantAttachments();
-  cancelAssistantThreadSearchDebounce();
   window.removeEventListener("keydown", handleWindowKeydown);
 });
 
@@ -1307,14 +1266,6 @@ watch(
     void syncAssistantSettingsFromRoute();
   },
 );
-watch(assistantThreadSearchDraft, () => {
-  cancelAssistantThreadSearchDebounce();
-  assistantThreadSearchDebounceId = window.setTimeout(() => {
-    assistantThreadSearchDebounceId = null;
-    void applyAssistantThreadSearch();
-  }, 220);
-});
-
 async function loadPage() {
   pageError.value = "";
   await Promise.all([
@@ -1341,8 +1292,6 @@ async function loadAssistantThreads() {
       status: "active",
       limit: "80",
     });
-    const search = assistantThreadSearch.value.trim();
-    if (search) params.set("q", search);
     const response = await api.get<AssistantThreadsResponse>(
       `/assistant/threads?${params.toString()}`,
     );
@@ -1441,28 +1390,6 @@ function toggleAssistantProject(projectId: string) {
   if (next.has(projectId)) next.delete(projectId);
   else next.add(projectId);
   collapsedAssistantProjectIds.value = next;
-}
-
-async function applyAssistantThreadSearch() {
-  cancelAssistantThreadSearchDebounce();
-  const nextSearch = assistantThreadSearchDraft.value.trim();
-  if (assistantThreadSearch.value === nextSearch) return;
-  assistantThreadSearch.value = nextSearch;
-  await loadAssistantThreads();
-}
-
-async function clearAssistantThreadSearch() {
-  cancelAssistantThreadSearchDebounce();
-  assistantThreadSearchDraft.value = "";
-  if (!assistantThreadSearch.value) return;
-  assistantThreadSearch.value = "";
-  await loadAssistantThreads();
-}
-
-function cancelAssistantThreadSearchDebounce() {
-  if (assistantThreadSearchDebounceId === null) return;
-  window.clearTimeout(assistantThreadSearchDebounceId);
-  assistantThreadSearchDebounceId = null;
 }
 
 async function archiveAssistantThread(thread: AssistantThread) {
@@ -1583,7 +1510,6 @@ async function openAssistantSettings(
 ) {
   assistantSettingsSection.value = section;
   assistantSettingsModalOpen.value = true;
-  assistantSkillsModalOpen.value = false;
   assistantHistoryDrawerOpen.value = false;
   assistantSettingsError.value = "";
   if (
@@ -1610,86 +1536,6 @@ function closeAssistantSettingsModal() {
     ...query
   } = route.query;
   void router.replace({ query });
-}
-
-function openAssistantSkillsModal() {
-  assistantSkillsModalOpen.value = true;
-  assistantSettingsModalOpen.value = false;
-  assistantHistoryDrawerOpen.value = false;
-  assistantSkillsError.value = "";
-  void loadAssistantSkills();
-}
-
-function closeAssistantSkillsModal() {
-  assistantSkillsModalOpen.value = false;
-  assistantSkillUrlDraft.value = "";
-  assistantSkillsError.value = "";
-}
-
-async function loadAssistantSkills() {
-  assistantSkillsLoading.value = true;
-  assistantSkillsError.value = "";
-  try {
-    const response =
-      await api.get<AssistantSkillsResponse>("/assistant/skills");
-    assistantSkills.value = response.skills || [];
-  } catch (err) {
-    assistantSkillsError.value =
-      err instanceof ApiError ? err.message : "Skills could not load.";
-  } finally {
-    assistantSkillsLoading.value = false;
-  }
-}
-
-async function addAssistantSkill() {
-  const sourceRef = assistantSkillUrlDraft.value.trim();
-  if (!sourceRef || assistantSkillActionId.value) return;
-  assistantSkillActionId.value = "create";
-  assistantSkillsError.value = "";
-  try {
-    const response = await api.post<AssistantSkillCreateResponse>(
-      "/assistant/skills",
-      {
-        sourceRef,
-      },
-    );
-    const createdSkills = response.skills?.length
-      ? response.skills
-      : [response.skill];
-    const createdIds = new Set(createdSkills.map((skill) => skill.id));
-    assistantSkills.value = createdSkills.concat(
-      assistantSkills.value.filter((skill) => !createdIds.has(skill.id)),
-    );
-    assistantSkillUrlDraft.value = "";
-    toastSuccess(
-      createdSkills.length === 1 ? "Skill installed" : "Skills installed",
-    );
-  } catch (err) {
-    assistantSkillsError.value =
-      err instanceof ApiError ? err.message : "Skill could not be installed.";
-  } finally {
-    assistantSkillActionId.value = "";
-  }
-}
-
-async function removeAssistantSkill(skill: AssistantSkill) {
-  if (assistantSkillActionId.value) return;
-  assistantSkillActionId.value = skill.id;
-  assistantSkillsError.value = "";
-  try {
-    await api.delete<{ ok: boolean }>(
-      `/assistant/skills/${encodeURIComponent(skill.id)}`,
-    );
-    assistantSkills.value = assistantSkills.value.filter(
-      (item) => item.id !== skill.id,
-    );
-    toastSuccess("Skill removed");
-  } catch (err) {
-    assistantSkillsError.value =
-      err instanceof ApiError ? err.message : "Skill could not be removed.";
-  } finally {
-    assistantSkillActionId.value = "";
-  }
 }
 
 async function setAssistantSettingsSection(section: AssistantSettingsSection) {
@@ -4021,7 +3867,6 @@ function insertDailyBriefingVariable(value: string) {
 
 function openConfigureJobsModal() {
   assistantHistoryDrawerOpen.value = false;
-  assistantSkillsModalOpen.value = false;
   configureJobsModalOpen.value = true;
 }
 
@@ -4045,10 +3890,6 @@ function closeDetailModal() {
 
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key !== "Escape") return;
-  if (assistantSkillsModalOpen.value) {
-    closeAssistantSkillsModal();
-    return;
-  }
   if (assistantSettingsModalOpen.value) {
     closeAssistantSettingsModal();
     return;
@@ -4646,6 +4487,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
     <Teleport
       v-if="!assistantHistoryDrawerOpen"
       to="#app-side-nav-mobile-page-controls"
+      defer
     >
       <div class="assistant-mobile-nav">
         <Button
@@ -4668,19 +4510,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
             size="compact"
             icon-only
             class="assistant-mobile-nav__button"
-            aria-label="Jobs"
-            title="Jobs"
-            type="button"
-            @click="openConfigureJobsModal"
-          >
-            <UiIcon name="BriefcaseBusiness" :size="18" aria-hidden="true" />
-          </Button>
-          <Button
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            class="assistant-mobile-nav__button"
             aria-label="New chat"
             title="New chat"
             type="button"
@@ -4692,18 +4521,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
       </div>
     </Teleport>
     <div class="assistant-page-tools" aria-label="Assistant tools">
-      <Button
-        color="ghost"
-        shape="soft"
-        size="compact"
-        icon-only
-        type="button"
-        aria-label="Jobs"
-        title="Jobs"
-        @click="openConfigureJobsModal"
-      >
-        <UiIcon name="BriefcaseBusiness" :size="18" aria-hidden="true" />
-      </Button>
       <Button
         color="ghost"
         shape="soft"
@@ -4755,19 +4572,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
           color="ghost"
           shape="soft"
           size="compact"
-          class="assistant-history__new-chat"
-          type="button"
-          @click="startNewAssistantChat(null)"
-        >
-          <template #icon>
-            <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
-          </template>
-          New chat
-        </Button>
-        <Button
-          color="ghost"
-          shape="soft"
-          size="compact"
           icon-only
           class="assistant-history__close"
           aria-label="Close chat history"
@@ -4789,34 +4593,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <UiIcon name="BriefcaseBusiness" :size="15" aria-hidden="true" />
             <span>Jobs</span>
           </button>
-          <button
-            type="button"
-            class="assistant-history__nav-row"
-            @click="openAssistantSkillsModal"
-          >
-            <UiIcon name="Sparkles" :size="15" aria-hidden="true" />
-            <span>Skills</span>
-          </button>
-          <form
-            class="assistant-history__search"
-            @submit.prevent="applyAssistantThreadSearch"
-          >
-            <UiIcon name="Search" :size="16" aria-hidden="true" />
-            <input
-              v-model="assistantThreadSearchDraft"
-              type="search"
-              placeholder="Search"
-              aria-label="Search chats"
-            />
-            <button
-              v-if="assistantThreadSearchDraft.trim().length > 0"
-              type="button"
-              aria-label="Clear chat search"
-              @click="clearAssistantThreadSearch"
-            >
-              <UiIcon name="X" :size="14" aria-hidden="true" />
-            </button>
-          </form>
         </nav>
 
         <p v-if="assistantThreadsError" class="assistant-history__message">
@@ -4829,7 +4605,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
           {{ assistantProjectsError }}
         </p>
         <section class="assistant-history__section">
-          <h2>Projects</h2>
           <div
             v-if="assistantProjectsLoading && assistantProjects.length === 0"
             class="assistant-history__message"
@@ -5001,11 +4776,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               v-if="assistantThreadListEmpty"
               class="assistant-history__message"
             >
-              {{
-                assistantThreadSearchActive
-                  ? "No matching chats."
-                  : "No saved chats yet."
-              }}
+              No saved chats yet.
             </p>
             <p
               v-else-if="
@@ -5022,19 +4793,32 @@ function messageFromUnknown(err: unknown, fallback: string) {
         <div class="assistant-history__footer">
           <button
             type="button"
-            class="assistant-history__archive-button"
+            class="assistant-history__footer-icon"
+            aria-label="Archived chats"
+            title="Archived chats"
             @click="openArchivedThreadsModal"
           >
-            <UiIcon name="Archive" :size="15" aria-hidden="true" />
-            <span>Archived</span>
+            <UiIcon name="Archive" :size="18" aria-hidden="true" />
           </button>
           <button
             type="button"
-            class="assistant-history__footer-button"
+            class="assistant-history__footer-icon"
+            aria-label="Assistant settings"
+            title="Assistant settings"
             @click="openAssistantSettings('context')"
           >
-            <UiIcon name="Brain" :size="15" aria-hidden="true" />
-            <span>Settings</span>
+            <UiIcon name="Brain" :size="18" aria-hidden="true" />
+          </button>
+          <span class="assistant-history__footer-spacer" aria-hidden="true" />
+          <button
+            type="button"
+            class="assistant-history__footer-chat"
+            aria-label="New chat"
+            title="New chat"
+            @click="startNewAssistantChat(null)"
+          >
+            <UiIcon name="Plus" :size="18" aria-hidden="true" />
+            <span>Chat</span>
           </button>
         </div>
       </div>
@@ -5062,7 +4846,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
             v-else-if="assistantConsoleMessages.length === 0"
             class="assistant-empty-state"
           >
-            <h2>{{ assistantMessageLabel }}</h2>
+            <h2
+              class="assistant-empty-state__heading"
+              :aria-label="assistantMessageLabel"
+            >
+              <img
+                class="assistant-empty-state__avatar"
+                :src="ASSISTANT_AVATAR_SRC"
+                alt=""
+                aria-hidden="true"
+              />
+            </h2>
             <div class="starter-prompt-list" aria-label="Starter prompts">
               <button
                 v-for="prompt in visibleStarterPrompts"
@@ -6464,124 +6258,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
     <Teleport to="body">
       <div
-        v-if="assistantSkillsModalOpen"
-        class="assistant-modal"
-        @click.self="closeAssistantSkillsModal"
-      >
-        <section
-          class="assistant-modal__dialog assistant-modal__dialog--wide assistant-skills-dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="assistant-skills-title"
-        >
-          <header class="assistant-modal__header">
-            <div class="assistant-modal__header-copy">
-              <h2 id="assistant-skills-title">Skills</h2>
-              <p>
-                Playbooks ME3 can use for specialist work. Skills do not give
-                ME3 account access or permission to take actions.
-              </p>
-            </div>
-            <div class="assistant-modal__header-actions">
-              <Button
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                type="button"
-                aria-label="Close"
-                @click="closeAssistantSkillsModal"
-              >
-                <UiIcon name="X" :size="20" />
-              </Button>
-            </div>
-          </header>
-
-          <div class="assistant-skills">
-            <form
-              class="assistant-skills__install-form"
-              @submit.prevent="addAssistantSkill"
-            >
-              <label class="sr-only" for="assistant-skill-url">
-                Skill URL or repository
-              </label>
-              <div class="assistant-skills__input-row">
-                <UiIcon name="Link" :size="16" aria-hidden="true" />
-                <input
-                  id="assistant-skill-url"
-                  v-model="assistantSkillUrlDraft"
-                  type="text"
-                  placeholder="Paste a skill URL or repo"
-                />
-                <Button
-                  color="accent"
-                  shape="soft"
-                  size="compact"
-                  type="submit"
-                  :disabled="!canInstallAssistantSkill"
-                >
-                  Install
-                </Button>
-              </div>
-            </form>
-
-            <p
-              v-if="assistantSkillsError"
-              class="assistant-skills__error"
-              role="alert"
-            >
-              {{ assistantSkillsError }}
-            </p>
-
-            <div v-if="assistantSkillsLoading" class="empty-row">
-              Loading skills...
-            </div>
-            <div
-              v-else-if="installedAssistantSkills.length === 0"
-              class="assistant-skills__empty"
-            >
-              <UiIcon name="BookOpen" :size="18" aria-hidden="true" />
-              <span>No skills installed yet.</span>
-            </div>
-            <div v-else class="assistant-skills__installed">
-              <article
-                v-for="skill in installedAssistantSkills"
-                :key="skill.id"
-                class="assistant-skills__card"
-              >
-                <UiIcon name="Sparkles" :size="17" aria-hidden="true" />
-                <div>
-                  <h4>{{ skill.name }}</h4>
-                  <p>{{ skill.description || skill.sourceRef }}</p>
-                  <span
-                    v-if="skill.sourceKind === 'core'"
-                    class="assistant-skills__badge"
-                  >
-                    Built in
-                  </span>
-                </div>
-                <Button
-                  v-if="skill.sourceKind !== 'core'"
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  icon-only
-                  type="button"
-                  aria-label="Remove skill"
-                  :disabled="assistantSkillActionId === skill.id"
-                  @click="removeAssistantSkill(skill)"
-                >
-                  <UiIcon name="Trash2" :size="14" />
-                </Button>
-              </article>
-            </div>
-          </div>
-        </section>
-      </div>
-    </Teleport>
-
-    <Teleport to="body">
-      <div
         v-if="configureJobsModalOpen"
         class="assistant-modal"
         @click.self="closeConfigureJobsModal"
@@ -7446,36 +7122,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
   min-width: 0;
 }
 
-.assistant-history__new-chat {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  height: 32px;
-  padding: 4px 6px;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 400;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.assistant-history__new-chat :deep(.me3-btn__icon),
-.assistant-history__new-chat :deep(.me3-btn__label) {
-  color: inherit;
-  font-size: inherit;
-  font-weight: inherit;
-}
-
 .assistant-history__nav-row:hover,
 .assistant-history__project-row:hover,
-.assistant-history__thread:hover,
-.assistant-history__new-chat:hover {
+.assistant-history__thread:hover {
   background: color-mix(in oklab, var(--ui-surface) 64%, transparent);
   color: var(--ui-text);
 }
@@ -7532,42 +7181,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   cursor: pointer;
 }
 
-.assistant-history__search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  padding: 0 6px;
-  background: transparent;
-  color: var(--ui-text-muted);
-}
-
-.assistant-history__search:focus-within {
-  border-color: color-mix(in oklab, var(--ui-accent) 34%, var(--ui-border));
-  background: var(--ui-surface);
-}
-
-.assistant-history__search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.assistant-history__search input::-webkit-search-cancel-button,
-.assistant-history__search input::-webkit-search-decoration {
-  display: none;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-.assistant-history__search button,
 .assistant-history__thread-actions button {
   display: inline-flex;
   align-items: center;
@@ -7611,8 +7224,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-text);
 }
 
-.assistant-history__thread-actions button:hover:not(:disabled),
-.assistant-history__search button:hover {
+.assistant-history__thread-actions button:hover:not(:disabled) {
   background: var(--ui-surface);
   color: var(--ui-text);
 }
@@ -7635,6 +7247,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-history__project-row {
   color: var(--ui-text-muted);
+  gap: 9px;
+  padding-left: 0;
 }
 
 .assistant-history__project-add {
@@ -7751,28 +7365,40 @@ function messageFromUnknown(err: unknown, fallback: string) {
   background: var(--ui-surface-muted);
 }
 
-.assistant-history__archive-button,
-.assistant-history__footer-button {
+.assistant-history__footer-icon,
+.assistant-history__footer-chat {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 30px;
+  min-height: 48px;
   border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
-  padding: 0 6px;
+  padding: 0;
   background: transparent;
   color: var(--ui-text-muted);
   font: inherit;
-  font-size: 12px;
-  font-weight: 650;
   cursor: pointer;
 }
 
-.assistant-history__archive-button:hover,
-.assistant-history__footer-button:hover {
+.assistant-history__footer-icon {
+  flex: 0 0 48px;
+  width: 48px;
+}
+
+.assistant-history__footer-chat {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.assistant-history__footer-spacer {
+  flex: 1 1 auto;
+}
+
+.assistant-history__footer-icon:hover,
+.assistant-history__footer-chat:hover {
   background: var(--ui-surface);
   color: var(--ui-text);
 }
@@ -7974,13 +7600,18 @@ function messageFromUnknown(err: unknown, fallback: string) {
   text-align: center;
 }
 
-.assistant-empty-state h2 {
+.assistant-empty-state__heading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin: 0;
-  color: var(--ui-text-muted);
-  font-size: clamp(24px, 4vw, 30px);
-  font-weight: 500;
-  line-height: 1.15;
-  letter-spacing: 0;
+}
+
+.assistant-empty-state__avatar {
+  display: block;
+  width: clamp(71px, 13.6vw, 95px);
+  height: clamp(71px, 13.6vw, 95px);
+  object-fit: contain;
 }
 
 .starter-prompt-list {
@@ -9676,132 +9307,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   line-height: 1.4;
 }
 
-.assistant-skills-dialog {
-  width: min(620px, calc(100vw - 32px));
-}
-
-.assistant-skills {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-}
-
-.assistant-skills__install-form {
-  display: grid;
-  min-width: 0;
-}
-
-.assistant-skills__input-row {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  border-radius: var(--ui-radius-md);
-  padding: 5px;
-  background: var(--ui-surface-muted);
-}
-
-.assistant-skills__empty > svg,
-.assistant-skills__card > svg {
-  flex: 0 0 auto;
-  color: var(--ui-accent);
-}
-
-.assistant-skills__input-row > svg {
-  margin-left: 8px;
-  color: var(--ui-text-muted);
-}
-
-.assistant-skills__input-row input {
-  flex: 1 1 auto;
-  width: 100%;
-  min-width: 0;
-  min-height: 36px;
-  border: 0;
-  border-radius: var(--ui-radius-sm);
-  padding: 0 8px;
-  background: transparent;
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.assistant-skills__input-row input:focus {
-  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
-  outline-offset: 1px;
-}
-
-.assistant-skills__error {
-  margin: 0;
-  border-radius: var(--ui-radius-sm);
-  padding: 8px 10px;
-  background: color-mix(in oklab, #e53935 10%, var(--ui-surface));
-  color: #b91c1c;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.assistant-skills__empty {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  color: var(--ui-text-muted);
-  font-size: 13px;
-}
-
-.assistant-skills__installed {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-}
-
-.assistant-skills__card {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 32px;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  padding: 10px;
-  background: var(--ui-surface);
-}
-
-.assistant-skills__card h4,
-.assistant-skills__card p {
-  margin: 0;
-}
-
-.assistant-skills__badge {
-  display: inline-flex;
-  margin-top: 8px;
-  border: 1px solid var(--ui-border);
-  border-radius: 999px;
-  padding: 3px 8px;
-  background: var(--ui-surface-muted);
-  color: var(--ui-text-muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.assistant-skills__card h4 {
-  color: var(--ui-text);
-  font-size: 14px;
-  line-height: 1.25;
-}
-
-.assistant-skills__card p {
-  overflow-wrap: anywhere;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.assistant-skills__card .me3-btn {
-  justify-self: end;
-}
-
 .needs-you {
   display: inline-flex;
   align-items: center;
@@ -10716,24 +10221,6 @@ button:disabled {
     max-height: none;
     overflow: visible;
     padding: 14px 14px 14px 14px;
-  }
-
-  .assistant-skills-dialog {
-    width: 100%;
-  }
-
-  .assistant-skills {
-    overflow: auto;
-  }
-
-  .assistant-skills__input-row {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .assistant-skills__input-row .me3-btn {
-    width: 100%;
-    grid-column: 1 / -1;
   }
 
   .assistant-settings-row {

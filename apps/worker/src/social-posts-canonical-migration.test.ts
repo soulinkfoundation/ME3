@@ -391,6 +391,7 @@ const RUNTIME_MIGRATIONS_EXCEPT_0022 = `
     ('0025_social_posting_plans', '2026-07-18-social-posting-plans-v1'),
     ('0026_social_carousels', '2026-07-18-social-carousels-v1'),
     ('0027_managed_runtime_lifecycle', '2026-07-18-managed-runtime-lifecycle-v2'),
+    ('0028_journal_entry_revision', '2026-07-23-journal-entry-revision-v1'),
     ('0029_social_media_delivery', '2026-07-21-social-media-delivery-v1'),
     ('0030_social_youtube_tiktok', '2026-07-21-social-youtube-tiktok-v2');
 `;
