@@ -22,9 +22,10 @@ pnpm eval:web-research -- dry-run
 pnpm --filter @me3-core/web-research test
 ```
 
-The default plan compares the intended Cloudflare Unified Billing primary and
-fallback. Direct provider candidates are transport controls and must be
-selected explicitly:
+The default plan compares an OpenAI Key in Request primary routed through
+Cloudflare AI Gateway with an Anthropic Cloudflare Unified Billing fallback.
+The legacy OpenAI Unified Billing candidate and direct provider candidates
+are transport controls and must be selected explicitly:
 
 ```bash
 pnpm eval:web-research -- dry-run \
@@ -50,9 +51,21 @@ ME3_WEB_RESEARCH_EVAL_CONFIRM=I_UNDERSTAND_LIVE_SEARCH_COSTS \
 ```
 
 Cloudflare candidates require `CLOUDFLARE_ACCOUNT_ID` and
-`CLOUDFLARE_API_TOKEN`. Direct controls require `OPENAI_API_KEY` or
-`ANTHROPIC_API_KEY`. The runner never prints credentials and asks Cloudflare
-to retain metadata without request or response payloads.
+`CLOUDFLARE_API_TOKEN`. The OpenAI Key in Request primary additionally
+requires `OPENAI_API_KEY`; it uses Cloudflare's `default` gateway unless
+`CLOUDFLARE_AI_GATEWAY_ID` overrides it. That provider key is sent through
+Cloudflare's provider-native OpenAI endpoint and remains billed by OpenAI
+rather than Cloudflare Unified Billing. Direct controls require
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. The runner never prints credentials,
+explicitly enables gateway logging, and sends
+`cf-aig-collect-log-payload: false`, retaining metadata such as model, token
+counts, status, duration, and cost without request or response payloads.
+Successful Cloudflare responses also retain the non-secret `cf-aig-log-id`
+correlation value in the observation's provider metadata.
+
+The Cloudflare token used for provider-native requests must carry AI Gateway
+Run permission. Add AI Gateway Read permission when programmatic verification
+of the retained log metadata is required.
 
 Host the fixture directory at an immutable public
 `raw.githubusercontent.com` URL and set

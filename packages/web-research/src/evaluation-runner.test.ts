@@ -11,12 +11,16 @@ const runner = await import("../../../scripts/evaluate-web-research.mjs");
 const {
   aggregateQualityScore,
   applyResultLimit,
+  attachCloudflareGatewayMetadata,
   automaticGates,
   buildBlindReviewArtifacts,
   buildNormalizedResultCandidate,
   estimateCost,
   normalizeAnthropicObservation,
   normalizeOpenAiObservation,
+  openAiCandidateHeaders,
+  parseProviderJson,
+  resolveCandidateEndpoint,
   scoreManualHardGates,
   scoreEvaluationRun,
   selectionReadiness,
@@ -32,6 +36,140 @@ type TestBlindReviewEntry = Record<string, unknown> & {
 };
 
 describe("web research evaluation provider normalization", () => {
+  it("routes an OpenAI key through the named gateway without payload logs", () => {
+    const candidate = candidateCatalog.candidates.find(
+      (item) => item.id === "openai-gpt-5.5-cloudflare-key-in-request",
+    )!;
+    const environment = {
+      OPENAI_API_KEY: "openai-test-key",
+      CLOUDFLARE_ACCOUNT_ID: "account-id",
+      CLOUDFLARE_API_TOKEN: "cloudflare-test-token",
+      CLOUDFLARE_AI_GATEWAY_ID: "gateway-id",
+    };
+
+    expect(resolveCandidateEndpoint(candidate, environment)).toBe(
+      "https://gateway.ai.cloudflare.com/v1/account-id/gateway-id/openai/responses",
+    );
+    expect(openAiCandidateHeaders(candidate, 12_345, environment)).toEqual({
+      Authorization: "Bearer openai-test-key",
+      "cf-aig-authorization": "Bearer cloudflare-test-token",
+      "Content-Type": "application/json",
+      "cf-aig-skip-cache": "true",
+      "cf-aig-collect-log": "true",
+      "cf-aig-collect-log-payload": "false",
+      "cf-aig-max-attempts": "1",
+      "cf-aig-request-timeout": "12345",
+    });
+  });
+
+  it("uses Cloudflare's default gateway when no gateway ID is configured", () => {
+    const candidate = candidateCatalog.candidates.find(
+      (item) => item.id === "openai-gpt-5.5-cloudflare-key-in-request",
+    )!;
+
+    expect(
+      resolveCandidateEndpoint(candidate, {
+        CLOUDFLARE_ACCOUNT_ID: "account-id",
+      }),
+    ).toBe(
+      "https://gateway.ai.cloudflare.com/v1/account-id/default/openai/responses",
+    );
+  });
+
+  it("refuses to send provider credentials to a catalog-defined endpoint", () => {
+    const candidate = candidateCatalog.candidates.find(
+      (item) => item.id === "openai-gpt-5.5-cloudflare-key-in-request",
+    )!;
+
+    expect(() =>
+      resolveCandidateEndpoint(
+        { ...candidate, endpoint: "https://malicious.example/responses" },
+        { CLOUDFLARE_ACCOUNT_ID: "account-id" },
+      ),
+    ).toThrow("unsafe provider-native OpenAI endpoint");
+  });
+
+  it("keeps the Unified Billing authorization contract separate", () => {
+    const candidate = candidateCatalog.candidates.find(
+      (item) => item.id === "openai-gpt-5.5-cloudflare",
+    )!;
+    const headers = openAiCandidateHeaders(candidate, 10_000, {
+      CLOUDFLARE_API_TOKEN: "cloudflare-test-token",
+      CLOUDFLARE_AI_GATEWAY_ID: "gateway-id",
+    });
+
+    expect(headers).toMatchObject({
+      Authorization: "Bearer cloudflare-test-token",
+      "cf-aig-gateway-id": "gateway-id",
+      "cf-aig-collect-log": "true",
+      "cf-aig-collect-log-payload": "false",
+    });
+    expect(headers).not.toHaveProperty("cf-aig-authorization");
+  });
+
+  it("captures Cloudflare's non-secret gateway log correlation ID", () => {
+    const candidate = candidateCatalog.candidates.find(
+      (item) => item.id === "openai-gpt-5.5-cloudflare-key-in-request",
+    )!;
+    const observation = {
+      providerMetadata: {
+        requestIds: ["response-id"],
+        resolvedModel: "gpt-5.5",
+      },
+    };
+
+    expect(
+      attachCloudflareGatewayMetadata(
+        candidate,
+        new Response(null, {
+          headers: { "cf-aig-log-id": "gateway-log-id" },
+        }),
+        observation,
+      ),
+    ).toEqual({
+      providerMetadata: {
+        requestIds: ["response-id"],
+        resolvedModel: "gpt-5.5",
+        gatewayLogId: "gateway-log-id",
+      },
+    });
+  });
+
+  it("retains safe HTTP diagnostics without persisting provider error text", async () => {
+    try {
+      await parseProviderJson(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "invalid_gateway_token",
+              message: "sensitive upstream detail",
+            },
+          }),
+          {
+            status: 401,
+            headers: { "cf-aig-log-id": "gateway-error-log-id" },
+          },
+        ),
+        "OpenAI",
+      );
+      throw new Error("expected provider rejection");
+    } catch (error) {
+      expect((error as Error).message).toBe("OpenAI:provider_rejected:401");
+      expect(
+        (
+          error as Error & {
+            providerMetadata: Record<string, unknown>;
+          }
+        ).providerMetadata,
+      ).toEqual({
+        httpStatus: 401,
+        gatewayLogId: "gateway-error-log-id",
+        providerErrorCode: "invalid_gateway_token",
+      });
+      expect(JSON.stringify(error)).not.toContain("sensitive upstream detail");
+    }
+  });
+
   it("normalizes OpenAI citations and bills one search action", () => {
     const result = normalizeOpenAiObservation({
       id: "resp-1",
