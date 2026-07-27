@@ -53,6 +53,23 @@ function updateLinkTag(rel: string, href: string | undefined) {
 
 async function resolveDefaultAppPathForSession(): Promise<string> {
   const sites = useSitesStore();
+  if (sites.loaded) {
+    return resolveProfileSetupPath({
+      sitesLoaded: true,
+      hasProfileSite: sites.hasProfileSite,
+      defaultPath: DEFAULT_APP_PATH,
+    });
+  }
+
+  const auth = useAuthStore();
+  if (auth.sessionHasProfileSite !== null) {
+    return resolveProfileSetupPath({
+      sitesLoaded: true,
+      hasProfileSite: auth.sessionHasProfileSite,
+      defaultPath: DEFAULT_APP_PATH,
+    });
+  }
+
   try {
     await sites.ensureSites();
     return resolveProfileSetupPath({

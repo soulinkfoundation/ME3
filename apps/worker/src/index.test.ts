@@ -3656,6 +3656,30 @@ describe("ME3 Worker auth", () => {
     expect(response.headers.get("Content-Security-Policy")).toBe("frame-ancestors 'none'");
   });
 
+  it("caches fingerprinted owner app assets in self-hosted installs", async () => {
+    const env = createEnv();
+    env.CORE_WEB_ORIGIN = "https://me3.example";
+    env.ASSETS = {
+      fetch: async () =>
+        new Response("export default true", {
+          headers: {
+            "Content-Type": "text/javascript",
+            "Cache-Control": "public, max-age=0, must-revalidate",
+          },
+        }),
+    } as unknown as Fetcher;
+
+    const response = await app.fetch(
+      new Request("https://me3.example/assets/index-AbCd1234.js"),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe(
+      "public, max-age=31536000, immutable",
+    );
+  });
+
   it("redirects non-local HTTP requests to HTTPS", async () => {
     const env = createEnv();
 
@@ -5429,11 +5453,28 @@ describe("ME3 Worker auth", () => {
       }),
       env,
     );
-    const body = (await response.json()) as { ok: boolean; user: OwnerProfile };
+    const body = (await response.json()) as {
+      ok: boolean;
+      user: OwnerProfile;
+      workspace: { hasProfileSite: boolean };
+    };
 
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.user.id).toBe("owner");
+    expect(body.workspace.hasProfileSite).toBe(false);
+
+    addAssistantEditableSite(env);
+    const responseWithSite = await app.fetch(
+      new Request("http://localhost/api/auth/me", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const bodyWithSite = (await responseWithSite.json()) as {
+      workspace: { hasProfileSite: boolean };
+    };
+    expect(bodyWithSite.workspace.hasProfileSite).toBe(true);
   });
 
   it("clears the owner session cookie on logout", async () => {

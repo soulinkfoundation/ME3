@@ -48,10 +48,14 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
 
 app.use(router)
 
+// Attach the load listener while the entry module is still evaluating. Initial
+// auth/workspace guards can finish after `load`, so registering from
+// router.isReady() would otherwise miss the event entirely.
+registerServiceWorker()
+
 void router.isReady().finally(() => {
   // Keep the static, branded launch state in place until the initial route has
   // resolved. Mounting immediately replaces it with an empty RouterView while
   // the auth guard is still checking the owner session.
   app.mount('#app')
-  registerServiceWorker()
 })

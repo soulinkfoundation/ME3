@@ -820,13 +820,20 @@ app.get("/api/auth/me", async (c) => {
     return c.json({ ok: false, user: null }, 401);
   }
 
-  const owner = await getOwnerProfile(c.env, ownerId);
+  const [owner, hasProfileSite] = await Promise.all([
+    getOwnerProfile(c.env, ownerId),
+    hasOwnerProfileSite(c.env, ownerId),
+  ]);
   if (!owner) {
     clearOwnerSession(c);
     return c.json({ ok: false, user: null }, 401);
   }
 
-  return c.json({ ok: true, user: toPublicOwner(owner) });
+  return c.json({
+    ok: true,
+    user: toPublicOwner(owner),
+    workspace: { hasProfileSite },
+  });
 });
 
 app.post("/api/auth/logout", (c) => {
@@ -1552,7 +1559,7 @@ async function applyResponseSecurityHeaders(c: AppContext) {
     setDefaultHeader(c, "Cache-Control", "no-store");
   }
 
-  if (isManagedOwnerAppFingerprintedAssetRequest(c, pathname)) {
+  if (isOwnerAppFingerprintedAssetRequest(c, pathname)) {
     c.header("Cache-Control", "public, max-age=31536000, immutable");
   }
 
@@ -1639,12 +1646,11 @@ function isManagedOwnerAppStaticAssetRequest(
   );
 }
 
-function isManagedOwnerAppFingerprintedAssetRequest(
+function isOwnerAppFingerprintedAssetRequest(
   c: AppContext,
   pathname: string,
 ): boolean {
   return (
-    isManagedRuntime(c.env) &&
     pathname.startsWith("/assets/") &&
     isOwnerSurfaceRequest(c, pathname)
   );
@@ -1763,6 +1769,20 @@ async function getOwnerProfile(env: Env, ownerId: string): Promise<OwnerRecord |
     .first<OwnerRecord>();
 
   return result ?? null;
+}
+
+async function hasOwnerProfileSite(env: Env, ownerId: string): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `SELECT id
+     FROM sites
+     WHERE user_id = ?
+       AND COALESCE(site_type, 'profile') = 'profile'
+     LIMIT 1`,
+  )
+    .bind(ownerId)
+    .all<{ id: string }>();
+
+  return (result.results || []).length > 0;
 }
 
 async function getOwnerByEmail(env: Env, email: string): Promise<OwnerRecord | null> {

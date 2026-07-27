@@ -20,6 +20,14 @@ interface OwnerProfile {
   timezone: string | null;
 }
 
+interface AuthSessionResponse {
+  ok: boolean;
+  user: OwnerProfile | null;
+  workspace?: {
+    hasProfileSite?: boolean;
+  };
+}
+
 export interface BootstrapOwnerInput {
   bootstrapCode: string;
   email?: string;
@@ -62,6 +70,7 @@ function clearStoredSession() {
 export const useAuthStore = defineStore("auth", () => {
   const user = ref<User | null>(null);
   const initialized = ref(false);
+  const sessionHasProfileSite = ref<boolean | null>(null);
   let initializePromise: Promise<void> | null = null;
 
   const isAuthenticated = computed(() => !!user.value);
@@ -74,11 +83,16 @@ export const useAuthStore = defineStore("auth", () => {
 
   async function refreshSession(): Promise<boolean> {
     try {
-      const response = await api.get<{ ok: boolean; user: OwnerProfile | null }>("/auth/me");
+      const response = await api.get<AuthSessionResponse>("/auth/me");
       user.value = response.ok && response.user ? ownerToUser(response.user) : null;
+      sessionHasProfileSite.value =
+        typeof response.workspace?.hasProfileSite === "boolean"
+          ? response.workspace.hasProfileSite
+          : null;
       return Boolean(user.value);
     } catch {
       user.value = null;
+      sessionHasProfileSite.value = null;
       return false;
     } finally {
       clearStoredSession();
@@ -171,12 +185,14 @@ export const useAuthStore = defineStore("auth", () => {
 
     user.value = null;
     initialized.value = true;
+    sessionHasProfileSite.value = null;
     clearStoredSession();
   }
 
   return {
     user,
     initialized,
+    sessionHasProfileSite,
     isAuthenticated,
     ensureInitialized,
     refreshSession,
