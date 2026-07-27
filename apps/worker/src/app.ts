@@ -1364,7 +1364,11 @@ app.notFound(async (c) => {
     return servePublicSiteRequest(c.env, c.req.raw);
   }
   if (c.env.ASSETS) {
-    return c.env.ASSETS.fetch(c.req.raw);
+    const response = await c.env.ASSETS.fetch(c.req.raw);
+    return applyOwnerAppAssetCachePolicy(
+      response,
+      new URL(c.req.url).pathname,
+    );
   }
   return c.text("Not found", 404);
 });
@@ -1640,6 +1644,27 @@ function isManagedOwnerAppStaticAssetRequest(
     pathname === "/me3-logo-light.png" ||
     pathname === "/me3-logo-dark.png"
   );
+}
+
+function applyOwnerAppAssetCachePolicy(
+  response: Response,
+  pathname: string,
+): Response {
+  if (
+    response.status < 200 ||
+    response.status >= 400 ||
+    !/^\/assets\/.+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/.test(pathname)
+  ) {
+    return response;
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "public, max-age=31536000, immutable");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function localDateKey(): string {
