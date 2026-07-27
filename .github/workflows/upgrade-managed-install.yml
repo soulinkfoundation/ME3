@@ -309,6 +309,7 @@ jobs:
         run: |
           set -euo pipefail
           set +x
+          printf 'ME3_MANAGED_FAILURE_STAGE=preparing\n' >> "$GITHUB_ENV"
           test -n "$ME3_MANAGED_OPENAI_API_KEY"
           key_file="$RUNNER_TEMP/me3-openai-api-key"
           printf '%s' "$ME3_MANAGED_OPENAI_API_KEY" > "$key_file"

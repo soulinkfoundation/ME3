@@ -88,6 +88,10 @@ test("installs only the hosted OpenAI secret before deploying the target", () =>
     installSecret,
     /wrangler secret put OPENAI_API_KEY --config wrangler\.toml/,
   );
+  assert.match(
+    installSecret,
+    /ME3_MANAGED_FAILURE_STAGE=preparing/,
+  );
   assert.doesNotMatch(installSecret, /ME3_AI_IMAGE_GENERATION_/);
   assert.ok(workflow.indexOf(installSecret) < workflow.indexOf(deploy));
 });
