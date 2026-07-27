@@ -249,25 +249,45 @@ const targetValidations = computed(() => selectedVisibleVersions.value.map((vers
   ),
 })));
 
+const actionableValidations = computed(() => {
+  const versionIds = new Set(editorVersions.value.map((version) => version.id));
+  return targetValidations.value.filter((validation) => versionIds.has(validation.version.id));
+});
+
 const canPublish = computed(() => Boolean(
   !selectedPostReadOnly.value &&
-  targetValidations.value.length > 0 &&
-  targetValidations.value.every((validation) => validation.contentValid && validation.accountValid),
+  actionableValidations.value.length > 0 &&
+  actionableValidations.value.every(
+    (validation) => validation.contentValid && validation.accountValid,
+  ),
 ));
 
 const canSchedule = computed(() => Boolean(
   canPublish.value &&
-  targetValidations.value.every((validation) => validation.capability?.schedule),
+  actionableValidations.value.every(
+    (validation) =>
+      validation.capability?.schedule &&
+      !versionHasActivePublication(validation.version),
+  ),
 ));
 
 const canPublishNow = computed(() => Boolean(
   canPublish.value &&
-  targetValidations.value.every((validation) => validation.capability?.publish),
+  actionableValidations.value.every(
+    (validation) =>
+      validation.capability?.publish &&
+      !versionHasActivePublication(validation.version),
+  ),
 ));
 
 const canDeleteDraft = computed(() =>
   Boolean(selectedPost.value && canDeletePost(selectedPost.value)),
 );
+
+const selectedVersionDeliveryError = computed(() => {
+  const version = sharedEditor.value ? null : selectedVersion.value;
+  return version ? versionDeliveryError(version) : "";
+});
 
 const advancedFiltersActive = computed(() =>
   Boolean(
@@ -528,6 +548,51 @@ function postStatus(detail: SocialPostDetail): string {
   if (states.includes("Published")) return "Published";
   if (states.includes("Approved")) return "Approved";
   return "Draft";
+}
+
+function versionHasActivePublication(version: PostVersion): boolean {
+  if (
+    version.publicationStatus === "failed" ||
+    version.publicationStatus === "cancelled"
+  ) {
+    return false;
+  }
+  return Boolean(
+    version.scheduledFor ||
+    version.publicationStatus === "scheduled" ||
+    version.publicationStatus === "queued" ||
+    version.publicationStatus === "publishing"
+  );
+}
+
+function versionDeliveryError(version: PostVersion): string {
+  if (
+    version.publicationStatus !== "failed" &&
+    version.publicationStatus !== "cancelled"
+  ) {
+    return "";
+  }
+  return version.errorMessage ||
+    (version.publicationStatus === "cancelled"
+      ? "The previous delivery was cancelled."
+      : "The previous delivery failed. Review this platform and retry when ready.");
+}
+
+function versionDeliveryFeedback(version: PostVersion): string {
+  const deliveryError = versionDeliveryError(version);
+  if (deliveryError) return deliveryError;
+  if (
+    version.publicationStatus === "queued" ||
+    version.publicationStatus === "publishing"
+  ) {
+    return "Publishing";
+  }
+  if (version.scheduledFor || version.publicationStatus === "scheduled") {
+    return version.scheduledFor
+      ? `Scheduled for ${formatDate(version.scheduledFor)}`
+      : "Scheduled";
+  }
+  return "";
 }
 
 function scheduledDateFor(detail: SocialPostDetail): string | null {
@@ -1559,6 +1624,15 @@ function currentQueryParam(name: string): string | null {
             </span>
           </aside>
 
+          <aside
+            v-if="selectedVersionDeliveryError"
+            class="state-banner state-banner--error delivery-error-banner"
+            role="alert"
+          >
+            <strong>{{ platformLabel(selectedVersion!.platform) }} delivery failed</strong>
+            <span>{{ selectedVersionDeliveryError }}</span>
+          </aside>
+
           <div class="version-tabs" role="tablist" aria-label="Post versions">
             <button
               v-if="selectedVisibleVersions.length > 1"
@@ -1708,8 +1782,25 @@ function currentQueryParam(name: string): string | null {
                     <strong>{{ platformLabel(validation.version.platform) }}</strong>
                     <small>{{ validation.capability?.deliveryLabel }}</small>
                   </span>
-                  <span :class="['validation-state', { 'validation-state--ready': validation.contentValid && validation.accountValid && validation.capability?.publish }]">
-                    {{ validation.issue || (validation.capability?.publish ? 'Ready' : validation.capability?.deliveryLabel || 'Unavailable') }}
+                  <span
+                    :class="[
+                      'validation-state',
+                      {
+                        'validation-state--ready':
+                          validation.contentValid &&
+                          validation.accountValid &&
+                          validation.capability?.publish &&
+                          !versionDeliveryFeedback(validation.version),
+                      },
+                    ]"
+                  >
+                    {{
+                      validation.issue ||
+                      versionDeliveryFeedback(validation.version) ||
+                      (validation.capability?.publish
+                        ? 'Ready'
+                        : validation.capability?.deliveryLabel || 'Unavailable')
+                    }}
                   </span>
                 </li>
               </ul>
@@ -2163,6 +2254,12 @@ function currentQueryParam(name: string): string | null {
 }
 
 .read-only-banner {
+  display: grid;
+  gap: 4px;
+  margin-top: 18px;
+}
+
+.delivery-error-banner {
   display: grid;
   gap: 4px;
   margin-top: 18px;

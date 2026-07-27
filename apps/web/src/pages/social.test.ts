@@ -661,6 +661,131 @@ describe("SocialPage", () => {
     expect(wrapper.get(".tiktok-preview__stage video").attributes("controls")).toBeDefined();
   });
 
+  it("keeps provider failures visible after reload and allows an intentional retry", async () => {
+    const tiktokAccount = {
+      ...account,
+      id: "account-tiktok",
+      platform: "tiktok",
+      handle: "kieranofearth",
+      displayName: "kieranofearth",
+    };
+    const failedMessage = "TikTok could not import the video from this media URL.";
+    const failedPost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        id: "version-tiktok",
+        platform: "tiktok" as const,
+        targetAccountId: tiktokAccount.id,
+        bodyText: "Greetings Earthling 🌍",
+        assetManifest: [{
+          url: "https://example.com/short.mp4",
+          kind: "video" as const,
+          mimeType: "video/mp4",
+        }],
+        publicationStatus: "failed" as const,
+        failureClass: "retryable" as const,
+        errorMessage: failedMessage,
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [failedPost] });
+      }
+      if (endpoint === "/social/accounts") {
+        return Promise.resolve({ accounts: [tiktokAccount] });
+      }
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("tiktok", {
+              schedule: false,
+              deliveryMode: "provider_draft",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.get(".delivery-error-banner").text())
+      .toContain("TikTok delivery failed");
+    expect(wrapper.get(".delivery-error-banner").text()).toContain(failedMessage);
+    const postNow = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Post now");
+    expect(postNow?.attributes("disabled")).toBeUndefined();
+  });
+
+  it("prevents duplicate publishing while a destination is already queued", async () => {
+    const tiktokAccount = {
+      ...account,
+      id: "account-tiktok",
+      platform: "tiktok",
+      handle: "kieranofearth",
+      displayName: "kieranofearth",
+    };
+    const queuedPost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        id: "version-tiktok",
+        platform: "tiktok" as const,
+        targetAccountId: tiktokAccount.id,
+        bodyText: "Greetings Earthling 🌍",
+        assetManifest: [{
+          url: "https://example.com/short.mp4",
+          kind: "video" as const,
+          mimeType: "video/mp4",
+        }],
+        publicationStatus: "queued" as const,
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [queuedPost] });
+      }
+      if (endpoint === "/social/accounts") {
+        return Promise.resolve({ accounts: [tiktokAccount] });
+      }
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("tiktok", {
+              schedule: false,
+              deliveryMode: "provider_draft",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    const scheduledTab = wrapper.findAll(".workspace-tabs button")
+      .find((button) => button.text().includes("Scheduled"));
+    await scheduledTab!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get(".row-status").text()).toBe("Publishing");
+    const postNow = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Post now");
+    expect(postNow?.attributes("disabled")).toBeDefined();
+  });
+
   it("shows a TikTok delivery failure instead of a success confirmation", async () => {
     const tiktokAccount = {
       ...account,
