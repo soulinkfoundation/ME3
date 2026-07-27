@@ -1482,18 +1482,30 @@ function normalizeOpenAiObservation(payload) {
     resolvedModel: payload.model || null,
     systemFingerprint: payload.system_fingerprint || null,
   };
+  const hasIncompleteMessage = (payload.output || []).some(
+    (item) =>
+      item?.type === "message" &&
+      typeof item.status === "string" &&
+      item.status !== "completed",
+  );
   if (
     payload.incomplete_details ||
     (typeof payload.status === "string" && payload.status !== "completed") ||
-    (payload.output || []).some(
-      (item) =>
-        typeof item?.status === "string" && item.status !== "completed",
-    )
+    hasIncompleteMessage
   ) {
+    const incompleteReason =
+      payload.incomplete_details?.reason ||
+      (typeof payload.status === "string" && payload.status !== "completed"
+        ? payload.status
+        : "message");
     throw evaluationProviderError(
-      `OpenAI:incomplete:${payload.status || "output_item"}`,
+      `OpenAI:incomplete:${incompleteReason}`,
       usage,
-      providerMetadata,
+      {
+        ...providerMetadata,
+        responseStatus: payload.status || null,
+        incompleteReason,
+      },
     );
   }
   const textBlocks = [];

@@ -114,7 +114,73 @@ describe("web research evaluation provider normalization", () => {
         inputTokens: 80,
         outputTokens: 12,
       });
+      expect(
+        (
+          error as Error & {
+            providerMetadata: { incompleteReason: string; responseStatus: string };
+          }
+        ).providerMetadata,
+      ).toMatchObject({
+        incompleteReason: "max_output_tokens",
+        responseStatus: "incomplete",
+      });
     }
+  });
+
+  it("accepts a completed OpenAI response with an in-progress search item", () => {
+    const result = normalizeOpenAiObservation({
+      id: "resp-searching-item",
+      model: "gpt-5.5-2026-04-23",
+      status: "completed",
+      output: [
+        {
+          type: "web_search_call",
+          status: "searching",
+          action: {
+            type: "search",
+            sources: [
+              {
+                url: "https://example.com/source",
+                title: "Source",
+              },
+            ],
+          },
+        },
+        {
+          type: "message",
+          status: "completed",
+          content: [
+            {
+              type: "output_text",
+              text: "Answer",
+              annotations: [],
+            },
+          ],
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 20 },
+    });
+
+    expect(result.answer).toBe("Answer");
+    expect(result.usage.searchQueries).toBe(1);
+  });
+
+  it("rejects an incomplete OpenAI message even when the response completed", () => {
+    expect(() =>
+      normalizeOpenAiObservation({
+        id: "resp-incomplete-message",
+        model: "gpt-5.5",
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            status: "in_progress",
+            content: [],
+          },
+        ],
+        usage: { input_tokens: 80, output_tokens: 12 },
+      }),
+    ).toThrow("OpenAI:incomplete:message");
   });
 
   it("aggregates Anthropic pause-turn responses, citations, and usage", () => {
