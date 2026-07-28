@@ -232,12 +232,12 @@ async function createSocialContentPackage(
     throw new SocialContentPackageInputError("Only one Version per platform is supported for now");
   }
 
-  for (const variant of input.variants) {
+  await Promise.all(input.variants.map(async (variant) => {
     requiredText(variant.bodyText, `${variant.platform} bodyText is required`);
     if (variant.targetAccountId) {
       await requireActiveAccount(env, ownerId, siteId, variant.platform, variant.targetAccountId);
     }
-  }
+  }));
 
   const id = options.postId || `social-post-${crypto.randomUUID()}`;
   const sourceRef = optionalText(input.sourceRef) ||
@@ -799,8 +799,7 @@ export async function deleteSocialPost(
   }
   const publicationSummary = await env.DB.prepare(
     `SELECT COUNT(*) AS total,
-            SUM(CASE WHEN publication.status = 'published'
-              OR (
+            SUM(CASE WHEN (
                 publication.status = 'publishing' AND (
                   publication.error_code IS NULL OR
                   (
@@ -826,7 +825,7 @@ export async function deleteSocialPost(
   const protectedPublicationCount = Number(publicationSummary?.protected || 0);
   if (protectedPublicationCount > 0) {
     throw new SocialPostInputError(
-      "Posts that are actively publishing or already published cannot be deleted.",
+      "Posts that are actively publishing cannot be removed yet.",
       409,
     );
   }

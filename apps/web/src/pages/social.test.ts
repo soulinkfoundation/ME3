@@ -368,11 +368,14 @@ describe("SocialPage", () => {
     const actions = wrapper.get(".editor-actions");
     expect(actions.findAll("button").map((button) => button.text().trim())).toEqual([
       "Schedule",
-      "Delete draft",
+      "",
     ]);
+    expect(actions.find("[aria-label='Delete draft']").classes())
+      .toContain("me3-btn--icon-only");
     expect(actions.find("[aria-label^='Review publishing checks']").exists()).toBe(false);
     const schedule = actions.findAll("button")
       .find((button) => button.text().trim() === "Schedule");
+    expect(schedule?.classes()).toContain("me3-btn--neutral");
     expect(schedule?.attributes("disabled")).toBeUndefined();
     await schedule!.trigger("click");
     await flushPromises();
@@ -450,6 +453,7 @@ describe("SocialPage", () => {
     expect(wrapper.find(".social-schedule-dialog").exists()).toBe(false);
     expect(wrapper.find(".row-status").exists()).toBe(false);
     expect(wrapper.get(".workspace-tabs").text()).toContain("Scheduled1");
+    expect(wrapper.get(".workspace-tabs__tab--active").text()).toContain("Drafts");
 
     resolveApproval({
       version: {
@@ -553,8 +557,7 @@ describe("SocialPage", () => {
     const wrapper = mountPage();
     await flushPromises();
 
-    const deleteActions = wrapper.findAll("button")
-      .filter((button) => button.text().trim() === "Delete draft");
+    const deleteActions = wrapper.findAll("[aria-label='Delete draft']");
     expect(deleteActions).toHaveLength(1);
     expect(deleteActions[0]!.element.closest(".editor-actions")).not.toBeNull();
     expect(wrapper.get(".detail-header button").attributes("aria-label"))
@@ -576,6 +579,72 @@ describe("SocialPage", () => {
     expect(wrapper.find(".post-detail").exists()).toBe(false);
     resolveDelete({ ok: true });
     await flushPromises();
+  });
+
+  it("removes a published Post from ME3 without implying the provider post is deleted", async () => {
+    const publishedPost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        assetManifest: [],
+        approvalStatus: "approved" as const,
+        publicationStatus: "published" as const,
+        platformPostUrl: "https://www.linkedin.com/feed/update/urn:li:activity:1",
+        publishedAt: "2026-07-28T08:30:00.000Z",
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [publishedPost] });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+      if (endpoint === "/social/status") {
+        return Promise.resolve({
+          plugin: {
+            status: "installed",
+            enabled: true,
+            ready: true,
+            statusLabel: "Installed",
+            platformCapabilities: [
+              platformCapability("linkedin", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+            ],
+          },
+          hostedOAuth: { configured: false, platforms: [] },
+        });
+      }
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.delete).mockResolvedValue({ ok: true });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    const publishedTab = wrapper.findAll(".workspace-tabs button")
+      .find((button) => button.text().includes("Published"));
+    await publishedTab!.trigger("click");
+    await flushPromises();
+
+    const removeAction = wrapper.get("[aria-label='Remove post from ME3']");
+    expect(removeAction.classes()).toContain("me3-btn--icon-only");
+    expect(removeAction.text()).toBe("");
+    await removeAction.trigger("click");
+    expect(wrapper.get(".confirmation-dialog").text()).toContain(
+      "Published posts will stay on their social platforms.",
+    );
+    const confirmRemove = wrapper.get(".confirmation-dialog").findAll("button")
+      .find((button) => button.text().trim() === "Remove from ME3");
+    expect(confirmRemove).toBeTruthy();
+    await confirmRemove!.trigger("click");
+    await flushPromises();
+
+    expect(api.delete).toHaveBeenCalledWith(
+      "/social/posts/post-1?expectedUpdatedAt=2026-07-18T07%3A00%3A00Z",
+    );
+    expect(toastHarness.success).toHaveBeenCalledWith(
+      "Post removed from ME3. Published social posts were not deleted.",
+    );
   });
 
   it("deletes only the active platform draft when a Post has multiple platforms", async () => {
@@ -641,10 +710,8 @@ describe("SocialPage", () => {
     await flushPromises();
     await wrapper.get(".version-tab[title^='LinkedIn ·']").trigger("click");
 
-    const deleteAction = wrapper.findAll(".editor-actions button")
-      .find((button) => button.text().trim() === "Delete LinkedIn draft");
-    expect(deleteAction).toBeTruthy();
-    await deleteAction!.trigger("click");
+    const deleteAction = wrapper.get("[aria-label='Delete LinkedIn draft']");
+    await deleteAction.trigger("click");
     expect(wrapper.get(".confirmation-dialog").text()).toContain(
       "Remove LinkedIn from this Post? Other platform versions will be kept.",
     );
@@ -806,10 +873,8 @@ describe("SocialPage", () => {
     expect(rows[1]!.get(".post-row__schedule time").attributes("datetime"))
       .toBe(lateScheduledAt);
 
-    const deleteScheduled = wrapper.findAll(".editor-actions button")
-      .find((button) => button.text().trim() === "Delete draft");
-    expect(deleteScheduled).toBeTruthy();
-    await deleteScheduled!.trigger("click");
+    const deleteScheduled = wrapper.get("[aria-label='Delete draft']");
+    await deleteScheduled.trigger("click");
     expect(wrapper.get(".confirmation-dialog").text()).toContain(
       "Cancel scheduled delivery and delete",
     );
@@ -869,6 +934,49 @@ describe("SocialPage", () => {
     expect(wrapper.find("#social-post-title").exists()).toBe(false);
     expect(wrapper.find(".version-editor input[type='text']").exists()).toBe(false);
     expect(wrapper.findAll(".platform-target")).toHaveLength(0);
+  });
+
+  it("shows a new draft immediately while account verification finishes", async () => {
+    let resolveCreate!: (value: {
+      post: typeof post;
+    }) => void;
+    vi.mocked(api.post).mockReturnValue(new Promise((resolve) => {
+      resolveCreate = resolve;
+    }));
+    const wrapper = mountPage();
+    await flushPromises();
+
+    await wrapper.get("[aria-label='New Post']").trigger("click");
+    await wrapper.get(".destination-option").trigger("click");
+    const createDraft = wrapper.findAll("button")
+      .find((button) => button.text().includes("Create draft"));
+    await createDraft!.trigger("click");
+
+    expect(wrapper.find(".social-destinations-dialog").exists()).toBe(false);
+    expect(wrapper.get(".post-detail").text()).toContain("Untitled draft");
+    expect(wrapper.find(".editor-actions").exists()).toBe(false);
+    expect(wrapper.find(".media-attachments").exists()).toBe(false);
+
+    const createdPost = {
+      post: {
+        ...post.post,
+        id: "post-optimistic",
+        ideaText: "Untitled draft",
+        updatedAt: "2026-07-28T08:30:00Z",
+      },
+      versions: [{
+        ...post.versions[0],
+        id: "version-optimistic",
+        postId: "post-optimistic",
+        bodyText: "Untitled draft",
+      }],
+    };
+    resolveCreate({ post: createdPost });
+    await flushPromises();
+
+    expect(wrapper.get(".post-detail").text()).toContain("Untitled draft");
+    expect(wrapper.find(".editor-actions").exists()).toBe(true);
+    expect(wrapper.find(".social-destinations-dialog").exists()).toBe(false);
   });
 
   it("preserves image selection order, stable Files metadata, and unsaved caption text", async () => {
@@ -1542,10 +1650,8 @@ describe("SocialPage", () => {
 
     expect(wrapper.find(".row-status").exists()).toBe(false);
     expect(wrapper.get(".delivery-error-banner").text()).toContain("Check X before trying again.");
-    const deleteAction = wrapper.findAll(".editor-actions button")
-      .find((button) => button.text().trim() === "Delete draft");
-    expect(deleteAction).toBeTruthy();
-    await deleteAction!.trigger("click");
+    const deleteAction = wrapper.get("[aria-label='Delete draft']");
+    await deleteAction.trigger("click");
     expect(wrapper.get(".confirmation-dialog").text()).toContain(
       "Delivery history will be retained.",
     );
@@ -1600,10 +1706,8 @@ describe("SocialPage", () => {
     await checks.trigger("click");
     expect(wrapper.get(".publishing-checks-dialog").text())
       .toContain("Retrying automatically");
-    const deleteAction = wrapper.findAll(".editor-actions button")
-      .find((button) => button.text().trim() === "Delete draft");
-    expect(deleteAction).toBeTruthy();
-    await deleteAction!.trigger("click");
+    const deleteAction = wrapper.get("[aria-label='Delete draft']");
+    await deleteAction.trigger("click");
     expect(wrapper.get(".confirmation-dialog").text()).toContain(
       "Stop pending retries and delete “Post copy https://example.com/story”",
     );

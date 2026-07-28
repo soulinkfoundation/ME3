@@ -231,6 +231,10 @@ const selectedPostReadOnly = computed(
   () => selectedPost.value?.post.sourceType === "legacy_content_bank_read_only",
 );
 
+const selectedPostOptimistic = computed(
+  () => selectedPost.value?.post.id.startsWith("optimistic-social-post-") === true,
+);
+
 const titleDirty = computed(() =>
   Boolean(
     !sharedEditor.value &&
@@ -343,11 +347,20 @@ const deleteConfirmationMessage = computed(() => {
   const hasDeliveryHistory = detail.versions.some((version) =>
     Boolean(version.publicationStatus) || Boolean(version.failureClass),
   );
+  const hasPublishedDelivery = detail.versions.some((version) =>
+    version.publicationStatus === "published",
+  );
+  if (hasPublishedDelivery && hasScheduledDelivery) {
+    return `Cancel scheduled delivery and remove “${title}” from ME3? Already published posts will stay on their social platforms. Delivery history will be retained.`;
+  }
   if (hasScheduledDelivery) {
     return `Cancel scheduled delivery and delete “${title}”? Delivery history will be retained.`;
   }
   if (hasQueuedRetries) {
     return `Stop pending retries and delete “${title}”? Delivery history will be retained.`;
+  }
+  if (hasPublishedDelivery) {
+    return `Remove “${title}” from ME3? Published posts will stay on their social platforms. Delivery history will be retained.`;
   }
   if (hasDeliveryHistory) {
     return `Delete “${title}”? Delivery history will be retained.`;
@@ -355,21 +368,32 @@ const deleteConfirmationMessage = computed(() => {
   return `Delete “${title}”? This cannot be undone.`;
 });
 
-const deleteConfirmationLabel = computed(() =>
-  deleteCandidate.value?.version
-    ? `Remove ${platformLabel(deleteCandidate.value.version.platform)}`
-    : deleteCandidate.value?.detail.versions.some((version) =>
-    Boolean(version.scheduledFor) || version.publicationStatus === "scheduled",
+const deleteConfirmationLabel = computed(() => {
+  if (deleteCandidate.value?.version) {
+    return `Remove ${platformLabel(deleteCandidate.value.version.platform)}`;
+  }
+  if (deleteCandidate.value?.detail.versions.some((version) =>
+    Boolean(version.scheduledFor) || version.publicationStatus === "scheduled"
+  )) {
+    return "Cancel and delete";
+  }
+  return deleteCandidate.value?.detail.versions.some(
+    (version) => version.publicationStatus === "published",
   )
-    ? "Cancel and delete"
-    : "Delete"
-);
+    ? "Remove from ME3"
+    : "Delete";
+});
 
-const deleteActionLabel = computed(() =>
-  selectedDeleteVersion.value
-    ? `Delete ${platformLabel(selectedDeleteVersion.value.platform)} draft`
-    : "Delete draft",
-);
+const deleteActionLabel = computed(() => {
+  if (selectedDeleteVersion.value) {
+    return `Delete ${platformLabel(selectedDeleteVersion.value.platform)} draft`;
+  }
+  return selectedPost.value?.versions.some(
+    (version) => version.publicationStatus === "published",
+  )
+    ? "Remove post from ME3"
+    : "Delete draft";
+});
 
 const publishingCheckIssueCount = computed(() =>
   targetValidations.value.filter((validation) =>
@@ -568,7 +592,6 @@ function validateVersion(
 function canDeletePost(detail: SocialPostDetail): boolean {
   if (detail.post.sourceType === "legacy_content_bank_read_only") return false;
   return detail.versions.every((version) =>
-    version.publicationStatus !== "published" &&
     !(
       version.publicationStatus === "publishing" &&
       version.failureClass !== "outcome_unknown"
@@ -1158,7 +1181,6 @@ function applyOptimisticPublication(
       }),
     };
   });
-  activeMode.value = "scheduled";
   ensureVisibleSelection();
 }
 
@@ -1270,9 +1292,60 @@ async function createDraft() {
   );
   if (!site || selectedAccounts.length === 0 || saving.value) return;
   const draftText = "Untitled draft";
+  const draftFormat =
+    destinationContentType.value === "text" ? "post" : destinationContentType.value;
+  const createdAt = new Date().toISOString();
+  const optimisticPostId = `optimistic-social-post-${Date.now()}`;
+  const optimisticDetail: SocialPostDetail = {
+    post: {
+      id: optimisticPostId,
+      siteId: site.id,
+      sourceType: "pasted",
+      sourceRef: `pasted:${optimisticPostId}`,
+      sourceTitle: draftText,
+      sourceSnapshot: draftText,
+      sourceText: draftText,
+      ideaText: draftText,
+      tags: [],
+      goal: null,
+      status: "draft",
+      createdBy: "user",
+      createdAt,
+      updatedAt: createdAt,
+    },
+    versions: selectedAccounts.map((account) => ({
+      id: `${optimisticPostId}-${account.id}`,
+      postId: optimisticPostId,
+      platform: account.platform as SocialPlatform,
+      targetAccountId: account.id,
+      format: draftFormat,
+      title: null,
+      bodyText: draftText,
+      assetManifest: [],
+      sourceExcerpt: draftText,
+      approvalStatus: "draft",
+      approvedAt: null,
+      approvedByUserId: null,
+      scheduledFor: null,
+      timezone: null,
+      publicationStatus: null,
+      platformPostUrl: null,
+      publishedAt: null,
+      failureClass: null,
+      errorCode: null,
+      errorMessage: null,
+      carouselRenderSetId: null,
+      createdAt,
+      updatedAt: createdAt,
+    })),
+  };
   saving.value = true;
   destinationError.value = "";
   error.value = "";
+  posts.value = [optimisticDetail, ...posts.value];
+  activeMode.value = "drafts";
+  showDestinations.value = false;
+  selectPost(optimisticDetail);
   try {
     const detail = await social.createSocialPost({
       siteId: site.id,
@@ -1283,18 +1356,25 @@ async function createDraft() {
       versions: selectedAccounts.map((account) => {
         return {
           platform: account.platform as SocialPlatform,
-          format: destinationContentType.value === "text" ? "post" as const : destinationContentType.value,
+          format: draftFormat,
           bodyText: draftText,
           targetAccountId: account.id,
         };
       }),
     });
-    posts.value = [detail, ...posts.value];
-    activeMode.value = "drafts";
-    showDestinations.value = false;
-    selectPost(detail);
+    posts.value = posts.value.map((item) =>
+      item.post.id === optimisticPostId ? detail : item,
+    );
+    if (selectedPostId.value === optimisticPostId) selectPost(detail);
     toastSuccess(`Draft created for ${selectedAccounts.length} platform${selectedAccounts.length === 1 ? "" : "s"}.`);
   } catch (value) {
+    posts.value = posts.value.filter((item) => item.post.id !== optimisticPostId);
+    if (selectedPostId.value === optimisticPostId) {
+      selectedPostId.value = null;
+      selectVersion(null);
+      ensureVisibleSelection();
+    }
+    showDestinations.value = true;
     social.setErrorFromApi(value, "Failed to create a draft");
     destinationError.value = social.error || "Failed to create a draft";
   } finally {
@@ -1396,6 +1476,9 @@ async function confirmDeleteDraft() {
   const hasScheduledHistory = detail.versions.some((version) =>
     Boolean(version.scheduledFor) || version.publicationStatus === "scheduled",
   );
+  const hasPublishedHistory = detail.versions.some((version) =>
+    version.publicationStatus === "published",
+  );
   const snapshot = captureWorkspaceSnapshot();
 
   deleteCandidate.value = null;
@@ -1440,6 +1523,8 @@ async function confirmDeleteDraft() {
       toastSuccess(
         hasScheduledHistory
           ? "Post deleted and scheduled delivery cancelled."
+          : hasPublishedHistory
+            ? "Post removed from ME3. Published social posts were not deleted."
           : hasFailedHistory
             ? "Post deleted. Delivery history was retained."
             : "Draft deleted.",
@@ -2143,7 +2228,7 @@ function currentQueryParam(name: string): string | null {
                   v-model="editorTitle"
                   type="text"
                   maxlength="100"
-                  :readonly="selectedPostReadOnly"
+                  :readonly="selectedPostReadOnly || selectedPostOptimistic"
                   required
                   @input="scheduleEditorSave"
                   @blur="flushPendingEditorSave"
@@ -2154,7 +2239,7 @@ function currentQueryParam(name: string): string | null {
                   v-model="editorBody"
                   rows="6"
                   :aria-label="selectedVersion.platform === 'youtube' && !sharedEditor ? 'Caption' : 'Post text'"
-                  :readonly="selectedPostReadOnly"
+                  :readonly="selectedPostReadOnly || selectedPostOptimistic"
                   @input="scheduleEditorSave"
                   @blur="flushPendingEditorSave"
                 />
@@ -2166,7 +2251,7 @@ function currentQueryParam(name: string): string | null {
                 </span>
               </div>
 
-              <div v-if="!selectedPostReadOnly" class="media-attachments">
+              <div v-if="!selectedPostReadOnly && !selectedPostOptimistic" class="media-attachments">
                 <div class="media-attachments__toolbar">
                   <Button color="ghost" shape="soft" size="compact" type="button" :disabled="saving" @click="openMediaPicker">
                     <UiIcon name="Images" :size="17" aria-hidden="true" />
@@ -2196,8 +2281,8 @@ function currentQueryParam(name: string): string | null {
                 </div>
               </div>
 
-              <div v-if="!selectedPostReadOnly" class="editor-actions">
-                <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || scheduling || !canOpenSchedule" @click="openSchedule">
+              <div v-if="!selectedPostReadOnly && !selectedPostOptimistic" class="editor-actions">
+                <Button color="neutral" shape="soft" size="compact" type="button" :disabled="saving || scheduling || !canOpenSchedule" @click="openSchedule">
                   <template #icon>
                     <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
                   </template>
@@ -2223,14 +2308,14 @@ function currentQueryParam(name: string): string | null {
                   color="danger"
                   shape="soft"
                   size="compact"
+                  icon-only
                   type="button"
+                  :aria-label="deleteActionLabel"
+                  :title="deleteActionLabel"
                   :disabled="saving || scheduling || deleting"
                   @click="requestDeleteDraft"
                 >
-                  <template #icon>
-                    <UiIcon name="Trash2" :size="16" aria-hidden="true" />
-                  </template>
-                  {{ deleteActionLabel }}
+                  <UiIcon name="Trash2" :size="16" aria-hidden="true" />
                 </Button>
               </div>
             </div>
@@ -2806,9 +2891,9 @@ function currentQueryParam(name: string): string | null {
 }
 
 .social-tabs-rail :deep(.workspace-tabs__tab--active) {
-  margin-bottom: 0;
-  padding-bottom: 6px;
-  border-bottom: 0;
+  margin-bottom: -1px;
+  border-bottom-color: transparent;
+  background: var(--ui-surface);
 }
 
 .toolbar-actions :deep(button) {
@@ -2987,8 +3072,9 @@ function currentQueryParam(name: string): string | null {
   gap: 6px;
 }
 
-.editor-actions__delete {
-  margin-inline-start: auto;
+.editor-actions {
+  flex-wrap: wrap;
+  gap: 0;
 }
 
 .editor-actions__checks {
@@ -3207,6 +3293,8 @@ function currentQueryParam(name: string): string | null {
 }
 
 .version-editor {
+  align-self: start;
+  align-content: start;
   gap: 14px;
   min-width: 0;
 }
@@ -4437,18 +4525,6 @@ input:focus {
     width: 44px;
     min-width: 44px;
     min-height: 44px;
-  }
-
-  .editor-actions {
-    grid-template-columns: 1fr;
-  }
-
-  .editor-actions {
-    display: grid;
-  }
-
-  .editor-actions__delete {
-    margin-inline-start: 0;
   }
 
   .post-detail {

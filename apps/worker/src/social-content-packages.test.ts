@@ -348,6 +348,42 @@ describe("Social Posts", () => {
     await expect(listSocialPosts(env, "owner", "site-1")).resolves.toEqual([]);
   });
 
+  it("removes published Posts from ME3 without deleting publication history", async () => {
+    const { env, packages, publications } = createEnv();
+    const created = await createSocialPost(env, "owner", {
+      siteId: "site-1",
+      sourceType: "pasted",
+      sourceSnapshot: "A published owner-authored Post.",
+      sourceText: "A published owner-authored Post.",
+      ideaText: "Published Post",
+      versions: [{
+        platform: "linkedin",
+        targetAccountId: "linkedin-1",
+        bodyText: "A published owner-authored Post.",
+      }],
+    });
+    publications.push({
+      id: "publication-published",
+      variant_id: created.versions[0]!.id,
+      status: "published",
+      platform_post_url: "https://www.linkedin.com/feed/update/urn:li:activity:1",
+      published_at: "2026-07-28T08:30:00.000Z",
+    });
+
+    await expect(
+      deleteSocialPost(env, "owner", created.post.id, created.post.updatedAt),
+    ).resolves.toBe(true);
+    expect(packages[0]?.status).toBe("archived");
+    expect(publications).toEqual([
+      expect.objectContaining({
+        id: "publication-published",
+        status: "published",
+        platform_post_url: "https://www.linkedin.com/feed/update/urn:li:activity:1",
+      }),
+    ]);
+    await expect(listSocialPosts(env, "owner", "site-1")).resolves.toEqual([]);
+  });
+
   it("stops retryable queued deliveries before removing the Post", async () => {
     const { env, packages, publications, events } = createEnv();
     const created = await createSocialPost(env, "owner", {
@@ -880,7 +916,6 @@ class Statement {
       return {
         total: publications.length,
         protected: publications.filter((row) =>
-          row.status === "published" ||
           (
             row.status === "publishing" &&
             !String(row.error_code || "").startsWith("outcome_unknown")
@@ -1022,19 +1057,23 @@ class Statement {
         "outcome_unknown:provider_write_started",
       );
       const publishingClaim = this.sql.includes("SET status = 'publishing'");
-      const publicationId = providerWriteStarted || publishingClaim
-        ? this.values[1]
-        : this.values[0];
+      const publicationId = providerWriteStarted
+        ? this.values[2]
+        : publishingClaim
+          ? this.values[1]
+          : this.values[0];
       const publication = this.state.publications.find((row) => row.id === publicationId);
       if (!publication) return null as T | null;
       if (providerWriteStarted) {
         if (
           publication.status !== "publishing" ||
-          publication.updated_at !== this.values[2] ||
+          publication.updated_at !== this.values[3] ||
           String(publication.error_code || "").startsWith("outcome_unknown")
         ) return null as T | null;
         publication.error_code = "outcome_unknown:provider_write_started";
         publication.error_message = this.values[0];
+        publication.provider_response_json =
+          this.values[1] ?? publication.provider_response_json ?? null;
       } else if (this.sql.includes("SET queued_at = datetime('now')")) {
         if (publication.status !== "queued" || publication.queued_at) return null as T | null;
         publication.queued_at = new Date().toISOString();
