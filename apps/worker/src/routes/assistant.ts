@@ -139,6 +139,17 @@ type AssistantAttachmentContentRow = {
   status: "ready" | "error" | "deleted";
   storage_key: string | null;
 };
+type AssistantUploadFile = {
+  name: string;
+  type: string;
+  size: number;
+  text(): Promise<string>;
+  arrayBuffer(): Promise<ArrayBuffer>;
+};
+type AssistantAttachmentJsonUploadBody = {
+  threadId?: unknown;
+  attachments?: unknown;
+};
 type AssistantAttachmentTextContextRow = {
   id: string;
   filename: string;
@@ -227,6 +238,98 @@ function normalizeAssistantAttachmentId(value: unknown): string | null {
   return trimmed;
 }
 
+async function parseAssistantAttachmentUploadRequest(
+  c: Context<{ Bindings: Env }>,
+): Promise<
+  | { files: AssistantUploadFile[]; threadId: string | null }
+  | { error: string; status: 400 }
+> {
+  const contentType = c.req.header("Content-Type") || "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    const form = await c.req.formData().catch((): FormData | null => null);
+    if (!form) return { error: "Attachment upload is invalid", status: 400 };
+
+    const threadIdInput = form.get("threadId");
+    return {
+      files: form
+        .getAll("attachments")
+        .filter((entry): entry is File => entry instanceof File),
+      threadId:
+        typeof threadIdInput === "string" && threadIdInput.trim()
+          ? threadIdInput.trim()
+          : null,
+    };
+  }
+
+  const body = await c.req
+    .json<AssistantAttachmentJsonUploadBody>()
+    .catch((): AssistantAttachmentJsonUploadBody => ({}));
+  if (!Array.isArray(body.attachments)) {
+    return { error: "Choose at least one attachment", status: 400 };
+  }
+
+  const files: AssistantUploadFile[] = [];
+  for (const [index, value] of body.attachments.entries()) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { error: `Attachment ${index + 1} is invalid`, status: 400 };
+    }
+    const attachment = value as Record<string, unknown>;
+    const filename =
+      typeof attachment.filename === "string" && attachment.filename.trim()
+        ? attachment.filename.trim()
+        : `attachment-${index + 1}`;
+    const mimeType =
+      typeof attachment.mimeType === "string" && attachment.mimeType.trim()
+        ? attachment.mimeType.trim()
+        : "application/octet-stream";
+    if (typeof attachment.dataBase64 !== "string" || !attachment.dataBase64.trim()) {
+      return { error: `${filename} has no upload data`, status: 400 };
+    }
+    const encodedData = attachment.dataBase64.trim();
+    const maximumEncodedLength =
+      Math.ceil(MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES / 3) * 4 + 4;
+    if (encodedData.length > maximumEncodedLength) {
+      return {
+        error: `${filename} is larger than ${formatAssistantByteLimit(
+          MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES,
+        )}`,
+        status: 400,
+      };
+    }
+
+    let bytes: Uint8Array;
+    try {
+      const binary = atob(encodedData);
+      bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    } catch {
+      return { error: `${filename} upload data is invalid`, status: 400 };
+    }
+    const uploadBuffer = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(uploadBuffer).set(bytes);
+    const blob = new Blob([uploadBuffer], { type: mimeType });
+    files.push({
+      name: filename,
+      type: mimeType,
+      size: bytes.byteLength,
+      text: () => blob.text(),
+      arrayBuffer: () => blob.arrayBuffer(),
+    });
+  }
+
+  return {
+    files,
+    threadId:
+      typeof body.threadId === "string" && body.threadId.trim()
+        ? body.threadId.trim()
+        : null,
+  };
+}
+
+function formatAssistantByteLimit(bytes: number) {
+  if (bytes < 1_000_000) return `${Math.round(bytes / 1_000)} KB`;
+  return `${Math.round(bytes / 100_000) / 10} MB`;
+}
+
 export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) {
   const { requireOwner, unauthorized, getSessionOwnerId, getSetupRequired } = deps;
 
@@ -287,12 +390,11 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const ownerId = await requireOwner(c);
     if (!ownerId) return unauthorized(c);
 
-    const form = await c.req.formData().catch((): FormData | null => null);
-    if (!form) return c.json({ ok: false, error: "Attachment upload is invalid" }, 400);
-
-    const files = form
-      .getAll("attachments")
-      .filter((entry): entry is File => entry instanceof File);
+    const upload = await parseAssistantAttachmentUploadRequest(c);
+    if ("error" in upload) {
+      return c.json({ ok: false, error: upload.error }, upload.status);
+    }
+    const { files, threadId } = upload;
     if (files.length === 0) return c.json({ ok: false, error: "Choose at least one attachment" }, 400);
     if (files.length > MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT) {
       return c.json(
@@ -304,11 +406,6 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       );
     }
 
-    const threadIdInput = form.get("threadId");
-    const threadId =
-      typeof threadIdInput === "string" && threadIdInput.trim()
-        ? threadIdInput.trim()
-        : null;
     if (threadId) {
       const thread = await getAssistantThread(c.env, ownerId, threadId);
       if (!thread) return c.json({ ok: false, error: "Assistant thread not found" }, 404);
@@ -3775,7 +3872,10 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     return null;
   }
 
-  function normalizeAssistantAttachmentMimeType(file: File, filename: string) {
+  function normalizeAssistantAttachmentMimeType(
+    file: Pick<AssistantUploadFile, "type">,
+    filename: string,
+  ) {
     const explicit = file.type.trim();
     const lower = filename.toLowerCase();
     if (!explicit || explicit === "application/octet-stream") {
@@ -3792,8 +3892,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   }
 
   function formatByteLimit(bytes: number) {
-    if (bytes < 1_000_000) return `${Math.round(bytes / 1_000)} KB`;
-    return `${Math.round(bytes / 100_000) / 10} MB`;
+    return formatAssistantByteLimit(bytes);
   }
 
   function isMissingAssistantAttachmentsTableError(error: unknown) {

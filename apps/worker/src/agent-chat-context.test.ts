@@ -365,8 +365,8 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           return null;
         },
         async all<T>() {
-          if (dbState.failContextLookup && sql.includes("FROM mission_private_memory")) {
-            throw new Error("mission_private_memory unavailable");
+          if (dbState.failContextLookup && sql.includes("FROM mission_projects")) {
+            throw new Error("owner snapshot unavailable");
           }
           if (sql.includes("FROM assistant_messages")) {
             return { results: dbState.recentMessages as T[] };
@@ -384,7 +384,18 @@ function createEnv(state: Partial<FakeDbState> = {}) {
             return { results: dbState.mailboxMessages as T[] };
           }
           if (sql.includes("FROM mission_projects")) {
-            return { results: dbState.projects as T[] };
+            return {
+              results: dbState.projects.map((project) => ({
+                ...project,
+                open_task_count: dbState.tasks.filter(
+                  (task) =>
+                    task.project_id === project.id &&
+                    !task.archived_at &&
+                    task.status !== "done" &&
+                    task.status !== "cancelled",
+                ).length,
+              })) as T[],
+            };
           }
           if (sql.includes("FROM mission_tasks")) {
             if (sql.includes("LEFT JOIN mission_projects")) {
@@ -779,7 +790,7 @@ describe("Core chat native context", () => {
     expect(resultKeys).toContain("agent-chat:sandbox:result:request-32");
   });
 
-  it("adds source-labeled native context to model prompts", async () => {
+  it("adds only the compact owner snapshot to model prompts", async () => {
     const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
       response: "Context-aware reply.",
     }));
@@ -840,28 +851,42 @@ describe("Core chat native context", () => {
     expect(response.replyText).toBe("Context-aware reply.");
     expect(response.contextPacketId).toBe("agent-context:owner:chat_reply");
     expect(response.contextSummary).toContain("Used context from:");
-    expect(response.contextManifest?.sources).toContainEqual(
-      expect.objectContaining({
-        id: "contact-ada",
-        kind: "contact",
-        reason: "Contact token matched the request.",
-      }),
+    expect(response.contextManifest?.sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "owner", kind: "owner_profile" }),
+        expect.objectContaining({
+          id: "project-analytics",
+          kind: "project",
+          reason: "Project metadata; 1 open task.",
+        }),
+        expect.objectContaining({ id: "owner-me-json", kind: "public_me_json" }),
+      ]),
     );
     const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
       messages: Array<{ role: string; content: string }>;
     };
     const system = modelInput.messages[0]?.content || "";
 
-    expect(system).toContain("ME3 agent context packet:");
-    expect(system).toContain("Contacts\n- Ada Lovelace (client)");
-    expect(system).toContain("Audience: Founders building calmer agent products");
-    expect(system).toContain("Email threads\n- Workflow notes");
-    expect(system).toContain("Projects\n- Analytics Workflow");
-    expect(system).toContain("Private memory\n- relationship_note");
-    expect(system).toContain("Context sources");
-    expect(system).toContain("contact:contact-ada");
-    expect(system).not.toContain("Grace Hopper");
-    expect(system).not.toContain("Compiler Notes");
+    expect(system).toContain("ME3 owner snapshot:");
+    expect(system).toContain('"audience":"Founders building calmer agent products"');
+    expect(system).toContain(
+      "Analytics Workflow: Analytics Workflow project context. Open tasks: 1.",
+    );
+    expect(system).toContain(
+      "Compiler Notes: Compiler Notes project context. Open tasks: 1.",
+    );
+    expect(system).not.toContain("Ada Lovelace");
+    expect(system).not.toContain("Workflow notes");
+    expect(system).not.toContain("Send Ada workflow update");
+    expect(system).not.toContain("relationship_note");
+    expect(response.contextManifest?.sources).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "assistant_message" }),
+        expect.objectContaining({ kind: "contact" }),
+        expect.objectContaining({ kind: "email_thread" }),
+        expect.objectContaining({ kind: "task" }),
+      ]),
+    );
     expect(response.trace?.context).toMatchObject({
       status: "loaded",
       characterCount: expect.any(Number),
@@ -967,9 +992,34 @@ describe("Core chat native context", () => {
     );
   });
 
-  it("adds contact directory context when the owner asks to list contacts", async () => {
+  it("answers model identity from runtime configuration without asking the model", async () => {
+    const aiRun = vi.fn(async () => ({ response: "This should not be used." }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_AI_CHAT_MODEL: "moonshotai/kimi-k3",
+        ME3_AI_CHAT_BACKUP_MODEL: "zai-org/glm-4.7-flash",
+      } as never,
+      createStorage(),
+      dispatchInput("What model are we using?"),
+    );
+
+    expect(response).toMatchObject({
+      source: "tool",
+      specialist: "core.agent-chat.conversation",
+      model: null,
+    });
+    expect(response.replyText).toContain("moonshotai/kimi-k3");
+    expect(response.replyText).toContain("zai-org/glm-4.7-flash");
+    expect(aiRun).not.toHaveBeenCalled();
+  });
+
+  it("does not preload the contact directory outside the owner snapshot", async () => {
     const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
-      response: "You have Ada, Grace, and Mina in contacts.",
+      response: "Contacts require a dedicated read.",
     }));
     const env = createEnv({
       contacts: [
@@ -985,35 +1035,19 @@ describe("Core chat native context", () => {
       dispatchInput("Can you list the contacts I have?"),
     );
 
-    expect(response.replyText).toBe("You have Ada, Grace, and Mina in contacts.");
-    expect(response.contextSummary).toContain("3 contacts");
-    expect(response.contextManifest?.sources).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "contact-ada",
-          kind: "contact",
-          reason: "Contact directory requested by the owner.",
-        }),
-        expect.objectContaining({
-          id: "contact-grace",
-          kind: "contact",
-          reason: "Contact directory requested by the owner.",
-        }),
-        expect.objectContaining({
-          id: "contact-mina",
-          kind: "contact",
-          reason: "Contact directory requested by the owner.",
-        }),
-      ]),
+    expect(response.replyText).toBe("Contacts require a dedicated read.");
+    expect(response.contextSummary).toContain("1 owner profile");
+    expect(response.contextManifest?.sources).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "contact" })]),
     );
     const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
       messages: Array<{ role: string; content: string }>;
     };
     const system = modelInput.messages[0]?.content || "";
 
-    expect(system).toContain("Contacts\n- Ada Lovelace (client)");
-    expect(system).toContain("- Grace Hopper (contact)");
-    expect(system).toContain("- Mina Murray (prospect)");
+    expect(system).not.toContain("Ada Lovelace");
+    expect(system).not.toContain("Grace Hopper");
+    expect(system).not.toContain("Mina Murray");
   });
 
   it("extracts Workers AI chat-completion shaped replies", async () => {
@@ -1378,6 +1412,78 @@ describe("Core chat native context", () => {
       "Assistant attachment references",
     );
     expect(modelInput.messages.at(-1)?.content).toContain("image.png");
+  });
+
+  it("passes managed Kimi K3 images as Chat Completions content parts", async () => {
+    const imageStorageKey = "assistant/owner/thread-1/kimi-image.png";
+    const imageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const r2 = createR2Bucket();
+    await r2.bucket.put(imageStorageKey, imageBytes, {
+      httpMetadata: { contentType: "image/png" },
+    });
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Kimi can see the image.",
+    }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        SITE_ASSETS: r2.bucket,
+      } as never,
+      createStorage(),
+      {
+        ...dispatchInput("Describe this image."),
+        selectedModel: {
+          providerId: "workers-ai",
+          model: "moonshotai/kimi-k3",
+          optionId: "managed-kimi-k3",
+        },
+        attachments: [
+          {
+            id: "attachment-kimi-image",
+            name: "kimi-image.png",
+            mimeType: "image/png",
+            size: imageBytes.byteLength,
+            kind: "image",
+            status: "ready",
+            storageKey: imageStorageKey,
+            hasText: false,
+            textTruncated: false,
+          },
+        ],
+      },
+    );
+
+    expect(response).toMatchObject({
+      replyText: "Kimi can see the image.",
+      model: "moonshotai/kimi-k3",
+      source: "workers-ai",
+    });
+    expect(aiRun).toHaveBeenCalledWith(
+      "moonshotai/kimi-k3",
+      expect.objectContaining({ messages: expect.any(Array) }),
+    );
+    const modelInput = aiRun.mock.calls[0]?.[1] as {
+      messages: Array<{ role: string; content: unknown }>;
+      image?: string;
+    };
+    const userContent = modelInput.messages.at(-1)?.content as Array<
+      | { type: "text"; text: string }
+      | { type: "image_url"; image_url: { url: string } }
+    >;
+    expect(userContent).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("kimi-image.png"),
+      }),
+      {
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,iVBORw==" },
+      },
+    ]);
+    expect(modelInput.image).toBeUndefined();
   });
 
   it("classifies image generation without treating prompt drafting or image analysis as generation", () => {
@@ -2183,7 +2289,10 @@ describe("Core chat native context", () => {
     expect(modelInput.messages[0]?.content).toContain(
       "Mission statement:\n- Help builders steer their work with calm, useful systems.",
     );
-    expect(modelInput.messages[0]?.content).toContain("Wheel of Life snapshot:");
+    expect(modelInput.messages[0]?.content).toContain(
+      "Goals:\n- Keep useful systems calm and practical.",
+    );
+    expect(modelInput.messages[0]?.content).not.toContain("Wheel of Life snapshot:");
     expect(modelInput.messages[0]?.content).toContain("Offer 2-4 useful test prompts");
     expect(
       env.state.queries.filter((sql) => sql.includes("FROM plugin_installations")),
@@ -2334,9 +2443,9 @@ describe("Core chat native context", () => {
         configured: true,
       },
       context: {
-        status: "not_attempted",
-        characterCount: 0,
-        loadDurationMs: null,
+        status: "loaded",
+        characterCount: expect.any(Number),
+        loadDurationMs: expect.any(Number),
       },
       modelCall: {
         status: "succeeded",
@@ -2372,7 +2481,7 @@ describe("Core chat native context", () => {
       context: {
         status: "failed",
         packetId: null,
-        error: "mission_private_memory unavailable",
+        error: "owner snapshot unavailable",
       },
       modelCall: {
         status: "succeeded",
@@ -2579,9 +2688,9 @@ describe("Core chat native context", () => {
       ],
       trace: {
         context: {
-          status: "not_attempted",
-          characterCount: 0,
-          loadDurationMs: null,
+          status: "loaded",
+          characterCount: expect.any(Number),
+          loadDurationMs: expect.any(Number),
         },
         route: { path: "model", capabilityId: "core.mission.task.create" },
         modelCall: { status: "succeeded" },
@@ -2810,20 +2919,15 @@ describe("Core chat native context", () => {
     expect(env.state.persistedMessages.map((message) => message.role)).toEqual(["user"]);
   });
 
-  it("trims oversized native context before model calls", async () => {
+  it("trims an oversized owner snapshot before model calls", async () => {
     const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
       response: "Trimmed reply.",
     }));
     const env = createEnv({
-      memory: [
-        memoryRow(
-          "memory-budget",
-          "owner_note",
-          `Budget context ${"very long ".repeat(900)}`,
-          "owner",
-          null,
-        ),
-      ],
+      projects: Array.from({ length: 30 }, (_, index) => ({
+        ...projectRow(`project-${index}`, `Project ${index}`, `project-${index}`),
+        description: `Project context ${"very long ".repeat(120)}`,
+      })),
     });
 
     const response = await dispatchAgentSandboxTurn(
@@ -2835,7 +2939,9 @@ describe("Core chat native context", () => {
     const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
       messages: Array<{ role: string; content: string }>;
     };
-    expect(modelInput.messages[0]?.content).toContain("[Context trimmed to prompt budget]");
+    expect(modelInput.messages[0]?.content).toContain(
+      "[Owner snapshot trimmed to prompt budget]",
+    );
     expect(response.contextManifest?.budget).toMatchObject({
       wasTrimmed: true,
       trimReason: "maxPromptChars",

@@ -117,6 +117,7 @@ export type PostVersion = {
   platform: SocialPlatform;
   targetAccountId: string | null;
   format: "post" | "image" | "carousel" | "short_video";
+  title?: string | null;
   bodyText: string;
   assetManifest: SocialMediaAsset[];
   sourceExcerpt: string | null;
@@ -362,12 +363,15 @@ export type CreateSocialPostInput = {
   versions: Array<{
     platform: SocialPlatform;
     targetAccountId?: string | null;
+    format?: PostVersion["format"];
+    title?: string | null;
     bodyText: string;
   }>;
 };
 
 export type PostVersionUpdate = {
   targetAccountId?: string | null;
+  title?: string | null;
   bodyText?: string;
   assetManifest?: SocialMediaAsset[];
   approvalStatus?: PostVersion["approvalStatus"];
@@ -377,6 +381,7 @@ export type CreatePostVersionInput = {
   platform: SocialPlatform;
   targetAccountId?: string | null;
   format?: PostVersion["format"];
+  title?: string | null;
   bodyText: string;
   assetManifest?: SocialMediaAsset[];
 };

@@ -9,12 +9,8 @@ import {
   isCoreChatCapabilityApprovalRequired,
 } from "./capabilities";
 import {
-  buildMe3AgentContextPrompt,
   buildMe3CapabilityContext,
-  createMe3AgentContextManifest,
   ME3_BUNDLED_AGENT_SKILLS,
-  resolveMe3AgentContextPacket,
-  summarizeMe3AgentContextManifest,
   type Me3AgentContextCalendarEvent,
   type Me3AgentContextContact,
   type Me3AgentContextEmailThread,
@@ -82,6 +78,7 @@ export {
 } from "@me3-core/plugin-mission-control";
 import { maybeHandleSiteBlogPostToolTurn } from "./site-blog";
 import { runCoreAgentToolTurn } from "./core-agent-runtime";
+import { loadOwnerSnapshotContext } from "./owner-snapshot";
 import type { AgentModelUsage } from "./tool-runtime";
 import {
   listAgentMissionProjects as loadAgentMissionProjects,
@@ -1031,7 +1028,6 @@ const DEFAULT_AI_GATEWAY_ID = "default";
 const DEFAULT_IMAGE_GENERATION_WIDTH = 1024;
 const DEFAULT_IMAGE_GENERATION_HEIGHT = 1024;
 const INSTALL_ENCRYPTION_KEY_NAME = "TOKEN_ENCRYPTION_KEY";
-const CHAT_CONTEXT_PROMPT_BUDGET_CHARS = 3500;
 const DEFAULT_MISSION_STATEMENT_TEMPLATE_MARKER = "[who/what]";
 const MAX_WHEEL_SNAPSHOT_AREAS = 8;
 const CONTACT_SOURCES = new Set<AgentContactSource>([
@@ -2150,6 +2146,7 @@ export async function dispatchAgentSandboxTurn(
     input,
     owner,
     toolPlan,
+    route,
   );
   if (toolResponse) {
     await persistAssistantMessage(
@@ -2254,14 +2251,10 @@ export async function dispatchAgentSandboxTurn(
           owner,
         )
       : Promise.resolve({ prompt: "", pluginInstallations: [] }),
-    shouldLoadCoreChatAgentContext(runtimeMessageText, toolPlan.decision)
-      ? loadCoreChatAgentContext(env, {
-          ownerId: input.userId,
-          owner,
-          recent,
-          messageText: runtimeMessageText,
-        })
-      : Promise.resolve(null),
+    loadCoreChatAgentContext(env, {
+      ownerId: input.userId,
+      owner,
+    }),
   ]);
   const knowledgeContext = orientationTurn && route.configured
     ? buildMe3KnowledgeRuntimeContext(
@@ -3076,9 +3069,24 @@ async function maybeHandleCoreToolTurn(
   input: AgentSandboxDispatchInput,
   owner: OwnerProfileRow | null,
   toolPlan: CoreChatToolTurnPlan,
+  route: AiRoute,
 ): Promise<AgentSandboxDispatchResponse | null> {
   const messageText = input.messageText.trim();
   const plannerDecision = toolPlan.decision;
+
+  if (isConfiguredModelIdentityRequest(messageText)) {
+    const backup = route.backupModel && route.backupModel !== route.model
+      ? ` If that model is unavailable, ME3 can fall back to ${route.backupModel}.`
+      : "";
+    const replyText = route.configured
+      ? `This Assistant mode is configured to use ${route.model}.${backup}`
+      : "This ME3 installation does not currently have an AI model configured.";
+    return toolResponse(
+      input.turnId,
+      "core.agent-chat.conversation",
+      replyText,
+    );
+  }
 
   if (
     plannerDecision.kind === "conversation" ||
@@ -3136,6 +3144,16 @@ async function maybeHandleCoreToolTurn(
   }
 
   return null;
+}
+
+function isConfiguredModelIdentityRequest(messageText: string): boolean {
+  const text = messageText.trim();
+  if (!text || text.length > 180) return false;
+  return (
+    /\bwhat\s+(?:ai\s+)?model\s+(?:are|is)\s+(?:we|you|me3)\s+(?:using|running|on)\b/i.test(text) ||
+    /\bwhich\s+(?:ai\s+)?model\s+(?:are|is)\s+(?:we|you|me3)\s+(?:using|running|on)\b/i.test(text) ||
+    /\bwhat(?:'s| is)\s+(?:your|the)\s+(?:underlying\s+|current\s+)?model\b/i.test(text)
+  );
 }
 
 const RECOVERABLE_NATIVE_TOOL_PARSER_REASONS = new Set([
@@ -5481,7 +5499,6 @@ function buildChatMessages(
     `Your assistant display name is ${JSON.stringify(assistantName)}.`,
     "If asked who you are or what your name is, use the assistant display name.",
     `The owner is ${ownerName}.`,
-    owner?.bio ? `Owner profile context: ${owner.bio}` : null,
     owner?.timezone ? `Owner timezone: ${owner.timezone}` : null,
     knowledgeContext,
     agentContextPrompt,
@@ -5490,6 +5507,7 @@ function buildChatMessages(
       ? `Private runtime source selection for follow-up tool calls: sourceType=${sourceReference.sourceType}; sourceId=${sourceReference.sourceId}. Never show this source ID to the owner.`
       : null,
     "Answer helpfully and plainly. Do not claim external actions are complete unless a tool result says they are.",
+    "The ME3 owner snapshot contains all owner data available without a tool call. Never claim Journal-entry content, task details, or email content from memory or prior assistant replies. Use the relevant read tool in this turn.",
     "When the owner is setting up ME3, testing the assistant, or asking what you can do, acknowledge their goal and explain useful next steps from the available capability/context map. Treat capability examples as context unless the owner clearly asks for one concrete action.",
     "When the owner asks to configure ME3, use the setup readiness summary first: separate what already looks ready from the most useful missing next steps. Use 'your ME3 installation' in owner-facing setup copy, not 'Core install'.",
     "For public setup, say 'Public site/profile' and focus on profile basics, published/draft site status, and custom domain. Do not mention me.json, projects, or mission as public profile setup items.",
@@ -5525,30 +5543,6 @@ function isCoreChatOrientationTurn(decision: CoreChatToolPlannerDecision): boole
   );
 }
 
-function shouldLoadCoreChatAgentContext(
-  messageText: string,
-  decision: CoreChatToolPlannerDecision,
-): boolean {
-  if (decision.kind !== "conversation") return false;
-  if (isCoreChatOrientationTurn(decision)) return true;
-
-  const asksForAdvice = /\b(?:brainstorm|prioriti[sz]e|strategy|plan with me|help me think|what should)\b/i
-    .test(messageText);
-  if (asksForAdvice) return true;
-
-  // This is only a context-loading hint. Runtime v2 still chooses and executes
-  // every action through model tool calls and executable schemas.
-  const reminderAction = /\b(?:reminders?|nudges?)\b/i.test(messageText) ||
-    /\bremind\s+me\b/i.test(messageText);
-  const taskAction = /\b(?:mission\s+control|tasks?|todos?|projects?)\b/i.test(messageText) &&
-    /\b(?:add|archive|create|delete|list|mark|move|open|read|show|update)\b/i.test(messageText);
-  const mailboxToolAction = /\b(?:mailbox|inbox|emails?|drafts?)\b/i.test(messageText) &&
-    /\b(?:check|find|keep|latest|list|open|read|save|search|show|store)\b/i.test(messageText);
-  const socialAction = /\b(?:social|linkedin|twitter|instagram)\b/i.test(messageText) &&
-    /\b(?:create|draft|read|repurpose|use|write)\b/i.test(messageText);
-  return !(reminderAction || taskAction || mailboxToolAction || socialAction);
-}
-
 function buildCoreChatOrientationPrompt(
   decision: CoreChatToolPlannerDecision,
   setupReadiness: CoreChatSetupReadiness,
@@ -5566,7 +5560,7 @@ function buildCoreChatOrientationPrompt(
     "- Ask at most one focused question, and only if it materially helps.",
     "- In owner-facing wording, say 'your ME3 installation' instead of 'Core install'.",
     "- For public setup, say 'Public site/profile'. Do not mention me.json, projects, or mission as public profile setup items.",
-    "- If Mission statement or Wheel of Life context appears in the ME3 agent context packet, mention it as private context available for planning.",
+    "- If Mission statement or goals appear in the ME3 owner snapshot, mention them as private context available for planning.",
     "- Avoid internal product nouns such as recipes, event ingress, capability registry, run artifact, or review packet unless the owner asks about internals.",
     setupReadiness.prompt,
   ].join("\n");
@@ -5821,7 +5815,8 @@ function isCoreRuntimeToolSpecialist(specialist: string | null): boolean {
   return Boolean(
     specialist?.startsWith("core.reminders.") ||
       specialist?.startsWith("core.mission.task.") ||
-      specialist?.startsWith("core.mailbox."),
+      specialist?.startsWith("core.mailbox.") ||
+      specialist === "core.journal.read",
   );
 }
 
@@ -5842,85 +5837,30 @@ async function loadCoreChatAgentContext(
   input: {
     ownerId: string;
     owner: OwnerProfileRow | null;
-    recent: Array<{ role: "user" | "assistant"; content: string }>;
-    messageText: string;
   },
 ): Promise<CoreChatAgentContextResult> {
   const startedAt = performance.now();
   try {
-    const activeDate = localDateForTimezone(input.owner?.timezone || null);
-    const contactsPromise = loadCoreContextContacts(env, input.ownerId);
-    const [
-      contacts,
-      emailThreads,
-      projects,
-      tasks,
-      calendarEvents,
-      privateMemory,
-      missionStatement,
-      publicBusiness,
-      lifeSnapshot,
-      skills,
-    ] =
-      await Promise.all([
-        contactsPromise,
-        contactsPromise.then((contacts) =>
-          loadCoreContextEmailThreads(env, input.ownerId, contacts)
-        ),
-        loadCoreContextProjects(env, input.ownerId),
-        loadCoreContextTasks(env, input.ownerId),
-        loadCoreContextCalendarEvents(env, input.ownerId),
-        loadCoreContextPrivateMemory(env, input.ownerId),
-        loadCoreContextMissionStatement(env, input.ownerId),
-        loadAgentPublicBusinessContext(env, input.ownerId),
-        loadCoreContextLifeSnapshot(env, input.ownerId),
-        loadCoreContextSkills(env, input.ownerId, input.messageText),
-      ]);
-
-    const packet = resolveMe3AgentContextPacket({
+    const snapshot = await loadOwnerSnapshotContext({
+      db: env.DB,
       ownerId: input.ownerId,
-      purpose: "chat_reply",
-      surface: "core",
-      requestSummary: summarizeRequest(input.messageText),
-      requestText: input.messageText,
-      ownerProfile: input.owner ? mapOwnerProfileToContext(input.owner) : null,
-      missionStatement,
-      lifeSnapshot,
-      publicIdentity: input.owner
+      owner: input.owner
         ? {
-            summary: summarizeAgentPublicIdentity(input.owner.bio, publicBusiness),
-            meJsonUrl: coreMeJsonUrl(env),
-            actions: ["chat"],
-            source: contextSource({
-              id: "owner-me-json",
-              kind: "public_me_json",
-              label: "Public me.json",
-              visibility: "public",
-              reason: "Public identity context for agents.",
-            }),
+            id: input.owner.id,
+            name: input.owner.name,
+            username: input.owner.username,
+            timezone: input.owner.timezone,
+            assistantName: normalizeAssistantDisplayName(input.owner.assistant_name),
           }
         : null,
-      candidateContacts: contacts,
-      candidateEmailThreads: emailThreads,
-      candidateProjects: projects,
-      candidateTasks: tasks,
-      candidateCalendarEvents: calendarEvents,
-      candidatePrivateMemory: privateMemory,
-      candidateRecentMessages: mapRecentMessagesToContext(input.recent),
-      resolverOptions: { maxContacts: 12 },
-      skills,
-      activeScope: { date: activeDate },
-      budget: { maxPromptChars: CHAT_CONTEXT_PROMPT_BUDGET_CHARS },
+      meJsonUrl: coreMeJsonUrl(env),
     });
-
-    const prompt = buildMe3AgentContextPrompt(packet);
-    const manifest = createMe3AgentContextManifest(packet, prompt.budget);
     return {
       status: "loaded",
-      prompt: prompt.text,
-      manifest,
-      summary: summarizeMe3AgentContextManifest(manifest),
-      characterCount: prompt.text.length,
+      prompt: snapshot.prompt,
+      manifest: snapshot.manifest,
+      summary: snapshot.summary,
+      characterCount: snapshot.characterCount,
       loadDurationMs: Number((performance.now() - startedAt).toFixed(2)),
       error: null,
     };

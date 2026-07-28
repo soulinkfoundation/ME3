@@ -50,6 +50,7 @@ export type PostVersion = {
   platform: SocialPlatform;
   targetAccountId: string | null;
   format: SocialPostFormat;
+  title: string | null;
   bodyText: string;
   assetManifest: SocialMediaAsset[];
   carouselRenderSetId: string | null;
@@ -96,6 +97,7 @@ export type CreateSocialPostInput = {
     platform: SocialPlatform;
     targetAccountId?: string | null;
     format?: SocialPostFormat;
+    title?: string | null;
     bodyText: string;
     assetManifest?: SocialMediaAsset[];
   }>;
@@ -104,6 +106,7 @@ export type CreateSocialPostInput = {
 export type UpdatePostVersionInput = {
   targetAccountId?: string | null;
   format?: SocialPostFormat;
+  title?: string | null;
   bodyText?: string;
   assetManifest?: SocialMediaAsset[];
   approvalStatus?: SocialPostApprovalStatus;
@@ -113,6 +116,7 @@ export type CreatePostVersionInput = {
   platform: SocialPlatform;
   targetAccountId?: string | null;
   format?: SocialPostFormat;
+  title?: string | null;
   bodyText: string;
   assetManifest?: SocialMediaAsset[];
 };
@@ -166,6 +170,7 @@ type VariantRow = {
   platform: SocialPlatform;
   target_account_id: string | null;
   format: SocialContentVariantFormat;
+  title: string | null;
   body_text: string;
   asset_manifest_json: string;
   carousel_render_set_id: string | null;
@@ -279,8 +284,8 @@ async function createSocialContentPackage(
         `INSERT INTO social_variants (
            id, package_id, platform, target_account_id, format, body_text,
            asset_manifest_json, source_excerpt, approval_status,
-           created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+           created_at, updated_at, title
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
       ).bind(
         variantId,
         id,
@@ -292,6 +297,7 @@ async function createSocialContentPackage(
         sourceSnapshot.slice(0, 1_000),
         now,
         now,
+        optionalText(variant.title),
       ),
       env.DB.prepare(
         `INSERT INTO social_publication_events (
@@ -374,7 +380,7 @@ async function listPackageVariants(
   packageId: string,
 ): Promise<SocialAccountVariant[]> {
   const variants = await env.DB.prepare(
-    `SELECT v.id, v.package_id, v.platform, v.target_account_id, v.format, v.body_text,
+    `SELECT v.id, v.package_id, v.platform, v.target_account_id, v.format, v.title, v.body_text,
             v.asset_manifest_json, v.carousel_render_set_id, v.source_excerpt,
             v.approval_status, v.approved_at,
             v.approved_by_user_id,
@@ -437,7 +443,7 @@ async function updateSocialAccountVariant(
   const existing = await env.DB.prepare(
     `SELECT v.id, v.package_id, p.site_id, p.source_type AS post_source_type,
             v.platform, v.target_account_id,
-            v.format, v.body_text, v.asset_manifest_json, v.carousel_render_set_id,
+            v.format, v.title, v.body_text, v.asset_manifest_json, v.carousel_render_set_id,
             v.source_excerpt,
             v.approval_status, v.approved_at, v.approved_by_user_id,
             v.scheduled_for, v.timezone, v.created_at, v.updated_at
@@ -459,6 +465,9 @@ async function updateSocialAccountVariant(
   const bodyText = input.bodyText === undefined
     ? existing.body_text
     : requiredText(input.bodyText, "bodyText is required");
+  const title = input.title === undefined
+    ? existing.title
+    : optionalText(input.title);
   const targetAccountId = input.targetAccountId === undefined
     ? existing.target_account_id
     : optionalText(input.targetAccountId);
@@ -467,6 +476,7 @@ async function updateSocialAccountVariant(
     ? existing.asset_manifest_json
     : JSON.stringify(input.assetManifest);
   const contentChanged =
+    title !== existing.title ||
     bodyText !== existing.body_text ||
     targetAccountId !== existing.target_account_id ||
     format !== existing.format ||
@@ -521,6 +531,12 @@ async function updateSocialAccountVariant(
       variantId,
     ),
   ];
+  if (input.title !== undefined) {
+    statements.push(
+      env.DB.prepare("UPDATE social_variants SET title = ? WHERE id = ?")
+        .bind(title, variantId),
+    );
+  }
   if (contentChanged || approvalStatus !== "approved") {
     const reason = contentChanged ? "version_changed" : "approval_revoked";
     // Audit every scheduled row first, then cancel that exact set in the same
@@ -783,7 +799,16 @@ export async function deleteSocialPost(
   }
   const publicationSummary = await env.DB.prepare(
     `SELECT COUNT(*) AS total,
-            SUM(CASE WHEN publication.status IN ('scheduled', 'publishing', 'published')
+            SUM(CASE WHEN publication.status = 'published'
+              OR (
+                publication.status = 'publishing' AND (
+                  publication.error_code IS NULL OR
+                  (
+                    publication.error_code != 'outcome_unknown' AND
+                    publication.error_code NOT LIKE 'outcome_unknown:%'
+                  )
+                )
+              )
               OR (
                 publication.status = 'queued' AND (
                   publication.error_code IS NULL OR
@@ -799,21 +824,18 @@ export async function deleteSocialPost(
     .first<{ total: number | string; protected: number | string | null }>();
   const publicationCount = Number(publicationSummary?.total || 0);
   const protectedPublicationCount = Number(publicationSummary?.protected || 0);
-  if (
-    protectedPublicationCount > 0 ||
-    existing.variants.some((version) => version.scheduledFor)
-  ) {
+  if (protectedPublicationCount > 0) {
     throw new SocialPostInputError(
-      "Scheduled, publishing, or published Posts cannot be deleted.",
+      "Posts that are actively publishing or already published cannot be deleted.",
       409,
     );
   }
 
   if (publicationCount > 0) {
     const archivedAt = monotonicUpdatedAt(existing.package.updatedAt);
-    const retryCancellationPayload = JSON.stringify({
+    const deliveryCancellationPayload = JSON.stringify({
       action: "cancelled",
-      reason: "owner_removed_retrying_post",
+      reason: "owner_removed_post",
       ownerId,
     });
     await env.DB.batch([
@@ -826,8 +848,13 @@ export async function deleteSocialPost(
          FROM social_publications publication
          JOIN social_variants version ON version.id = publication.variant_id
          WHERE version.package_id = ?
-           AND publication.status = 'queued'
-           AND publication.error_code LIKE 'retryable:%'
+           AND (
+             publication.status = 'scheduled'
+             OR (
+               publication.status = 'queued'
+               AND publication.error_code LIKE 'retryable:%'
+             )
+           )
            AND EXISTS (
              SELECT 1
              FROM social_packages post
@@ -837,7 +864,7 @@ export async function deleteSocialPost(
                AND site.user_id = ?
            )`,
       ).bind(
-        retryCancellationPayload,
+        deliveryCancellationPayload,
         archivedAt,
         postId,
         expectedUpdatedAt,
@@ -846,11 +873,24 @@ export async function deleteSocialPost(
       env.DB.prepare(
         `UPDATE social_publications AS publication
          SET status = 'cancelled',
-             error_code = 'cancelled:owner_removed_retrying_post',
-             error_message = 'Automatic retries stopped when the owner removed the Post.',
+             error_code = CASE
+               WHEN publication.status = 'scheduled'
+                 THEN 'cancelled:owner_removed_scheduled_post'
+               ELSE 'cancelled:owner_removed_retrying_post'
+             END,
+             error_message = CASE
+               WHEN publication.status = 'scheduled'
+                 THEN 'Scheduled delivery cancelled when the owner removed the Post.'
+               ELSE 'Automatic retries stopped when the owner removed the Post.'
+             END,
              updated_at = ?
-         WHERE publication.status = 'queued'
-           AND publication.error_code LIKE 'retryable:%'
+         WHERE (
+             publication.status = 'scheduled'
+             OR (
+               publication.status = 'queued'
+               AND publication.error_code LIKE 'retryable:%'
+             )
+           )
            AND publication.variant_id IN (
              SELECT version.id
              FROM social_variants version
@@ -879,13 +919,6 @@ export async function deleteSocialPost(
       );
     }
     return true;
-  }
-
-  if (existing.variants.some((version) => version.approvalStatus !== "draft")) {
-    throw new SocialPostInputError(
-      "Only unapproved draft Posts can be deleted.",
-      409,
-    );
   }
 
   await env.DB.batch([
@@ -941,8 +974,8 @@ export async function addPostVersion(
     env.DB.prepare(
       `INSERT INTO social_variants (
          id, package_id, platform, target_account_id, format, body_text,
-         asset_manifest_json, source_excerpt, approval_status, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+         asset_manifest_json, source_excerpt, approval_status, created_at, updated_at, title
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
     ).bind(
       versionId,
       postId,
@@ -954,6 +987,7 @@ export async function addPostVersion(
       existing.package.sourceSnapshot.slice(0, 1_000),
       now,
       now,
+      optionalText(input.title),
     ),
     env.DB.prepare(
       `INSERT INTO social_publication_events (
@@ -1112,6 +1146,7 @@ function serializeVariant(row: VariantRow): SocialAccountVariant {
     platform: row.platform,
     targetAccountId: row.target_account_id,
     format: row.format,
+    title: row.title,
     bodyText: row.body_text,
     assetManifest: parseAssets(row.asset_manifest_json),
     carouselRenderSetId: row.carousel_render_set_id || null,

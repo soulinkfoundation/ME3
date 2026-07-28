@@ -1335,7 +1335,11 @@ const JOURNAL_PLUGIN: CorePluginManifestSummary = {
   defaultEnabled: true,
   showInPluginList: false,
   implementationStatus: JOURNAL_RUNTIME.bundled ? "bundled" : "catalog_only",
-  capabilityIds: ["workspace.journal", "journal.entries.manage"],
+  capabilityIds: [
+    "workspace.journal",
+    "journal.entries.manage",
+    "journal.entries.read",
+  ],
   permissions: [
     {
       id: "journal.entries.manage",
@@ -1389,7 +1393,22 @@ const JOURNAL_PLUGIN: CorePluginManifestSummary = {
       requiresPluginIds: [JOURNAL_PLUGIN_ID],
     },
   ],
-  agentTools: [],
+  agentTools: [
+    agentTool({
+      id: "journal.entries.read",
+      label: "Read private Journal entries",
+      sideEffect: "read_private",
+      approvalMode: "none",
+      auditEventKind: "journal_entries_read",
+      examples: {
+        positive: [
+          "Read today's Journal entry.",
+          "Show my latest seven Journal entries.",
+        ],
+        negative: ["Write a Journal entry for today."],
+      },
+    }),
+  ],
   secrets: [],
   migrations: [
     publicBaselineMigration(
@@ -1401,7 +1420,7 @@ const JOURNAL_PLUGIN: CorePluginManifestSummary = {
   notes: [
     "Bundled through @me3-core/plugin-journal as a first-party Core package.",
     "Journal owns private owner-scoped writing entries and is surfaced through Mission Control workflows.",
-    "Assistant actions from journal text should be added through explicit capabilities in a later pass.",
+    "Assistant reads use the explicit owner-scoped core.journal.read capability; Journal writes remain owner-controlled.",
   ],
 };
 

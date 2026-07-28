@@ -32,7 +32,7 @@ const account = {
 };
 
 function platformCapability(
-  platform: "linkedin" | "instagram" | "tiktok",
+  platform: "linkedin" | "instagram" | "tiktok" | "youtube",
   options: { schedule: boolean; deliveryMode: "direct_publish" | "provider_draft" },
 ) {
   const isTikTok = platform === "tiktok";
@@ -158,11 +158,57 @@ describe("SocialPage", () => {
     });
   });
 
-  it("keeps the workspace focused on posts, accounts, and header search", async () => {
+  it("shows a loading state instead of the account-setup placeholder during cold start", async () => {
+    const sitesStore = useSitesStore();
+    const configuredSite = sitesStore.sites[0]!;
+    sitesStore.sites = [];
+    let resolveSites!: (value: { sites: typeof sitesStore.sites }) => void;
+    const sitesRequest = new Promise<{ sites: typeof sitesStore.sites }>((resolve) => {
+      resolveSites = resolve;
+    });
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/sites") return sitesRequest;
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [post] });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("linkedin", {
+              schedule: true,
+              deliveryMode: "direct_publish",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await Promise.resolve();
+
+    expect(wrapper.text()).toContain("Loading social publishing…");
+    expect(wrapper.text()).not.toContain("Finish account setup");
+
+    resolveSites({ sites: [configuredSite] });
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Finish account setup");
+    expect(wrapper.get(".post-row").text()).toContain("Post copy https://example.com/story");
+  });
+
+  it("keeps the workspace focused on posts and accounts without search", async () => {
     const wrapper = mountPage();
     await flushPromises();
 
-    wrapper.get(".social-toolbar__search");
+    expect(wrapper.find(".social-toolbar__search").exists()).toBe(false);
+    expect(wrapper.find("[role='search']").exists()).toBe(false);
     expect(wrapper.get(".workspace-tabs").text()).toContain("Drafts");
     wrapper.get("[aria-label='Manage social accounts']");
     wrapper.get("[aria-label='New Post']");
@@ -172,6 +218,15 @@ describe("SocialPage", () => {
     expect(wrapper.findAll(".publication-history")).toHaveLength(0);
     expect(wrapper.text()).not.toContain("Suggestions");
     expect(wrapper.text()).not.toContain("Posting plan");
+    expect(wrapper.classes()).toBeTruthy();
+    expect(wrapper.get(".social-workspace").classes())
+      .not.toContain("social-workspace--mobile-detail-open");
+    await wrapper.get(".post-row__select").trigger("click");
+    expect(wrapper.get(".social-workspace").classes())
+      .toContain("social-workspace--mobile-detail-open");
+    await wrapper.get("[aria-label='Back to social post list']").trigger("click");
+    expect(wrapper.get(".social-workspace").classes())
+      .not.toContain("social-workspace--mobile-detail-open");
   });
 
   it("uses Schedule as the primary action and keeps Post now out of the dialog", async () => {
@@ -228,10 +283,170 @@ describe("SocialPage", () => {
     expect(wrapper.get(".social-schedule-dialog").text()).not.toContain("Post now");
   });
 
+  it("moves a Post into Scheduled immediately while its schedule is being saved", async () => {
+    const textOnlyPost = {
+      ...post,
+      versions: [{ ...post.versions[0], assetManifest: [] }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [textOnlyPost] });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("linkedin", {
+              schedule: true,
+              deliveryMode: "direct_publish",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    let resolveApproval!: (value: { version: typeof textOnlyPost.versions[0] }) => void;
+    vi.mocked(api.patch).mockReturnValue(new Promise((resolve) => {
+      resolveApproval = resolve;
+    }));
+    vi.mocked(api.post).mockResolvedValue({
+      publication: {
+        id: "publication-scheduled",
+        versionId: "version-1",
+        platform: "linkedin",
+        status: "scheduled",
+        scheduledFor: "2099-07-30T09:00:00.000Z",
+        timezone: "Europe/Dublin",
+        queuedAt: null,
+        platformPostId: null,
+        platformPostUrl: null,
+        publishedAt: null,
+        failureClass: null,
+        errorCode: null,
+        errorMessage: null,
+        requestedByType: "owner",
+        requestedByUserId: "owner",
+        requestContext: {},
+        createdAt: "2099-07-28T08:00:00.000Z",
+        updatedAt: "2099-07-28T08:00:00.000Z",
+      },
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    const schedule = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Schedule");
+    await schedule!.trigger("click");
+    await wrapper.get(".social-schedule-dialog input[type='date']").setValue("2099-07-30");
+    await wrapper.get(".social-schedule-dialog input[type='time']").setValue("10:00");
+    await wrapper.get(".social-schedule-dialog input:not([type])").setValue("Europe/Dublin");
+    await wrapper.get(".social-schedule-dialog").trigger("submit");
+
+    expect(wrapper.find(".social-schedule-dialog").exists()).toBe(false);
+    expect(wrapper.get(".row-status").text()).toBe("Scheduled");
+    expect(wrapper.get(".workspace-tabs").text()).toContain("Scheduled1");
+
+    resolveApproval({
+      version: {
+        ...textOnlyPost.versions[0],
+        approvalStatus: "approved",
+      },
+    });
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith(
+      "/social/versions/version-1/publications",
+      expect.objectContaining({
+        scheduledFor: expect.stringContaining("2099-07-30"),
+        timezone: "Europe/Dublin",
+      }),
+    );
+  });
+
+  it("shows Post now as publishing before the network request completes", async () => {
+    const textOnlyPost = {
+      ...post,
+      versions: [{ ...post.versions[0], assetManifest: [] }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [textOnlyPost] });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("linkedin", {
+              schedule: true,
+              deliveryMode: "direct_publish",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    let resolveApproval!: (value: { version: typeof textOnlyPost.versions[0] }) => void;
+    vi.mocked(api.patch).mockReturnValue(new Promise((resolve) => {
+      resolveApproval = resolve;
+    }));
+    vi.mocked(api.post).mockResolvedValue({
+      publication: {
+        id: "publication-queued",
+        versionId: "version-1",
+        platform: "linkedin",
+        status: "queued",
+        scheduledFor: null,
+        timezone: null,
+        queuedAt: "2026-07-28T08:00:00.000Z",
+        platformPostId: null,
+        platformPostUrl: null,
+        publishedAt: null,
+        failureClass: null,
+        errorCode: null,
+        errorMessage: null,
+        requestedByType: "owner",
+        requestedByUserId: "owner",
+        requestContext: {},
+        createdAt: "2026-07-28T08:00:00.000Z",
+        updatedAt: "2026-07-28T08:00:00.000Z",
+      },
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    const postNow = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Post now");
+    await postNow!.trigger("click");
+
+    expect(wrapper.get(".row-status").text()).toBe("Publishing");
+    expect(wrapper.get(".workspace-tabs").text()).toContain("Scheduled1");
+
+    resolveApproval({
+      version: {
+        ...textOnlyPost.versions[0],
+        approvalStatus: "approved",
+      },
+    });
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith("/social/versions/version-1/publish", {});
+  });
+
   it("keeps one labelled delete action beside publishing actions and deletes the selected draft", async () => {
-    vi.mocked(api.delete).mockResolvedValue({ ok: true });
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirm);
+    let resolveDelete!: (value: { ok: true }) => void;
+    vi.mocked(api.delete).mockReturnValue(new Promise((resolve) => {
+      resolveDelete = resolve;
+    }));
     const wrapper = mountPage();
     await flushPromises();
 
@@ -239,18 +454,25 @@ describe("SocialPage", () => {
       .filter((button) => button.text().trim() === "Delete draft");
     expect(deleteActions).toHaveLength(1);
     expect(deleteActions[0]!.element.closest(".editor-actions")).not.toBeNull();
-    expect(wrapper.find(".detail-header button").exists()).toBe(false);
+    expect(wrapper.get(".detail-header button").attributes("aria-label"))
+      .toBe("Back to social post list");
     expect(wrapper.find(".post-row > button:not(.post-row__select)").exists()).toBe(false);
 
     await deleteActions[0]!.trigger("click");
-    await flushPromises();
+    expect(wrapper.get(".confirmation-dialog").text()).toContain(
+      "Delete “Post copy https://example.com/story”? This cannot be undone.",
+    );
+    const confirmDelete = wrapper.get(".confirmation-dialog").findAll("button")
+      .find((button) => button.text().trim() === "Delete");
+    expect(confirmDelete).toBeTruthy();
+    await confirmDelete!.trigger("click");
 
-    expect(confirm).toHaveBeenCalledWith("Delete “A social post”? This cannot be undone.");
     expect(api.delete).toHaveBeenCalledWith(
       "/social/posts/post-1?expectedUpdatedAt=2026-07-18T07%3A00%3A00Z",
     );
     expect(wrapper.find(".post-detail").exists()).toBe(false);
-    vi.unstubAllGlobals();
+    resolveDelete({ ok: true });
+    await flushPromises();
   });
 
   it("shows and orders scheduled posts by their scheduled date and time", async () => {
@@ -269,6 +491,7 @@ describe("SocialPage", () => {
           ...post.versions[0],
           id: "version-later",
           postId: "post-later",
+          bodyText: "Later scheduled post",
           scheduledFor: lateScheduledAt,
           publicationStatus: "scheduled" as const,
         }],
@@ -285,6 +508,7 @@ describe("SocialPage", () => {
           ...post.versions[0],
           id: "version-earlier",
           postId: "post-earlier",
+          bodyText: "Earlier scheduled post",
           scheduledFor: earlyScheduledAt,
           publicationStatus: "scheduled" as const,
         }],
@@ -331,6 +555,14 @@ describe("SocialPage", () => {
       .toBe(earlyScheduledAt);
     expect(rows[1]!.get(".post-row__schedule time").attributes("datetime"))
       .toBe(lateScheduledAt);
+
+    const deleteScheduled = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Delete draft");
+    expect(deleteScheduled).toBeTruthy();
+    await deleteScheduled!.trigger("click");
+    expect(wrapper.get(".confirmation-dialog").text()).toContain(
+      "Cancel scheduled delivery and delete",
+    );
   });
 
   it("requires an explicit destination choice and uses a platform preview", async () => {
@@ -377,12 +609,12 @@ describe("SocialPage", () => {
         format: "post",
       })],
     }));
-    expect((wrapper.get("#social-post-title").element as HTMLInputElement).value)
-      .toBe("Untitled draft");
+    expect(wrapper.find("#social-post-title").exists()).toBe(false);
+    expect(wrapper.find(".version-editor input[type='text']").exists()).toBe(false);
     expect(wrapper.findAll(".platform-target")).toHaveLength(0);
   });
 
-  it("preserves image selection order and stores stable Files metadata", async () => {
+  it("preserves image selection order, stable Files metadata, and unsaved caption text", async () => {
     vi.mocked(api.patch).mockImplementation(async (_endpoint, input) => ({
       version: {
         ...post.versions[0],
@@ -392,7 +624,6 @@ describe("SocialPage", () => {
     const wrapper = mountPage();
     await flushPromises();
 
-    await wrapper.get("#social-post-title").setValue("Unsaved title");
     await wrapper.get(".version-editor textarea").setValue("Unsaved body");
     const addMedia = wrapper.findAll("button").find((button) => button.text().includes("Add media"));
     expect(addMedia).toBeTruthy();
@@ -439,30 +670,58 @@ describe("SocialPage", () => {
         },
       ],
     });
-    expect((wrapper.get("#social-post-title").element as HTMLInputElement).value)
-      .toBe("Unsaved title");
     expect((wrapper.get(".version-editor textarea").element as HTMLTextAreaElement).value)
       .toBe("Unsaved body");
   });
 
-  it("saves title and body together without the title refresh dropping copy", async () => {
-    vi.mocked(api.patch).mockImplementation(async (endpoint, input) => {
-      if (endpoint === "/social/posts/post-1") {
-        return {
-          post: {
-            ...post,
-            post: {
-              ...post.post,
-              ideaText: (input as { title: string }).title,
-              updatedAt: "2026-07-25T16:00:00.000Z",
-            },
-          },
-        };
+  it("shows and saves a platform title only when YouTube requires it", async () => {
+    const youtubeAccount = {
+      ...account,
+      id: "account-youtube",
+      platform: "youtube",
+      handle: "@kieran-video",
+    };
+    const youtubePost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        platform: "youtube",
+        targetAccountId: youtubeAccount.id,
+        title: "Original YouTube title",
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [youtubePost] });
       }
+      if (endpoint === "/social/accounts") {
+        return Promise.resolve({ accounts: [youtubeAccount] });
+      }
+      if (endpoint === "/social/status") {
+        return Promise.resolve({
+          plugin: {
+            status: "installed",
+            enabled: true,
+            ready: true,
+            statusLabel: "Installed",
+            platformCapabilities: [
+              platformCapability("youtube", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+            ],
+          },
+          hostedOAuth: { configured: false, platforms: [] },
+        });
+      }
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.patch).mockImplementation(async (endpoint, input) => {
       if (endpoint === "/social/versions/version-1") {
         return {
           version: {
-            ...post.versions[0],
+            ...youtubePost.versions[0],
+            title: (input as { title: string }).title,
             bodyText: (input as { bodyText: string }).bodyText,
           },
         };
@@ -472,23 +731,24 @@ describe("SocialPage", () => {
     const wrapper = mountPage();
     await flushPromises();
 
-    await wrapper.get("#social-post-title").setValue("Saved title");
+    expect(wrapper.find("#social-post-title").exists()).toBe(false);
+    expect(wrapper.get(".field").text()).not.toContain("Post title");
+    const titleInput = wrapper.get(".version-editor input[type='text']");
+    expect((titleInput.element as HTMLInputElement).value).toBe("Original YouTube title");
+    await titleInput.setValue("Saved YouTube title");
     await wrapper.get(".version-editor textarea").setValue("Saved body");
     const save = wrapper.findAll(".editor-actions button")
       .find((button) => button.text().includes("Save Draft"));
     await save!.trigger("click");
     await flushPromises();
 
-    expect(api.patch).toHaveBeenCalledWith("/social/posts/post-1", {
-      title: "Saved title",
-      expectedUpdatedAt: post.post.updatedAt,
-    });
     expect(api.patch).toHaveBeenCalledWith("/social/versions/version-1", {
+      title: "Saved YouTube title",
       bodyText: "Saved body",
-      targetAccountId: account.id,
+      targetAccountId: youtubeAccount.id,
     });
-    expect((wrapper.get("#social-post-title").element as HTMLInputElement).value)
-      .toBe("Saved title");
+    expect((wrapper.get(".version-editor input[type='text']").element as HTMLInputElement).value)
+      .toBe("Saved YouTube title");
     expect((wrapper.get(".version-editor textarea").element as HTMLTextAreaElement).value)
       .toBe("Saved body");
   });
@@ -791,6 +1051,57 @@ describe("SocialPage", () => {
     expect(postNow?.attributes("disabled")).toBeDefined();
   });
 
+  it("allows a needs-review Post to be removed without discarding delivery history", async () => {
+    const needsReviewPost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        assetManifest: [],
+        publicationStatus: "publishing" as const,
+        failureClass: "outcome_unknown" as const,
+        errorCode: "outcome_unknown:provider_write_started",
+        errorMessage: "Check X before trying again.",
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [needsReviewPost] });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("linkedin", {
+              schedule: true,
+              deliveryMode: "direct_publish",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    const scheduledTab = wrapper.findAll(".workspace-tabs button")
+      .find((button) => button.text().includes("Scheduled"));
+    await scheduledTab!.trigger("click");
+
+    expect(wrapper.get(".row-status").text()).toBe("Needs review");
+    const deleteAction = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Delete draft");
+    expect(deleteAction).toBeTruthy();
+    await deleteAction!.trigger("click");
+    expect(wrapper.get(".confirmation-dialog").text()).toContain(
+      "Delivery history will be retained.",
+    );
+  });
+
   it("labels retryable queue failures clearly and lets the owner stop retries and delete", async () => {
     const retryingPost = {
       ...post,
@@ -825,8 +1136,6 @@ describe("SocialPage", () => {
       throw new Error(`Unexpected GET ${endpoint}`);
     });
     vi.mocked(api.delete).mockResolvedValue({ ok: true });
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirm);
 
     const wrapper = mountPage();
     await flushPromises();
@@ -843,11 +1152,15 @@ describe("SocialPage", () => {
       .find((button) => button.text().trim() === "Delete draft");
     expect(deleteAction).toBeTruthy();
     await deleteAction!.trigger("click");
+    expect(wrapper.get(".confirmation-dialog").text()).toContain(
+      "Stop pending retries and delete “Post copy https://example.com/story”",
+    );
+    const confirmDelete = wrapper.get(".confirmation-dialog").findAll("button")
+      .find((button) => button.text().trim() === "Delete");
+    expect(confirmDelete).toBeTruthy();
+    await confirmDelete!.trigger("click");
     await flushPromises();
 
-    expect(confirm).toHaveBeenCalledWith(
-      "Stop pending retries and remove “A social post”? Its delivery history will be retained.",
-    );
     expect(api.delete).toHaveBeenCalledWith(
       "/social/posts/post-1?expectedUpdatedAt=2026-07-18T07%3A00%3A00Z",
     );

@@ -230,6 +230,7 @@ export async function listCalendarSocialPublications(
          ON account.id = pub.target_account_id_snapshot
         AND account.site_id = pub.site_id
        WHERE site.user_id = ?
+         AND post.status != 'archived'
          AND pub.status IN ('scheduled', 'queued', 'publishing', 'published', 'failed')
      ), timed_publications AS (
        SELECT enriched_publications.*,

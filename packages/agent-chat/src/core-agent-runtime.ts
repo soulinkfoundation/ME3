@@ -30,6 +30,11 @@ import {
   type AgentMissionTask,
 } from "@me3-core/plugin-mission-control";
 import {
+  readJournalEntriesForAgent,
+  type JournalAgentEntry,
+  type JournalAgentReadInput,
+} from "@me3-core/plugin-journal";
+import {
   cancelAgentReminder,
   createAgentReminder,
   getPendingAgentReminder,
@@ -109,6 +114,7 @@ export type CoreMailboxToolServices = {
 const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
   (tool) =>
     tool.capabilityId.startsWith("core.reminders.") ||
+    tool.capabilityId === "core.journal.read" ||
     tool.capabilityId === "core.owner_content.search" ||
     tool.capabilityId.startsWith("core.sites.landing_page.") ||
     tool.capabilityId.startsWith("core.mission.task.") ||
@@ -345,6 +351,9 @@ function executeCoreToolCall(input: {
   if (input.tool.capabilityId.startsWith("core.mission.task.")) {
     return executeMissionTaskToolCall(input);
   }
+  if (input.tool.capabilityId === "core.journal.read") {
+    return executeJournalReadToolCall(input);
+  }
   if (input.tool.capabilityId === "core.owner_content.search") {
     return executeOwnerContentSearchToolCall(input);
   }
@@ -355,6 +364,59 @@ function executeCoreToolCall(input: {
     return executeSocialToolCall(input);
   }
   return executeMailboxToolCall(input);
+}
+
+async function executeJournalReadToolCall(input: {
+  db: CoreAgentDb;
+  userId: string;
+  call: AgentToolCall;
+  tool: CoreChatToolDefinition;
+}): Promise<CoreToolOutcome> {
+  enforceJournalReadToolPolicy(input.tool);
+  assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+  const args = input.call.arguments;
+  const mode = requiredToolString(args.mode, "Journal read mode");
+  let readInput: JournalAgentReadInput;
+  if (mode === "latest") {
+    readInput = {
+      mode,
+      limit: optionalToolNumber(args.limit),
+    };
+  } else if (mode === "date") {
+    readInput = {
+      mode,
+      date: requiredToolString(args.date, "Journal date"),
+    };
+  } else if (mode === "range") {
+    readInput = {
+      mode,
+      dateFrom: requiredToolString(args.dateFrom, "Journal start date"),
+      dateTo: requiredToolString(args.dateTo, "Journal end date"),
+      limit: optionalToolNumber(args.limit),
+    };
+  } else {
+    throw new Error(`Invalid Journal read mode "${mode}".`);
+  }
+
+  const result = await readJournalEntriesForAgent(input.db, input.userId, readInput);
+  return {
+    capabilityId: "core.journal.read",
+    result: { ok: true, ...result },
+    fallbackReply: formatJournalReadReply(result.entries, {
+      mode: result.mode,
+      dateFrom: result.dateFrom,
+      dateTo: result.dateTo,
+      hasMore: result.hasMore,
+    }),
+    reminderAction: null,
+    actionCards: [],
+    sourceReference: result.entries.length === 1
+      ? {
+          sourceType: "journal",
+          sourceId: result.entries[0].id,
+        }
+      : null,
+  };
 }
 
 async function executeReminderToolCall(input: {
@@ -1418,6 +1480,10 @@ function withCoreToolInstructions(
     "- Convert relative due dates such as today or tomorrow to YYYY-MM-DD in the owner's timezone using the current-time context above.",
     "- For update, send only fields the owner asked to change. Null optional fields mean no change.",
     "- Set clearDescription or clearDueAt only when the owner explicitly asks to remove that value.",
+    "Journal tool rules:",
+    "- Use core_journal_read whenever the owner asks to read, list, review, summarize, or reason about Journal entries. Journal content is never present in the owner snapshot.",
+    "- Use mode latest for recent entries (default 7), mode date for one YYYY-MM-DD date, and mode range for an inclusive YYYY-MM-DD date range.",
+    "- Resolve today and other relative dates using the owner's timezone and current-time context above. Never invent an entry or infer that an entry is missing without calling the Journal tool in this turn.",
     "Landing-page tool rules:",
     "- Use landing-page tools when the owner clearly asks to list, create, or revise a landing page. Brainstorming alone is conversation, not a write request.",
     "- A landing-page create or update tool saves a private draft only. Never claim the page is live or published.",
@@ -1468,6 +1534,17 @@ function enforceOwnerContentSearchToolPolicy(tool: CoreChatToolDefinition): void
     tool.requiredSetupChecks.length !== 0
   ) {
     throw new Error(`Tool "${tool.name}" is not allowed by the owner content search runtime policy.`);
+  }
+}
+
+function enforceJournalReadToolPolicy(tool: CoreChatToolDefinition): void {
+  if (
+    tool.capabilityId !== "core.journal.read" ||
+    tool.handlerRoute !== tool.capabilityId ||
+    tool.approvalMode !== "none" ||
+    tool.requiredSetupChecks.length !== 0
+  ) {
+    throw new Error(`Tool "${tool.name}" is not allowed by the Journal read runtime policy.`);
   }
 }
 
@@ -1713,13 +1790,19 @@ function replyContainsSearchResultId(
   replyText: string,
   outcome: CoreToolOutcome,
 ): boolean {
-  if (outcome.capabilityId !== "core.owner_content.search") return false;
-  const results = outcome.result.results;
-  if (!Array.isArray(results)) return false;
+  const candidates = outcome.capabilityId === "core.owner_content.search"
+    ? outcome.result.results
+    : outcome.capabilityId === "core.journal.read"
+      ? outcome.result.entries
+      : null;
+  if (!Array.isArray(candidates)) return false;
   const reply = replyText.toLowerCase();
-  return results.some((result) => {
+  return candidates.some((result) => {
     if (!result || typeof result !== "object" || Array.isArray(result)) return false;
-    const sourceId = (result as Record<string, unknown>).sourceId;
+    const record = result as Record<string, unknown>;
+    const sourceId = outcome.capabilityId === "core.journal.read"
+      ? record.id
+      : record.sourceId;
     return typeof sourceId === "string" &&
       sourceId.length > 0 &&
       reply.includes(sourceId.toLowerCase());
@@ -1803,6 +1886,55 @@ function formatMissionTaskList(tasks: AgentMissionTask[]): string {
       (task) => `- ${task.title} — ${task.projectName} — ${task.status} — priority ${task.priority} (ID: ${task.id})`,
     ),
   ].join("\n");
+}
+
+function formatJournalReadReply(
+  entries: JournalAgentEntry[],
+  scope: {
+    mode: JournalAgentReadInput["mode"];
+    dateFrom: string | null;
+    dateTo: string | null;
+    hasMore: boolean;
+  },
+): string {
+  if (!entries.length) {
+    if (scope.mode === "date") {
+      return `I could not find a Journal entry for ${scope.dateFrom}.`;
+    }
+    if (scope.mode === "range") {
+      return `I could not find any Journal entries from ${scope.dateFrom} through ${scope.dateTo}.`;
+    }
+    return "I could not find any Journal entries.";
+  }
+
+  const lines = entries.flatMap((entry) => {
+    const title = entry.title ? ` — ${entry.title}` : "";
+    const body = plainJournalBody(entry.body);
+    return [
+      `## ${entry.date}${title}`,
+      body || "(No written content.)",
+      entry.bodyTruncated ? "[Entry body truncated for this read.]" : null,
+      "",
+    ].filter((line): line is string => line !== null);
+  });
+  if (scope.hasMore) {
+    lines.push("More entries matched this request; narrow the date range to read them.");
+  }
+  return lines.join("\n").trim();
+}
+
+function plainJournalBody(value: string): string {
+  return value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function formatOwnerContentSearch(

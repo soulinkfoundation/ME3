@@ -5553,6 +5553,52 @@ describe("ME3 Worker auth", () => {
     });
   });
 
+  it("accepts browser-safe JSON assistant attachment uploads", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const content = "# Browser notes\n\nThe upload should not depend on multipart parsing.";
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/attachments", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          attachments: [
+            {
+              filename: "browser-notes.md",
+              mimeType: "text/markdown",
+              dataBase64: btoa(content),
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+    const payload = (await response.json()) as {
+      ok: boolean;
+      attachments: Array<Record<string, unknown>>;
+    };
+
+    expect(response.status).toBe(201);
+    expect(payload.ok).toBe(true);
+    expect(payload.attachments[0]).toMatchObject({
+      name: "browser-notes.md",
+      mimeType: "text/markdown",
+      kind: "text",
+      status: "ready",
+      hasText: true,
+      text: content,
+    });
+    expect(env.assistantAttachments[0]).toMatchObject({
+      owner_id: "owner",
+      filename: "browser-notes.md",
+      extracted_text: content,
+    });
+  });
+
   it("returns a setup error when assistant attachment storage is not migrated", async () => {
     const env = createEnv();
     env.failAssistantAttachmentInsert = true;

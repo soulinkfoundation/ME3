@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import AppDialog from "../components/AppDialog.vue";
 import Button from "../components/Button.vue";
+import ConfirmationDialog from "../components/ConfirmationDialog.vue";
 import SocialAccountsPanel from "../components/SocialAccountsPanel.vue";
 import UiIcon from "../components/UiIcon.vue";
 import WorkspaceTabs from "../components/WorkspaceTabs.vue";
@@ -14,8 +15,6 @@ import { useSitesStore } from "../stores/sites";
 import {
   useSocialStore,
   type PostVersion,
-  type PostLibraryItem,
-  type PublicationStatus,
   type DriveFile,
   type DriveFolder,
   type SocialAccountRow,
@@ -38,6 +37,30 @@ definePage({
 
 type WorkspaceMode = "drafts" | "scheduled" | "published";
 
+type WorkspaceSnapshot = {
+  posts: SocialPostDetail[];
+  activeMode: WorkspaceMode;
+  selectedPostId: string | null;
+  selectedVersionId: string | null;
+  editorScope: "shared" | "platform";
+  editorTitle: string;
+  editorBody: string;
+  editorAccountId: string;
+  mobileDetailOpen: boolean;
+};
+
+type PublicationPreparation = {
+  post: SocialPostDetail;
+  versions: PostVersion[];
+  wasShared: boolean;
+  selectedVersionId: string | null;
+  editedVersionIds: Set<string>;
+  bodyText: string;
+  accountId: string;
+  title: string;
+  titleChanged: boolean;
+};
+
 const sites = useSitesStore();
 const social = useSocialStore();
 const selectedSiteId = ref("");
@@ -52,8 +75,11 @@ const editorScope = ref<"shared" | "platform">("platform");
 const editorTitle = ref("");
 const editorBody = ref("");
 const editorAccountId = ref("");
+const mobileDetailOpen = ref(false);
+const initializing = ref(true);
 const loading = ref(false);
 const saving = ref(false);
+const deleting = ref(false);
 const error = ref("");
 const showAccounts = ref(false);
 const instagramPreviewIndex = ref(0);
@@ -71,24 +97,16 @@ const scheduleTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone ||
 const scheduleError = ref("");
 const publishError = ref("");
 const scheduling = ref(false);
+const deleteCandidate = ref<SocialPostDetail | null>(null);
 const showPublishingChecks = ref(false);
 const showDestinations = ref(false);
 const destinationMode = ref<"create" | "manage">("create");
 const destinationContentType = ref<SocialContentType>("short_video");
 const selectedDestinationAccountIds = ref<string[]>([]);
 const destinationError = ref("");
-const showLibraryFilters = ref(false);
-const libraryQuery = ref("");
-const librarySource = ref("");
-const libraryPlatform = ref<SocialPlatform | "">("");
-const libraryAccountId = ref("");
-const libraryDelivery = ref<PublicationStatus | "">("");
-const libraryPublishedFrom = ref("");
-const libraryPublishedTo = ref("");
-const libraryResults = ref<PostLibraryItem[] | null>(null);
-const librarySearching = ref(false);
 const { toast, toastError, toastSuccess } = useAppToast();
 let deliveryPollTimer: ReturnType<typeof setInterval> | null = null;
+let workspaceLoadSequence = 0;
 
 const currentSite = computed(
   () => sites.sites.find((site) => site.id === selectedSiteId.value) || null,
@@ -100,17 +118,8 @@ const activeAccounts = computed(() =>
   ),
 );
 
-const libraryVersionIds = computed(() =>
-  libraryResults.value === null
-    ? null
-    : new Set(libraryResults.value.map((item) => item.versionId)),
-);
-
 function visibleVersionsFor(detail: SocialPostDetail): PostVersion[] {
-  const matchingIds = libraryVersionIds.value;
-  return matchingIds
-    ? detail.versions.filter((version) => matchingIds.has(version.id))
-    : detail.versions.filter((version) => versionMode(version) === activeMode.value);
+  return detail.versions.filter((version) => versionMode(version) === activeMode.value);
 }
 
 const visiblePosts = computed(() =>
@@ -141,20 +150,6 @@ const modeTabs = computed(() =>
     ).length,
   })),
 );
-
-const libraryResultBreakdown = computed(() => {
-  if (libraryResults.value === null) return "";
-  const counts: Record<WorkspaceMode, number> = { drafts: 0, scheduled: 0, published: 0 };
-  for (const result of libraryResults.value) {
-    const detail = posts.value.find((item) => item.post.id === result.postId);
-    const version = detail?.versions.find((item) => item.id === result.versionId);
-    if (version) counts[versionMode(version)] += 1;
-  }
-  return (["drafts", "scheduled", "published"] as WorkspaceMode[])
-    .filter((mode) => counts[mode] > 0)
-    .map((mode) => `${counts[mode]} ${mode === "drafts" ? "Draft" : mode === "scheduled" ? "Scheduled" : "Published"}`)
-    .join(" · ");
-});
 
 const selectedPost = computed(
   () => posts.value.find((detail) => detail.post.id === selectedPostId.value) || null,
@@ -207,7 +202,11 @@ const editorDirty = computed(() => editorVersions.value.some((version) =>
 ));
 
 const titleDirty = computed(() =>
-  Boolean(selectedPost.value && editorTitle.value.trim() !== selectedPost.value.post.ideaText),
+  Boolean(
+    !sharedEditor.value &&
+    selectedVersion.value?.platform === "youtube" &&
+    editorTitle.value.trim() !== (selectedVersion.value.title || ""),
+  ),
 );
 
 const draftAccounts = computed(() => {
@@ -244,6 +243,9 @@ const targetValidations = computed(() => selectedVisibleVersions.value.map((vers
     sharedEditor.value && editorVersions.value.some((candidate) => candidate.id === version.id)
       ? editorAssetManifest.value
       : version.assetManifest,
+    !sharedEditor.value && selectedVersionId.value === version.id
+      ? editorTitle.value
+      : version.title || "",
   ),
 })));
 
@@ -282,6 +284,39 @@ const canDeleteDraft = computed(() =>
   Boolean(selectedPost.value && canDeletePost(selectedPost.value)),
 );
 
+const deleteConfirmationMessage = computed(() => {
+  const detail = deleteCandidate.value;
+  if (!detail) return "";
+  const title = postPreviewText(detail);
+  const hasScheduledDelivery = detail.versions.some((version) =>
+    Boolean(version.scheduledFor) || version.publicationStatus === "scheduled",
+  );
+  const hasQueuedRetries = detail.versions.some((version) =>
+    version.publicationStatus === "queued" && version.failureClass === "retryable",
+  );
+  const hasDeliveryHistory = detail.versions.some((version) =>
+    Boolean(version.publicationStatus) || Boolean(version.failureClass),
+  );
+  if (hasScheduledDelivery) {
+    return `Cancel scheduled delivery and delete “${title}”? Delivery history will be retained.`;
+  }
+  if (hasQueuedRetries) {
+    return `Stop pending retries and delete “${title}”? Delivery history will be retained.`;
+  }
+  if (hasDeliveryHistory) {
+    return `Delete “${title}”? Delivery history will be retained.`;
+  }
+  return `Delete “${title}”? This cannot be undone.`;
+});
+
+const deleteConfirmationLabel = computed(() =>
+  deleteCandidate.value?.versions.some((version) =>
+    Boolean(version.scheduledFor) || version.publicationStatus === "scheduled",
+  )
+    ? "Cancel and delete"
+    : "Delete",
+);
+
 const publishingCheckIssueCount = computed(() =>
   targetValidations.value.filter((validation) =>
     Boolean(
@@ -312,17 +347,6 @@ const selectedVersionDeliveryHeading = computed(() => {
     ? `${platformLabel(version.platform)} delivery needs review`
     : `${platformLabel(version.platform)} delivery failed`;
 });
-
-const advancedFiltersActive = computed(() =>
-  Boolean(
-    librarySource.value ||
-      libraryPlatform.value ||
-      libraryAccountId.value ||
-      libraryDelivery.value ||
-      libraryPublishedFrom.value ||
-      libraryPublishedTo.value,
-  ),
-);
 
 function platformLabel(platform: string): string {
   if (platform === "x") return "X";
@@ -412,6 +436,7 @@ function validateVersion(
   version: PostVersion,
   bodyText = version.bodyText,
   assets = version.assetManifest,
+  title = version.title || "",
 ): {
   capability: SocialPlatformCapabilities | null;
   rule: SocialPlatformContentRule | null;
@@ -429,11 +454,11 @@ function validateVersion(
   const accountValid = Boolean(account && account.status === "active");
   let issue: string | null = null;
 
-  if (version.platform === "youtube" && !editorTitle.value.trim()) {
+  if (version.platform === "youtube" && !title.trim()) {
     issue = "Add a YouTube title.";
   } else if (
     version.platform === "youtube" &&
-    Array.from(editorTitle.value.trim()).length > 100
+    Array.from(title.trim()).length > 100
   ) {
     issue = "Shorten the YouTube title to 100 characters.";
   } else if (!rule) {
@@ -489,10 +514,11 @@ function validateVersion(
 function canDeletePost(detail: SocialPostDetail): boolean {
   if (detail.post.sourceType === "legacy_content_bank_read_only") return false;
   return detail.versions.every((version) =>
-    !version.scheduledFor &&
-    version.publicationStatus !== "scheduled" &&
-    version.publicationStatus !== "publishing" &&
     version.publicationStatus !== "published" &&
+    !(
+      version.publicationStatus === "publishing" &&
+      version.failureClass !== "outcome_unknown"
+    ) &&
     (
       version.publicationStatus !== "queued" ||
       version.failureClass === "retryable"
@@ -646,6 +672,13 @@ function scheduledDateFor(detail: SocialPostDetail): string | null {
   return scheduledDates[0] || null;
 }
 
+function postPreviewText(detail: SocialPostDetail): string {
+  const preview = visibleVersionsFor(detail)
+    .map((version) => version.bodyText.trim())
+    .find(Boolean);
+  return preview || "Untitled draft";
+}
+
 function formatDate(value: string | null): string {
   if (!value) return "";
   const date = new Date(value);
@@ -659,11 +692,13 @@ function formatDate(value: string | null): string {
 function setActiveMode(value: string) {
   if (!(value === "drafts" || value === "scheduled" || value === "published")) return;
   activeMode.value = value;
+  mobileDetailOpen.value = false;
   ensureVisibleSelection();
 }
 
-function selectPost(detail: SocialPostDetail) {
+function selectPost(detail: SocialPostDetail, openDetail = true) {
   selectedPostId.value = detail.post.id;
+  mobileDetailOpen.value = openDetail;
   const versions = visibleVersionsFor(detail);
   if (versions.length > 1) {
     selectSharedVersions(versions);
@@ -672,57 +707,11 @@ function selectPost(detail: SocialPostDetail) {
   }
 }
 
-async function searchLibrary() {
-  if (!selectedSiteId.value) return;
-  librarySearching.value = true;
-  error.value = "";
-  try {
-    libraryResults.value = await social.searchPostLibrary({
-      siteId: selectedSiteId.value,
-      query: libraryQuery.value || undefined,
-      source: librarySource.value || undefined,
-      platform: libraryPlatform.value || undefined,
-      accountId: libraryAccountId.value || undefined,
-      deliveryState: libraryDelivery.value || undefined,
-      publishedFrom: libraryPublishedFrom.value
-        ? new Date(`${libraryPublishedFrom.value}T00:00:00`).toISOString()
-        : undefined,
-      publishedTo: libraryPublishedTo.value
-        ? new Date(`${libraryPublishedTo.value}T00:00:00`).toISOString()
-        : undefined,
-      limit: 100,
-    });
-    ensureVisibleSelection();
-  } catch (value) {
-    social.setErrorFromApi(value, "Failed to search the Post library");
-    error.value = social.error || "Failed to search the Post library";
-  } finally {
-    librarySearching.value = false;
-  }
-}
-
-function clearLibrarySearch() {
-  libraryQuery.value = "";
-  librarySource.value = "";
-  libraryPlatform.value = "";
-  libraryAccountId.value = "";
-  libraryDelivery.value = "";
-  libraryPublishedFrom.value = "";
-  libraryPublishedTo.value = "";
-  libraryResults.value = null;
-  ensureVisibleSelection();
-}
-
-async function applyLibraryFilters() {
-  await searchLibrary();
-  showLibraryFilters.value = false;
-}
-
 function selectVersion(version: PostVersion | null) {
   editorScope.value = "platform";
   selectedVersionId.value = version?.id || null;
   instagramPreviewIndex.value = 0;
-  editorTitle.value = selectedPost.value?.post.ideaText || "";
+  editorTitle.value = version?.title || "";
   editorBody.value = version?.bodyText || "";
   editorAccountId.value = version?.targetAccountId || activeAccounts.value.find(
     (account) => account.platform === version?.platform,
@@ -734,7 +723,7 @@ function selectSharedVersions(versions = selectedVisibleVersions.value) {
   editorScope.value = versions.length > 1 ? "shared" : "platform";
   selectedVersionId.value = first?.id || null;
   instagramPreviewIndex.value = 0;
-  editorTitle.value = selectedPost.value?.post.ideaText || "";
+  editorTitle.value = "";
   editorBody.value = first?.bodyText || "";
   editorAccountId.value = first?.targetAccountId || "";
 }
@@ -747,13 +736,18 @@ function setInstagramPreview(index: number) {
 function ensureVisibleSelection() {
   const current = visiblePosts.value.find((detail) => detail.post.id === selectedPostId.value);
   if (current) {
-    selectPost(current);
+    selectPost(current, mobileDetailOpen.value);
   } else if (visiblePosts.value[0]) {
-    selectPost(visiblePosts.value[0]);
+    selectPost(visiblePosts.value[0], false);
   } else {
     selectedPostId.value = null;
+    mobileDetailOpen.value = false;
     selectVersion(null);
   }
+}
+
+function closeMobileDetail() {
+  mobileDetailOpen.value = false;
 }
 
 function selectLinkedSocialRecord(): boolean {
@@ -765,6 +759,7 @@ function selectLinkedSocialRecord(): boolean {
   if (!detail || !version) return false;
   activeMode.value = versionMode(version);
   selectedPostId.value = detail.post.id;
+  mobileDetailOpen.value = true;
   selectVersion(version);
   return true;
 }
@@ -772,25 +767,75 @@ function selectLinkedSocialRecord(): boolean {
 async function loadWorkspace() {
   if (!selectedSiteId.value) return;
   const requestedSiteId = selectedSiteId.value;
+  const loadSequence = ++workspaceLoadSequence;
   loading.value = true;
   error.value = "";
   try {
-    const [nextPosts, nextAccounts, status] = await Promise.all([
-      social.fetchSocialPosts(requestedSiteId),
-      social.fetchSocialAccounts(),
-      social.fetchSocialStatus(),
-    ]);
-    if (selectedSiteId.value !== requestedSiteId) return;
+    const nextPosts = await social.fetchSocialPosts(requestedSiteId);
+    if (
+      loadSequence !== workspaceLoadSequence ||
+      selectedSiteId.value !== requestedSiteId
+    ) return;
     posts.value = nextPosts;
-    accounts.value = nextAccounts;
-    capabilities.value = status.plugin.platformCapabilities || [];
-    localDemoAvailable.value = status.localDemo === true;
     if (!selectLinkedSocialRecord()) ensureVisibleSelection();
   } catch (value) {
+    if (loadSequence !== workspaceLoadSequence) return;
     social.setErrorFromApi(value, "Failed to load social posts");
     error.value = social.error || "Failed to load social posts";
   } finally {
-    loading.value = false;
+    if (loadSequence === workspaceLoadSequence) loading.value = false;
+  }
+}
+
+async function initializeWorkspace() {
+  const loadSequence = ++workspaceLoadSequence;
+  initializing.value = true;
+  loading.value = true;
+  error.value = "";
+  try {
+    const linkedSiteId = currentQueryParam("siteId");
+    selectedSiteId.value =
+      sites.sites.find((site) => site.id === linkedSiteId)?.id ||
+      sites.sites[0]?.id ||
+      "";
+    const initialPostsRequest = selectedSiteId.value
+      ? social.fetchSocialPosts(selectedSiteId.value)
+      : Promise.resolve(null);
+
+    const [, nextAccounts, status, initialPosts] = await Promise.all([
+      sites.sites.length === 0 ? sites.ensureSites() : Promise.resolve(),
+      social.fetchSocialAccounts(),
+      social.fetchSocialStatus(),
+      initialPostsRequest,
+    ]);
+    if (loadSequence !== workspaceLoadSequence) return;
+
+    accounts.value = nextAccounts;
+    capabilities.value = status.plugin.platformCapabilities || [];
+    localDemoAvailable.value = status.localDemo === true;
+
+    if (!selectedSiteId.value) {
+      selectedSiteId.value =
+        sites.sites.find((site) => site.id === linkedSiteId)?.id ||
+        sites.sites[0]?.id ||
+        "";
+    }
+    if (!selectedSiteId.value) return;
+
+    const nextPosts = initialPosts ||
+      await social.fetchSocialPosts(selectedSiteId.value);
+    if (loadSequence !== workspaceLoadSequence) return;
+    posts.value = nextPosts;
+    if (!selectLinkedSocialRecord()) ensureVisibleSelection();
+  } catch (value) {
+    if (loadSequence !== workspaceLoadSequence) return;
+    social.setErrorFromApi(value, "Failed to load social posts");
+    error.value = social.error || "Failed to load social posts";
+  } finally {
+    if (loadSequence === workspaceLoadSequence) {
+      initializing.value = false;
+      loading.value = false;
+    }
   }
 }
 
@@ -856,16 +901,36 @@ function replaceVersion(version: PostVersion) {
   }
 }
 
-function replacePost(detail: SocialPostDetail) {
-  posts.value = posts.value.map((item) => (item.post.id === detail.post.id ? detail : item));
-  if (selectedPostId.value === detail.post.id) {
-    const version = detail.versions.find((item) => item.id === selectedVersionId.value) || detail.versions[0] || null;
-    if (sharedEditor.value && visibleVersionsFor(detail).length > 1) {
-      selectSharedVersions(visibleVersionsFor(detail));
-    } else {
-      selectVersion(version);
-    }
-  }
+function captureWorkspaceSnapshot(): WorkspaceSnapshot {
+  return {
+    posts: posts.value,
+    activeMode: activeMode.value,
+    selectedPostId: selectedPostId.value,
+    selectedVersionId: selectedVersionId.value,
+    editorScope: editorScope.value,
+    editorTitle: editorTitle.value,
+    editorBody: editorBody.value,
+    editorAccountId: editorAccountId.value,
+    mobileDetailOpen: mobileDetailOpen.value,
+  };
+}
+
+function restoreWorkspaceSnapshot(snapshot: WorkspaceSnapshot) {
+  posts.value = snapshot.posts;
+  activeMode.value = snapshot.activeMode;
+  selectedPostId.value = snapshot.selectedPostId;
+  selectedVersionId.value = snapshot.selectedVersionId;
+  editorScope.value = snapshot.editorScope;
+  editorTitle.value = snapshot.editorTitle;
+  editorBody.value = snapshot.editorBody;
+  editorAccountId.value = snapshot.editorAccountId;
+  mobileDetailOpen.value = snapshot.mobileDetailOpen;
+}
+
+function versionById(versionId: string): PostVersion | null {
+  return posts.value
+    .flatMap((detail) => detail.versions)
+    .find((version) => version.id === versionId) || null;
 }
 
 async function saveDraft() {
@@ -876,28 +941,19 @@ async function saveDraft() {
   const wasShared = sharedEditor.value;
   const selectedId = selectedVersionId.value;
   const nextBodyText = editorBody.value.trim();
-  const bodyWasDirty = editorDirty.value;
-  const titleWasDirty = titleDirty.value;
   saving.value = true;
   error.value = "";
   try {
-    if (titleWasDirty) {
-      replacePost(
-        await social.updateSocialPost(post.post.id, {
-          title: editorTitle.value.trim(),
-          expectedUpdatedAt: post.post.updatedAt,
-        }),
-      );
-    }
-    if (bodyWasDirty) {
-      for (const version of versions) {
-        replaceVersion(await social.updatePostVersion(version.id, {
-          bodyText: nextBodyText,
-          ...(wasShared
-            ? {}
-            : { targetAccountId: editorAccountId.value || null }),
-        }));
-      }
+    for (const version of versions) {
+      replaceVersion(await social.updatePostVersion(version.id, {
+        bodyText: nextBodyText,
+        ...(!wasShared && version.platform === "youtube"
+          ? { title: editorTitle.value.trim() }
+          : {}),
+        ...(wasShared
+          ? {}
+          : { targetAccountId: editorAccountId.value || null }),
+      }));
     }
     const current = posts.value.find((detail) => detail.post.id === post.post.id);
     if (current) {
@@ -917,41 +973,124 @@ async function saveDraft() {
   }
 }
 
-async function prepareVersionsForPublication(): Promise<PostVersion[]> {
+function capturePublicationPreparation(): PublicationPreparation | null {
   const post = selectedPost.value;
   const versions = [...selectedVisibleVersions.value];
-  if (!post || versions.length === 0 || selectedPostReadOnly.value || !canPublish.value) return [];
+  if (!post || versions.length === 0 || selectedPostReadOnly.value || !canPublish.value) {
+    return null;
+  }
   const wasShared = sharedEditor.value;
   const editedVersionIds = new Set(editorVersions.value.map((version) => version.id));
   const selectedId = selectedVersionId.value;
-  const prepared: PostVersion[] = [];
+  return {
+    post,
+    versions,
+    wasShared,
+    selectedVersionId: selectedId,
+    editedVersionIds,
+    bodyText: editorBody.value.trim(),
+    accountId: editorAccountId.value,
+    title: editorTitle.value.trim(),
+    titleChanged: titleDirty.value,
+  };
+}
 
-  if (titleDirty.value) {
-    replacePost(
-      await social.updateSocialPost(post.post.id, {
-        title: editorTitle.value.trim(),
-        expectedUpdatedAt: post.post.updatedAt,
+function applyOptimisticPublication(
+  preparation: PublicationPreparation,
+  delivery: {
+    publicationStatus: "scheduled" | "queued";
+    scheduledFor: string | null;
+    timezone: string | null;
+  },
+) {
+  const approvedAt = new Date().toISOString();
+  posts.value = posts.value.map((detail) => {
+    if (detail.post.id !== preparation.post.post.id) return detail;
+    return {
+      post: detail.post,
+      versions: detail.versions.map((version) => {
+        if (!preparation.versions.some((candidate) => candidate.id === version.id)) {
+          return version;
+        }
+        return {
+          ...version,
+          title:
+            preparation.titleChanged && version.id === preparation.selectedVersionId
+              ? preparation.title
+              : version.title,
+          bodyText: preparation.editedVersionIds.has(version.id)
+            ? preparation.bodyText
+            : version.bodyText,
+          targetAccountId:
+            !preparation.wasShared && version.id === preparation.selectedVersionId
+              ? preparation.accountId
+              : version.targetAccountId,
+          approvalStatus: "approved",
+          approvedAt: version.approvedAt || approvedAt,
+          scheduledFor: delivery.scheduledFor,
+          timezone: delivery.timezone,
+          publicationStatus: delivery.publicationStatus,
+          platformPostUrl: null,
+          publishedAt: null,
+          failureClass: null,
+          errorCode: null,
+          errorMessage: null,
+        };
       }),
+    };
+  });
+  activeMode.value = "scheduled";
+  ensureVisibleSelection();
+}
+
+async function persistPublicationPreparation(
+  preparation: PublicationPreparation,
+): Promise<PostVersion[]> {
+  const prepared = await Promise.all(preparation.versions.map((version) =>
+    social.updatePostVersion(version.id, {
+      title:
+        preparation.titleChanged && version.id === preparation.selectedVersionId
+          ? preparation.title
+          : version.title,
+      bodyText: preparation.editedVersionIds.has(version.id)
+        ? preparation.bodyText
+        : version.bodyText,
+      targetAccountId:
+        !preparation.wasShared && version.id === preparation.selectedVersionId
+          ? preparation.accountId
+          : version.targetAccountId,
+      approvalStatus: "approved",
+    }),
+  ));
+
+  for (const version of prepared) {
+    const optimistic = versionById(version.id);
+    replaceVersion(
+      optimistic
+        ? {
+            ...version,
+            scheduledFor: optimistic.scheduledFor,
+            timezone: optimistic.timezone,
+            publicationStatus: optimistic.publicationStatus,
+            platformPostUrl: optimistic.platformPostUrl,
+            publishedAt: optimistic.publishedAt,
+            failureClass: optimistic.failureClass,
+            errorCode: optimistic.errorCode,
+            errorMessage: optimistic.errorMessage,
+          }
+        : version,
     );
   }
 
-  for (const version of versions) {
-    const publishable = await social.updatePostVersion(version.id, {
-      bodyText: editedVersionIds.has(version.id) ? editorBody.value.trim() : version.bodyText,
-      targetAccountId: !wasShared && version.id === selectedId
-        ? editorAccountId.value
-        : version.targetAccountId,
-      approvalStatus: "approved",
-    });
-    replaceVersion(publishable);
-    prepared.push(publishable);
-  }
-
-  const current = posts.value.find((detail) => detail.post.id === post.post.id);
+  const current = posts.value.find(
+    (detail) => detail.post.id === preparation.post.post.id,
+  );
   if (current) {
-    if (wasShared) selectSharedVersions(visibleVersionsFor(current));
+    if (preparation.wasShared) selectSharedVersions(visibleVersionsFor(current));
     else selectVersion(
-      current.versions.find((version) => version.id === selectedId) || current.versions[0] || null,
+      current.versions.find(
+        (version) => version.id === preparation.selectedVersionId,
+      ) || current.versions[0] || null,
     );
   }
   return prepared;
@@ -1111,40 +1250,53 @@ async function loadLocalDemo() {
   }
 }
 
-async function deleteDraft() {
+function requestDeleteDraft() {
   const detail = selectedPost.value;
-  if (!detail || !canDeletePost(detail) || saving.value) return;
+  if (!detail || !canDeletePost(detail) || saving.value || deleting.value) return;
+  deleteCandidate.value = detail;
+}
+
+async function confirmDeleteDraft() {
+  const detail = deleteCandidate.value;
+  if (!detail || !canDeletePost(detail) || deleting.value) return;
   const hasFailedHistory = detail.versions.some((version) =>
     version.publicationStatus === "failed" ||
     version.publicationStatus === "cancelled" ||
-    version.failureClass === "retryable",
+    Boolean(version.failureClass),
   );
-  const hasQueuedRetries = detail.versions.some((version) =>
-    version.publicationStatus === "queued" && version.failureClass === "retryable",
+  const hasScheduledHistory = detail.versions.some((version) =>
+    Boolean(version.scheduledFor) || version.publicationStatus === "scheduled",
   );
-  if (!window.confirm(
-    hasQueuedRetries
-      ? `Stop pending retries and remove “${detail.post.ideaText}”? Its delivery history will be retained.`
-      : hasFailedHistory
-      ? `Remove “${detail.post.ideaText}” from Drafts? Its failed delivery history will be retained.`
-      : `Delete “${detail.post.ideaText}”? This cannot be undone.`,
-  )) return;
-  saving.value = true;
+  const snapshot = captureWorkspaceSnapshot();
+
+  deleteCandidate.value = null;
+  deleting.value = true;
   error.value = "";
+  posts.value = posts.value.filter(
+    (postDetail) => postDetail.post.id !== detail.post.id,
+  );
+  if (selectedPostId.value === detail.post.id) {
+    selectedPostId.value = null;
+    selectVersion(null);
+    ensureVisibleSelection();
+  }
+
   try {
     await social.deleteSocialPost(detail.post.id, detail.post.updatedAt);
-    posts.value = posts.value.filter((postDetail) => postDetail.post.id !== detail.post.id);
-    if (selectedPostId.value === detail.post.id) {
-      selectedPostId.value = null;
-      selectVersion(null);
-      ensureVisibleSelection();
-    }
-    toastSuccess(hasFailedHistory ? "Draft removed. Failed delivery history was retained." : "Draft deleted.");
+    toastSuccess(
+      hasScheduledHistory
+        ? "Post deleted and scheduled delivery cancelled."
+        : hasFailedHistory
+          ? "Post deleted. Delivery history was retained."
+          : "Draft deleted.",
+    );
   } catch (value) {
+    restoreWorkspaceSnapshot(snapshot);
     social.setErrorFromApi(value, "Failed to delete this draft");
     error.value = social.error || "Failed to delete this draft";
+    toastError(error.value);
   } finally {
-    saving.value = false;
+    deleting.value = false;
   }
 }
 
@@ -1374,11 +1526,22 @@ async function schedulePost() {
     scheduleError.value = "Schedule time must be in the future.";
     return;
   }
+  const preparation = capturePublicationPreparation();
+  if (!preparation) return;
+  const snapshot = captureWorkspaceSnapshot();
+
   scheduling.value = true;
   scheduleError.value = "";
+  error.value = "";
+  showSchedule.value = false;
+  applyOptimisticPublication(preparation, {
+    publicationStatus: "scheduled",
+    scheduledFor: resolution.value,
+    timezone: scheduleTimezone.value,
+  });
+
   try {
-    const versions = await prepareVersionsForPublication();
-    if (!versions.length) return;
+    const versions = await persistPublicationPreparation(preparation);
     const results = await Promise.allSettled(versions.map(async (version) => {
       const publication = await social.createPostVersionPublication(version.id, {
         scheduledFor: resolution.value,
@@ -1393,15 +1556,25 @@ async function schedulePost() {
       });
       return publication;
     }));
+    results.forEach((result, index) => {
+      if (result.status === "rejected" && versions[index]) {
+        replaceVersion(versions[index]!);
+      }
+    });
     const succeeded = results.filter((result) => result.status === "fulfilled").length;
     const failed = results.length - succeeded;
     if (failed) {
       scheduleError.value = `${succeeded} platform${succeeded === 1 ? "" : "s"} scheduled; ${failed} need attention. Successful schedules were kept.`;
+      error.value = scheduleError.value;
+      toastError(scheduleError.value);
+      if (succeeded === 0) activeMode.value = snapshot.activeMode;
+      ensureVisibleSelection();
       return;
     }
-    showSchedule.value = false;
     toastSuccess(`Post scheduled for ${succeeded} platform${succeeded === 1 ? "" : "s"}.`);
   } catch (value) {
+    restoreWorkspaceSnapshot(snapshot);
+    showSchedule.value = true;
     social.setErrorFromApi(value, "Failed to schedule this post");
     scheduleError.value = social.error || "Failed to schedule this post";
   } finally {
@@ -1411,11 +1584,21 @@ async function schedulePost() {
 
 async function publishNow() {
   if (!canPublishNow.value) return;
+  const preparation = capturePublicationPreparation();
+  if (!preparation) return;
+  const snapshot = captureWorkspaceSnapshot();
+
   scheduling.value = true;
   publishError.value = "";
+  error.value = "";
+  applyOptimisticPublication(preparation, {
+    publicationStatus: "queued",
+    scheduledFor: null,
+    timezone: null,
+  });
+
   try {
-    const versions = await prepareVersionsForPublication();
-    if (!versions.length) return;
+    const versions = await persistPublicationPreparation(preparation);
     const results = await Promise.allSettled(versions.map(async (version) => {
       const publication = await social.publishPostVersion(version.id);
       replaceVersion({
@@ -1428,6 +1611,11 @@ async function publishNow() {
       });
       return publication;
     }));
+    results.forEach((result, index) => {
+      if (result.status === "rejected" && versions[index]) {
+        replaceVersion(versions[index]!);
+      }
+    });
     const publications = results.flatMap((result) =>
       result.status === "fulfilled" ? [result.value] : [],
     );
@@ -1453,6 +1641,9 @@ async function publishNow() {
       publishError.value = succeeded > 0
         ? `${succeeded} platform${succeeded === 1 ? "" : "s"} started; ${failed} failed. ${failureReason}`
         : failureReason;
+      error.value = publishError.value;
+      if (succeeded === 0) activeMode.value = snapshot.activeMode;
+      ensureVisibleSelection();
       toastError(publishError.value);
       return;
     }
@@ -1478,8 +1669,10 @@ async function publishNow() {
       toastSuccess(`Published to ${succeeded} platform${succeeded === 1 ? "" : "s"}.`);
     }
   } catch (value) {
+    restoreWorkspaceSnapshot(snapshot);
     social.setErrorFromApi(value, "Failed to publish this post");
     publishError.value = social.error || "Failed to publish this post";
+    error.value = publishError.value;
     toastError(publishError.value);
   } finally {
     scheduling.value = false;
@@ -1498,16 +1691,12 @@ watch(destinationContentType, () => {
 });
 
 watch(selectedSiteId, () => {
+  if (initializing.value) return;
   void loadWorkspace();
 });
 
 onMounted(async () => {
-  if (sites.sites.length === 0) await sites.fetchSites();
-  const linkedSiteId = currentQueryParam("siteId");
-  selectedSiteId.value =
-    sites.sites.find((site) => site.id === linkedSiteId)?.id ||
-    sites.sites[0]?.id ||
-    "";
+  await initializeWorkspace();
   deliveryPollTimer = setInterval(() => {
     void refreshDeliveryStates();
   }, 5_000);
@@ -1531,39 +1720,6 @@ function currentQueryParam(name: string): string | null {
       <div v-if="error" class="state-banner state-banner--error" role="alert">{{ error }}</div>
 
       <header class="social-toolbar">
-        <form class="social-toolbar__search" role="search" @submit.prevent="searchLibrary">
-          <label>
-            <span class="sr-only">Search Post library</span>
-            <UiIcon name="Search" :size="17" aria-hidden="true" />
-            <input v-model="libraryQuery" type="search" placeholder="Search posts" />
-          </label>
-          <Button
-            v-if="libraryResults !== null"
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            type="button"
-            aria-label="Clear post search"
-            title="Clear search"
-            @click="clearLibrarySearch"
-          >
-            <UiIcon name="X" :size="16" aria-hidden="true" />
-          </Button>
-          <Button
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            type="button"
-            aria-label="Open advanced search filters"
-            title="Advanced filters"
-            :class="{ 'library-filter-button--active': advancedFiltersActive }"
-            @click="showLibraryFilters = true"
-          >
-            <UiIcon name="SlidersHorizontal" :size="17" aria-hidden="true" />
-          </Button>
-        </form>
         <div class="toolbar-actions">
           <Button
             v-if="localDemoAvailable"
@@ -1604,7 +1760,11 @@ function currentQueryParam(name: string): string | null {
         </div>
       </header>
 
-      <div v-if="sites.sites.length === 0" class="empty-state">
+      <div v-if="initializing" class="empty-state" role="status">
+        Loading social publishing…
+      </div>
+
+      <div v-else-if="sites.sites.length === 0" class="empty-state">
         <strong>Finish account setup to start publishing.</strong>
         <RouterLink to="/onboarding">Continue setup</RouterLink>
       </div>
@@ -1620,17 +1780,17 @@ function currentQueryParam(name: string): string | null {
           />
         </nav>
 
-        <div class="social-workspace" :aria-busy="loading">
+        <div
+          :class="['social-workspace', { 'social-workspace--mobile-detail-open': mobileDetailOpen }]"
+          :aria-busy="loading"
+        >
           <section class="post-list" aria-label="Social posts">
-          <p v-if="libraryResults !== null" class="library-result-count" role="status">
-            {{ libraryResults.length }} matching Version{{ libraryResults.length === 1 ? '' : 's' }}<template v-if="libraryResultBreakdown"> · {{ libraryResultBreakdown }}</template>
-          </p>
           <div v-if="loading" class="empty-state">Loading social posts…</div>
           <div v-else-if="visiblePosts.length === 0" class="empty-state">
-            <strong>{{ libraryResults !== null ? 'No matching Posts.' : `No ${activeMode} yet.` }}</strong>
-            <span v-if="activeMode === 'drafts' && libraryResults === null">Write a Post or ask the agent to repurpose a journal entry, blog post, or project task.</span>
+            <strong>No {{ activeMode }} yet.</strong>
+            <span v-if="activeMode === 'drafts'">Write a Post or ask the agent to repurpose a journal entry, blog post, or project task.</span>
             <Button
-              v-if="activeMode === 'drafts' && libraryResults === null"
+              v-if="activeMode === 'drafts'"
               color="outline"
               shape="soft"
               size="compact"
@@ -1668,7 +1828,7 @@ function currentQueryParam(name: string): string | null {
                     {{ formatDate(detail.post.updatedAt) }}
                   </time>
                 </span>
-                <strong>{{ detail.post.ideaText }}</strong>
+                <strong>{{ postPreviewText(detail) }}</strong>
                 <span class="post-row__footer">
                   <span class="platform-list">
                     <span v-for="version in visibleVersionsFor(detail)" :key="version.id" class="platform-chip" :title="accountLabel(version)">
@@ -1691,26 +1851,28 @@ function currentQueryParam(name: string): string | null {
 
           <section v-if="selectedPost" class="post-detail" aria-live="polite">
           <header class="detail-header">
-            <div>
-              <label class="sr-only" for="social-post-title">Post title</label>
-              <input
-                id="social-post-title"
-                v-model="editorTitle"
-                class="post-title-input"
-                :readonly="selectedPostReadOnly"
-                :disabled="saving"
-                aria-label="Post title"
-              />
-              <a
-                v-if="externalSourceUrl(selectedPost)"
-                class="source-link"
-                :href="externalSourceUrl(selectedPost)!"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                View source <UiIcon name="ExternalLink" :size="14" aria-hidden="true" />
-              </a>
-            </div>
+            <Button
+              class="detail-back-btn"
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              type="button"
+              title="Back"
+              aria-label="Back to social post list"
+              @click="closeMobileDetail"
+            >
+              <UiIcon name="ArrowLeft" :size="17" aria-hidden="true" />
+            </Button>
+            <a
+              v-if="externalSourceUrl(selectedPost)"
+              class="source-link"
+              :href="externalSourceUrl(selectedPost)!"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              View source <UiIcon name="ExternalLink" :size="14" aria-hidden="true" />
+            </a>
           </header>
 
           <aside
@@ -1791,8 +1953,19 @@ function currentQueryParam(name: string): string | null {
               <div v-if="sharedEditor && (sharedBodyMixed || sharedMediaMixed)" class="state-banner shared-variation-notice" role="status">
                 Some platforms already have custom {{ sharedBodyMixed && sharedMediaMixed ? 'copy and media' : sharedBodyMixed ? 'copy' : 'media' }}. Saving here will replace those custom fields across all selected platforms.
               </div>
+              <label v-if="!sharedEditor && selectedVersion.platform === 'youtube'" class="field">
+                <span>YouTube title</span>
+                <input
+                  v-model="editorTitle"
+                  type="text"
+                  maxlength="100"
+                  :disabled="saving"
+                  :readonly="selectedPostReadOnly"
+                  required
+                />
+              </label>
               <label class="field">
-                <span class="sr-only">Post text</span>
+                <span>{{ selectedVersion.platform === 'youtube' && !sharedEditor ? 'Caption' : 'Post text' }}</span>
                 <textarea
                   v-model="editorBody"
                   rows="10"
@@ -1876,8 +2049,8 @@ function currentQueryParam(name: string): string | null {
                   shape="soft"
                   size="compact"
                   type="button"
-                  :disabled="saving || scheduling"
-                  @click="deleteDraft"
+                  :disabled="saving || scheduling || deleting"
+                  @click="requestDeleteDraft"
                 >
                   <UiIcon name="Trash2" :size="16" aria-hidden="true" />
                   Delete draft
@@ -2286,6 +2459,16 @@ function currentQueryParam(name: string): string | null {
       </section>
     </AppDialog>
 
+    <ConfirmationDialog
+      :open="Boolean(deleteCandidate)"
+      title="Delete Post?"
+      :message="deleteConfirmationMessage"
+      :confirm-label="deleteConfirmationLabel"
+      danger
+      @cancel="deleteCandidate = null"
+      @confirm="confirmDeleteDraft"
+    />
+
     <AppDialog :open="showSchedule" labelled-by="social-schedule-title" @close="showSchedule = false">
       <form class="social-schedule-dialog" @submit.prevent="schedulePost">
         <header>
@@ -2339,30 +2522,6 @@ function currentQueryParam(name: string): string | null {
         </Button>
         <SocialAccountsPanel v-if="currentSite" :site-id="currentSite.id" />
       </section>
-    </AppDialog>
-
-    <AppDialog :open="showLibraryFilters" labelled-by="social-library-filters-title" @close="showLibraryFilters = false">
-      <form class="library-filters-dialog" @submit.prevent="applyLibraryFilters">
-        <header>
-          <div>
-            <h2 id="social-library-filters-title">Advanced filters</h2>
-          </div>
-          <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close advanced filters" @click="showLibraryFilters = false">
-            <UiIcon name="X" :size="17" aria-hidden="true" />
-          </Button>
-        </header>
-        <div class="library-filter-grid">
-          <label><span>Source title or reference</span><input v-model="librarySource" /></label>
-          <label><span>Platform</span><select v-model="libraryPlatform"><option value="">All platforms</option><option value="linkedin">LinkedIn</option><option value="x">X</option><option value="instagram">Instagram</option><option value="instagram_business">Instagram Business</option><option value="youtube">YouTube</option><option value="tiktok">TikTok</option></select></label>
-          <label><span>Account</span><select v-model="libraryAccountId"><option value="">All accounts</option><option v-for="account in activeAccounts" :key="account.id" :value="account.id">{{ account.displayName || account.handle || platformLabel(account.platform) }}</option></select></label>
-          <label><span>Status</span><select v-model="libraryDelivery"><option value="">Any status</option><option value="scheduled">Scheduled</option><option value="queued">Queued</option><option value="publishing">Publishing</option><option value="published">Published</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select></label>
-          <fieldset class="library-date-range"><legend>Publication date range</legend><div><label><span>From</span><input v-model="libraryPublishedFrom" type="date" /></label><label><span>To</span><input v-model="libraryPublishedTo" type="date" /></label></div></fieldset>
-        </div>
-        <footer>
-          <Button color="ghost" shape="soft" size="compact" type="button" @click="clearLibrarySearch(); showLibraryFilters = false">Clear filters</Button>
-          <Button color="primary" shape="soft" size="compact" type="submit" :disabled="librarySearching">{{ librarySearching ? 'Searching…' : 'Apply filters' }}</Button>
-        </footer>
-      </form>
     </AppDialog>
 
   </div>
@@ -2432,53 +2591,10 @@ function currentQueryParam(name: string): string | null {
   position: sticky;
   top: 0;
   z-index: 3;
-  display: grid;
-  grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr);
+  justify-content: flex-end;
   margin-left: calc(var(--app-shell-mobile-nav-leading-padding) - 16px);
   padding: var(--workspace-topbar-padding-block) 0 0;
   background: var(--ui-bg);
-}
-
-.social-toolbar__search {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.social-toolbar__search label {
-  display: flex;
-  align-items: center;
-  width: min(100%, 310px);
-  min-height: 36px;
-  gap: 8px;
-  padding: 0 10px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface);
-  color: var(--ui-text-muted);
-}
-
-.social-toolbar__search input {
-  min-width: 0;
-  min-height: 34px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.social-toolbar__search label:focus-within {
-  border-color: var(--ui-accent);
-  outline: 2px solid var(--ui-accent-soft);
-}
-
-.social-toolbar__search input:focus {
-  outline: 0;
-}
-
-.library-filter-button--active {
-  color: var(--ui-accent) !important;
-  background: var(--ui-accent-soft) !important;
 }
 
 .toolbar-actions {
@@ -2584,59 +2700,10 @@ function currentQueryParam(name: string): string | null {
   background: var(--ui-surface-muted);
 }
 
-.library-search {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  border-bottom: 1px solid var(--ui-border);
-  background: var(--ui-surface);
-}
-
-.library-result-count {
-  margin: 0;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--ui-border);
-  color: var(--ui-text-muted);
-  font-size: 0.76rem;
-}
-
 .post-tags {
   display: flex;
   align-items: end;
   gap: 8px;
-}
-
-.library-filters summary {
-  display: flex;
-  min-height: 44px;
-  align-items: center;
-  color: var(--ui-text-muted);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.library-search input,
-.library-search select {
-  min-height: 44px;
-}
-
-.library-filter-grid {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.library-filter-grid label {
-  display: grid;
-  gap: 4px;
-  color: var(--ui-text-muted);
-  font-size: 0.76rem;
-}
-
-.library-result-count {
-  margin: 0;
-  color: var(--ui-text-muted);
-  font-size: 0.76rem;
 }
 
 .post-source-group > h2 {
@@ -2853,27 +2920,8 @@ function currentQueryParam(name: string): string | null {
   gap: 12px;
 }
 
-.detail-header > div {
-  flex: 1;
-  min-width: 0;
-}
-
-.post-title-input {
-  width: min(100%, 760px);
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  font-size: clamp(1.25rem, 2vw, 1.75rem);
-  font-weight: 750;
-  line-height: 1.25;
-}
-
-.post-title-input:focus {
-  border-radius: var(--ui-radius-sm);
-  border-color: var(--ui-accent);
-  outline: 2px solid var(--ui-accent-soft);
+.detail-back-btn {
+  display: none;
 }
 
 .publication-panel,
@@ -2886,6 +2934,7 @@ function currentQueryParam(name: string): string | null {
 }
 
 .post-preview p {
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   line-height: 1.55;
 }
@@ -2968,7 +3017,7 @@ function currentQueryParam(name: string): string | null {
 
 .version-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
   gap: 20px;
   margin-top: 20px;
 }
@@ -2985,6 +3034,7 @@ function currentQueryParam(name: string): string | null {
 
 .version-editor {
   gap: 14px;
+  min-width: 0;
 }
 
 .editor-context {
@@ -3152,6 +3202,9 @@ input:focus {
   align-self: start;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   padding: 0;
   border: 1px solid var(--ui-border);
@@ -3850,56 +3903,6 @@ input:focus {
   box-shadow: var(--ui-shadow-md);
 }
 
-.library-filters-dialog {
-  display: grid;
-  width: min(620px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
-  gap: 18px;
-  overflow: auto;
-  box-sizing: border-box;
-  padding: 20px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-lg);
-  background: var(--ui-surface);
-  box-shadow: var(--ui-shadow-md);
-}
-
-.library-filters-dialog header,
-.library-filters-dialog footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.library-filters-dialog h2 {
-  margin: 0;
-}
-
-.library-filters-dialog .library-filter-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 0;
-}
-
-.library-date-range {
-  grid-column: 1 / -1;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.library-date-range legend {
-  margin-bottom: 6px;
-  color: var(--ui-text-muted);
-  font-size: 0.76rem;
-}
-
-.library-date-range > div {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
 .social-media-picker,
 .social-schedule-dialog,
 .publishing-checks-dialog {
@@ -4175,21 +4178,54 @@ input:focus {
   }
 
   .social-toolbar {
-    grid-template-columns: minmax(0, 1fr) auto;
+    justify-content: flex-end;
     gap: 8px;
     margin-left: calc(var(--app-shell-mobile-nav-leading-padding) - 10px);
     padding-top: var(--workspace-topbar-padding-block);
     padding-bottom: 0;
   }
 
-  .social-workspace,
+  .social-workspace {
+    display: block;
+  }
+
   .version-workspace {
     grid-template-columns: 1fr;
   }
 
   .post-list {
     border-right: 0;
-    border-bottom: 1px solid var(--ui-border);
+    border-bottom: 0;
+  }
+
+  .post-detail,
+  .detail-empty {
+    display: none;
+  }
+
+  .social-workspace--mobile-detail-open .post-list {
+    display: none;
+  }
+
+  .social-workspace--mobile-detail-open .post-detail {
+    display: block;
+  }
+
+  .detail-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    align-items: center;
+    min-height: 44px;
+    margin: -12px -12px 0;
+    padding: 8px 12px;
+    background: var(--ui-surface);
+  }
+
+  .detail-back-btn {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
   }
 }
 
@@ -4210,18 +4246,6 @@ input:focus {
 
   .editor-actions__delete {
     margin-inline-start: 0;
-  }
-
-  .library-filters-dialog .library-filter-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .library-date-range > div {
-    grid-template-columns: 1fr;
-  }
-
-  .social-toolbar__search label {
-    width: 100%;
   }
 
   .post-detail {

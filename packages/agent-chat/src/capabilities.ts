@@ -697,6 +697,68 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.journal.read",
+    owner: "plugin",
+    pluginId: "me3.journal",
+    ownerFacingLabel: "Read Journal entries",
+    summary:
+      "Read the owner's private Journal entries by latest entries, one exact date, or an inclusive date range.",
+    category: "assistant",
+    handler: {
+      surface: "chat",
+      route: "core.journal.read",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: [],
+    inputSchema: {
+      type: "object",
+      required: ["mode"],
+      properties: {
+        mode: {
+          type: "string",
+          description:
+            "Use latest for recent entries, date for one exact day, or range for an inclusive date range.",
+          enum: ["latest", "date", "range"],
+        },
+        date: {
+          type: "string",
+          description: "Exact Journal date as YYYY-MM-DD when mode is date.",
+          format: "date",
+        },
+        dateFrom: {
+          type: "string",
+          description: "Inclusive start date as YYYY-MM-DD when mode is range.",
+          format: "date",
+        },
+        dateTo: {
+          type: "string",
+          description: "Inclusive end date as YYYY-MM-DD when mode is range.",
+          format: "date",
+        },
+        limit: {
+          type: "integer",
+          description:
+            "Maximum entries to return. Latest defaults to 7; range defaults to 31 and all reads are capped at 50.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "journal_entries_read",
+    examples: {
+      positive: [
+        "Read today's Journal entry.",
+        "Show my latest seven Journal entries.",
+        "Read my Journal from 2026-07-01 through 2026-07-07.",
+      ],
+      negative: ["Write a Journal entry for today."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.owner_content.search",
     owner: "core",
     pluginId: null,

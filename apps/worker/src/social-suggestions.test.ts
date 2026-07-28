@@ -769,6 +769,7 @@ const schemaSql = `
     platform TEXT NOT NULL,
     target_account_id TEXT,
     format TEXT NOT NULL,
+    title TEXT,
     body_text TEXT NOT NULL,
     asset_manifest_json TEXT NOT NULL,
     carousel_render_set_id TEXT,

@@ -2092,7 +2092,7 @@ async function getOwnedPostVersionPublicationCandidate(
 ): Promise<PostVersionPublicationCandidate | null> {
   return env.DB.prepare(
     `SELECT v.id, v.platform, v.target_account_id, v.format, v.body_text,
-            p.post_title_snapshot AS post_title,
+            COALESCE(NULLIF(TRIM(v.title), ''), p.post_title_snapshot) AS post_title,
             v.asset_manifest_json, v.approval_status, v.approved_at,
             v.approved_by_user_id, p.site_id, p.source_type AS post_source_type
      FROM social_variants v

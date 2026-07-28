@@ -852,6 +852,7 @@ CREATE TABLE social_variants (
   platform TEXT NOT NULL,
   target_account_id TEXT,
   format TEXT NOT NULL DEFAULT 'post',
+  title TEXT,
   body_text TEXT NOT NULL DEFAULT '',
   asset_manifest_json TEXT NOT NULL DEFAULT '[]',
   source_excerpt TEXT,

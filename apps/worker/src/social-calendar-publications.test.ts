@@ -77,6 +77,7 @@ describe("Social Publication Calendar projection", () => {
       updatedAt: "2026-07-01T08:00:00.000Z",
     });
     expect(publications.some((entry) => entry.id === "publication-cancelled")).toBe(false);
+    expect(publications.some((entry) => entry.id === "publication-archived")).toBe(false);
     expect(publications.some((entry) => entry.id === "publication-other-owner")).toBe(false);
     expect(fixture.scalar("SELECT COUNT(*) AS count FROM user_calendar_events")).toBe(before);
   });
@@ -124,16 +125,19 @@ class CalendarFixture {
          ('account-1', 'site-1', 'linkedin', 'linkedin-1', '@kieran', 'Kieran Butler');
 
        INSERT INTO social_packages (
-         id, site_id, post_title_snapshot, idea_text, source_type, source_ref
+         id, site_id, post_title_snapshot, idea_text, source_type, source_ref, status
        ) VALUES
          ('post-1', 'site-1', 'Launch Post', 'A source-backed launch Post',
-          'journal', 'journal:entry-1'),
+          'journal', 'journal:entry-1', 'ready'),
          ('post-2', 'site-2', 'Private Post', 'Another owner Post',
-          'journal', 'journal:entry-private');
+          'journal', 'journal:entry-private', 'ready'),
+         ('post-archived', 'site-1', 'Removed Post', 'An archived social Post',
+          'journal', 'journal:entry-archived', 'archived');
 
        INSERT INTO social_variants (id, package_id, platform, title) VALUES
          ('version-1', 'post-1', 'linkedin', 'Launch announcement'),
-         ('version-2', 'post-2', 'linkedin', 'Private announcement');
+         ('version-2', 'post-2', 'linkedin', 'Private announcement'),
+         ('version-archived', 'post-archived', 'linkedin', 'Removed announcement');
 
        INSERT INTO user_calendar_events (id, user_id, title) VALUES
          ('calendar-event-1', 'owner', 'Existing personal event');
@@ -175,6 +179,12 @@ class CalendarFixture {
          id: "publication-cancelled",
          status: "cancelled",
          scheduledFor: "2026-07-22T09:00:00.000Z",
+       })}
+       ${publicationSql({
+         id: "publication-archived",
+         status: "failed",
+         scheduledFor: "2026-07-23T09:00:00.000Z",
+         versionId: "version-archived",
        })}
        ${publicationSql({
          id: "publication-other-owner",
@@ -290,7 +300,8 @@ const schemaSql = `
     post_title_snapshot TEXT NOT NULL,
     idea_text TEXT,
     source_type TEXT NOT NULL,
-    source_ref TEXT
+    source_ref TEXT,
+    status TEXT NOT NULL DEFAULT 'ready'
   );
   CREATE TABLE social_variants (
     id TEXT PRIMARY KEY,

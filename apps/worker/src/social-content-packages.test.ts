@@ -9,6 +9,7 @@ import {
   deletePostVersion,
   deleteSocialPost,
   dispatchDueSocialPublications,
+  getSocialPost,
   listSocialPosts,
   publishQueuedPublication,
   updatePostVersion,
@@ -74,6 +75,13 @@ function createEnv() {
       user_id: "owner",
       site_id: "site-1",
       platform: "x",
+      status: "active",
+    },
+    {
+      id: "youtube-1",
+      user_id: "owner",
+      site_id: "site-1",
+      platform: "youtube",
       status: "active",
     },
   ];
@@ -163,6 +171,44 @@ describe("Social Posts", () => {
         expect(publicSurface).not.toHaveProperty(legacyExport);
       }
     }
+  });
+
+  it("stores a platform title on its Version without changing the Post caption", async () => {
+    const { env } = createEnv();
+    const created = await createSocialPost(env, "owner", {
+      siteId: "site-1",
+      sourceType: "pasted",
+      sourceSnapshot: "A source-backed video draft.",
+      sourceText: "A source-backed video draft.",
+      ideaText: "Caption used in the Social list",
+      versions: [{
+        platform: "youtube",
+        targetAccountId: "youtube-1",
+        title: "Original YouTube title",
+        bodyText: "The YouTube caption.",
+      }],
+    });
+
+    expect(created.post.ideaText).toBe("Caption used in the Social list");
+    expect(created.versions[0]).toMatchObject({
+      title: "Original YouTube title",
+      bodyText: "The YouTube caption.",
+    });
+
+    const updated = await updatePostVersion(
+      env,
+      "owner",
+      created.versions[0]!.id,
+      { title: "Updated YouTube title" },
+    );
+    expect(updated).toMatchObject({
+      title: "Updated YouTube title",
+      bodyText: "The YouTube caption.",
+    });
+
+    const reloaded = await getSocialPost(env, "owner", created.post.id);
+    expect(reloaded?.post.ideaText).toBe("Caption used in the Social list");
+    expect(reloaded?.versions[0]?.title).toBe("Updated YouTube title");
   });
 
   it("creates source-backed platform Versions and invalidates approval after edits", async () => {
@@ -341,6 +387,81 @@ describe("Social Posts", () => {
       event_type: "cancelled",
     }));
     await expect(listSocialPosts(env, "owner", "site-1")).resolves.toEqual([]);
+  });
+
+  it("cancels scheduled delivery before removing the Post", async () => {
+    const { env, packages, publications, events } = createEnv();
+    const created = await createSocialPost(env, "owner", {
+      siteId: "site-1",
+      sourceType: "pasted",
+      sourceSnapshot: "A scheduled owner-authored Post.",
+      sourceText: "A scheduled owner-authored Post.",
+      ideaText: "Scheduled Post",
+      versions: [{
+        platform: "linkedin",
+        targetAccountId: "linkedin-1",
+        bodyText: "A scheduled owner-authored Post.",
+      }],
+    });
+    publications.push({
+      id: "publication-scheduled",
+      variant_id: created.versions[0]!.id,
+      status: "scheduled",
+      scheduled_for: "2099-07-28T08:30:00.000Z",
+    });
+
+    await expect(
+      deleteSocialPost(env, "owner", created.post.id, created.post.updatedAt),
+    ).resolves.toBe(true);
+
+    expect(packages[0]?.status).toBe("archived");
+    expect(publications).toEqual([
+      expect.objectContaining({
+        id: "publication-scheduled",
+        status: "cancelled",
+        error_code: "cancelled:owner_removed_scheduled_post",
+      }),
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({
+      publication_id: "publication-scheduled",
+      event_type: "cancelled",
+    }));
+  });
+
+  it("removes a needs-review Post while retaining its unknown delivery outcome", async () => {
+    const { env, packages, publications } = createEnv();
+    const created = await createSocialPost(env, "owner", {
+      siteId: "site-1",
+      sourceType: "pasted",
+      sourceSnapshot: "A Post with an unknown provider outcome.",
+      sourceText: "A Post with an unknown provider outcome.",
+      ideaText: "Needs review",
+      versions: [{
+        platform: "x",
+        targetAccountId: "x-1",
+        bodyText: "A Post with an unknown provider outcome.",
+      }],
+    });
+    publications.push({
+      id: "publication-needs-review",
+      variant_id: created.versions[0]!.id,
+      status: "publishing",
+      error_code: "outcome_unknown:provider_write_started",
+      error_message: "Check X before trying again.",
+    });
+
+    await expect(
+      deleteSocialPost(env, "owner", created.post.id, created.post.updatedAt),
+    ).resolves.toBe(true);
+
+    expect(packages[0]?.status).toBe("archived");
+    expect(publications).toEqual([
+      expect.objectContaining({
+        id: "publication-needs-review",
+        status: "publishing",
+        error_code: "outcome_unknown:provider_write_started",
+      }),
+    ]);
   });
 
   it("atomically cancels a schedule committed immediately before a Version edit batch", async () => {
@@ -759,7 +880,11 @@ class Statement {
       return {
         total: publications.length,
         protected: publications.filter((row) =>
-          ["scheduled", "publishing", "published"].includes(String(row.status)) ||
+          row.status === "published" ||
+          (
+            row.status === "publishing" &&
+            !String(row.error_code || "").startsWith("outcome_unknown")
+          ) ||
           (
             row.status === "queued" &&
             !String(row.error_code || "").startsWith("retryable:")
@@ -1204,6 +1329,7 @@ class Statement {
         sourceExcerpt,
         createdAt,
         updatedAt,
+        title,
       ] = this.values;
       this.state.variants.push({
         id,
@@ -1211,6 +1337,7 @@ class Statement {
         platform,
         target_account_id: targetAccountId,
         format,
+        title,
         body_text: bodyText,
         asset_manifest_json: assets,
         carousel_render_set_id: null,
@@ -1373,8 +1500,13 @@ class Statement {
           for (const publication of this.state.publications.filter(
             (row) =>
               versionIds.has(row.variant_id) &&
-              row.status === "queued" &&
-              String(row.error_code || "").startsWith("retryable:"),
+              (
+                row.status === "scheduled" ||
+                (
+                  row.status === "queued" &&
+                  String(row.error_code || "").startsWith("retryable:")
+                )
+              ),
           )) {
             this.state.events.push({
               id: `social-event-retry-cancel-${publication.id}`,
@@ -1517,13 +1649,22 @@ class Statement {
         for (const publication of this.state.publications.filter(
           (row) =>
             versionIds.has(row.variant_id) &&
-            row.status === "queued" &&
-            String(row.error_code || "").startsWith("retryable:"),
+            (
+              row.status === "scheduled" ||
+              (
+                row.status === "queued" &&
+                String(row.error_code || "").startsWith("retryable:")
+              )
+            ),
         )) {
+          const wasScheduled = publication.status === "scheduled";
           publication.status = "cancelled";
-          publication.error_code = "cancelled:owner_removed_retrying_post";
-          publication.error_message =
-            "Automatic retries stopped when the owner removed the Post.";
+          publication.error_code = wasScheduled
+            ? "cancelled:owner_removed_scheduled_post"
+            : "cancelled:owner_removed_retrying_post";
+          publication.error_message = wasScheduled
+            ? "Scheduled delivery cancelled when the owner removed the Post."
+            : "Automatic retries stopped when the owner removed the Post.";
           publication.updated_at = updatedAt;
         }
         return {};
@@ -1610,6 +1751,13 @@ class Statement {
         variant.scheduled_for = null;
         variant.timezone = null;
       }
+    } else if (
+      this.sql.includes("UPDATE social_variants") &&
+      this.sql.includes("SET title = ?")
+    ) {
+      const [title, variantId] = this.values;
+      const variant = this.state.variants.find((row) => row.id === variantId);
+      if (variant) variant.title = title;
     } else if (this.sql.includes("UPDATE social_variants")) {
       const [
         targetAccountId,

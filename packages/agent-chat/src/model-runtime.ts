@@ -326,6 +326,8 @@ async function runWorkersAi(
     .toLowerCase()
     .replace(/^@cf\//, "")
     .startsWith("anthropic/");
+  const chatCompletionsVisionModel =
+    route.model.trim().toLowerCase() === "moonshotai/kimi-k3";
   const system = messages.find((message) => message.role === "system")?.content || "";
   const input = anthropicModel
     ? {
@@ -343,6 +345,8 @@ async function runWorkersAi(
           images,
         ),
       }
+    : chatCompletionsVisionModel && images.length > 0
+      ? { messages: withOpenAiImageContent(messages, images) }
     : images[0]
       ? { messages, image: images[0].dataUrl }
       : { messages };

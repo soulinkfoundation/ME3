@@ -1073,7 +1073,7 @@ const assistantAttachmentIssue = computed(() => {
     (attachment) => attachment.status === "error",
   );
   if (errored?.error) return errored.error;
-  if (!assistantAttachmentsReady.value) return "Uploading attachments...";
+  if (!assistantAttachmentsReady.value) return "";
 
   const unsupported = assistantAttachments.value.find(
     (attachment) => attachment.kind === "unsupported",
@@ -2223,13 +2223,22 @@ async function addAssistantAttachments(files: File[]) {
     );
 
     try {
-      const formData = new FormData();
-      formData.append("attachments", file);
       const threadId = routeThreadId();
-      if (threadId) formData.append("threadId", threadId);
-      const response = await api.upload<AssistantAttachmentUploadResponse>(
+      const response = await api.post<AssistantAttachmentUploadResponse>(
         "/assistant/attachments",
-        formData,
+        {
+          threadId: threadId || undefined,
+          attachments: [
+            {
+              filename: file.name || draft.name,
+              mimeType: file.type || draft.mimeType,
+              dataBase64: await assistantAttachmentFileBase64(
+                file,
+                uploadController.signal,
+              ),
+            },
+          ],
+        },
         { signal: uploadController.signal },
       );
       const uploaded = response.attachments[0];
@@ -2255,6 +2264,22 @@ async function addAssistantAttachments(files: File[]) {
       window.clearTimeout(uploadTimeoutId);
     }
   }
+}
+
+async function assistantAttachmentFileBase64(
+  file: File,
+  signal: AbortSignal,
+) {
+  if (signal.aborted) throw new DOMException("Upload aborted", "AbortError");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (signal.aborted) throw new DOMException("Upload aborted", "AbortError");
+
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return window.btoa(binary);
 }
 
 function removeAssistantAttachment(id: string) {
@@ -2343,6 +2368,14 @@ function normalizeAssistantMessageAttachments(
   return Array.isArray(attachments)
     ? attachments.filter((attachment) => attachment?.status === "ready")
     : [];
+}
+
+function assistantAttachmentContentUrl(
+  attachment: AgentChatMessageAttachment,
+) {
+  return attachment.id
+    ? `/api/assistant/attachments/${encodeURIComponent(attachment.id)}/content`
+    : "";
 }
 
 function formatFileSize(bytes: number) {
@@ -4885,44 +4918,72 @@ function messageFromUnknown(err: unknown, fallback: string) {
           >
             <div class="assistant-message__bubble">
               <div
-                v-if="assistantMessageDisplayText(message)"
-                class="assistant-message__content"
-                v-html="renderAssistantMarkdown(assistantMessageDisplayText(message))"
-              ></div>
-              <div
                 v-if="message.attachments?.length"
                 class="assistant-message-attachments"
                 aria-label="Message attachments"
               >
-                <span
+                <template
                   v-for="attachment in message.attachments"
                   :key="attachment.id || attachment.name || 'attachment'"
-                  class="assistant-message-attachment"
-                  :title="
-                    [
-                      attachment.name || 'Attachment',
-                      attachment.mimeType || '',
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')
-                  "
                 >
-                  <UiIcon
-                    :name="attachment.kind === 'image' ? 'Image' : 'FileText'"
-                    :size="14"
-                    aria-hidden="true"
-                  />
-                  <span class="assistant-message-attachment__name">
-                    {{ attachment.name || "Attachment" }}
-                  </span>
-                  <span
-                    v-if="typeof attachment.size === 'number'"
-                    class="assistant-message-attachment__meta"
+                  <figure
+                    v-if="
+                      attachment.kind === 'image' &&
+                      assistantAttachmentContentUrl(attachment)
+                    "
+                    class="assistant-message-attachment-image"
                   >
-                    {{ formatFileSize(attachment.size) }}
+                    <a
+                      class="assistant-message-attachment-image__preview"
+                      :href="assistantAttachmentContentUrl(attachment)"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <img
+                        :src="assistantAttachmentContentUrl(attachment)"
+                        :alt="attachment.name || 'Attached image'"
+                        loading="lazy"
+                      />
+                    </a>
+                    <figcaption
+                      class="assistant-message-attachment-image__caption"
+                    >
+                      <span>{{ attachment.name || "Attached image" }}</span>
+                      <span v-if="typeof attachment.size === 'number'">
+                        {{ formatFileSize(attachment.size) }}
+                      </span>
+                    </figcaption>
+                  </figure>
+                  <span
+                    v-else
+                    class="assistant-message-attachment"
+                    :title="
+                      [
+                        attachment.name || 'Attachment',
+                        attachment.mimeType || '',
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')
+                    "
+                  >
+                    <UiIcon name="FileText" :size="14" aria-hidden="true" />
+                    <span class="assistant-message-attachment__name">
+                      {{ attachment.name || "Attachment" }}
+                    </span>
+                    <span
+                      v-if="typeof attachment.size === 'number'"
+                      class="assistant-message-attachment__meta"
+                    >
+                      {{ formatFileSize(attachment.size) }}
+                    </span>
                   </span>
-                </span>
+                </template>
               </div>
+              <div
+                v-if="assistantMessageDisplayText(message)"
+                class="assistant-message__content"
+                v-html="renderAssistantMarkdown(assistantMessageDisplayText(message))"
+              ></div>
               <div
                 v-if="message.imageAction?.assets?.length"
                 class="assistant-image-assets"
@@ -5543,8 +5604,16 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 `${attachment.name} · ${formatFileSize(attachment.size)}`
               "
             >
+              <span
+                v-if="attachment.status === 'uploading'"
+                class="assistant-attachment__uploading"
+                role="status"
+                :aria-label="`Uploading ${attachment.name}`"
+              />
               <img
-                v-if="attachment.kind === 'image' && attachment.previewUrl"
+                v-else-if="
+                  attachment.kind === 'image' && attachment.previewUrl
+                "
                 class="assistant-attachment__thumb"
                 :src="attachment.previewUrl"
                 alt=""
@@ -7741,14 +7810,50 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-message-attachments {
+  display: grid;
+  gap: 6px;
+}
+
+.assistant-message-attachment-image {
+  display: grid;
+  gap: 6px;
+  width: min(420px, 100%);
+  margin: 0;
+}
+
+.assistant-message-attachment-image__preview {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+}
+
+.assistant-message-attachment-image__preview img {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.assistant-message-attachment-image__caption {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.assistant-message-attachment-image__caption span:first-child {
+  color: var(--ui-text);
+  font-weight: 700;
 }
 
 .assistant-message-attachment {
   display: inline-flex;
   align-items: center;
+  justify-self: start;
   max-width: 100%;
   gap: 6px;
   border: 1px solid var(--ui-border);
@@ -8696,6 +8801,22 @@ function messageFromUnknown(err: unknown, fallback: string) {
   object-fit: cover;
 }
 
+.assistant-attachment__uploading {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border: 2px solid color-mix(in oklab, var(--ui-text-muted) 24%, transparent);
+  border-top-color: var(--ui-accent);
+  border-radius: 999px;
+  animation: assistant-attachment-spin 0.8s linear infinite;
+}
+
+@keyframes assistant-attachment-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .assistant-attachment__name {
   min-width: 0;
   max-width: 170px;
@@ -8727,6 +8848,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-attachment__remove:hover {
   background: var(--ui-surface);
   color: var(--ui-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-attachment__uploading {
+    animation: none;
+  }
 }
 
 .composer-icon-button,
