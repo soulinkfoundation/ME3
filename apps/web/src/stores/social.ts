@@ -68,6 +68,14 @@ export type DriveFile = {
   previewKind: "image" | "pdf" | "text" | "markdown" | "csv" | "spreadsheet" | "download";
 };
 
+export type SocialLinkPreview = {
+  url: string;
+  title: string;
+  description: string | null;
+  imageUrl: string | null;
+  siteName: string;
+};
+
 export type SocialStatus = {
   plugin: {
     status: string;
@@ -677,6 +685,14 @@ export const useSocialStore = defineStore("social", () => {
     return data.items || [];
   }
 
+  async function fetchLinkPreview(url: string): Promise<SocialLinkPreview | null> {
+    error.value = null;
+    const data = await api.get<{ preview: SocialLinkPreview | null }>(
+      `/social/link-preview?url=${encodeURIComponent(url)}`,
+    );
+    return data.preview || null;
+  }
+
   async function updateSocialPost(
     postId: string,
     input: { title?: string; tags?: string[]; expectedUpdatedAt: string },
@@ -965,6 +981,7 @@ export const useSocialStore = defineStore("social", () => {
     uploadCarouselMedia,
     renderAndAttachCarousel,
     searchPostLibrary,
+    fetchLinkPreview,
     fetchSocialSuggestions,
     createSocialPost,
     createLocalSocialDemo,

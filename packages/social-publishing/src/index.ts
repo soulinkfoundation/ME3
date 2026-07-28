@@ -200,6 +200,8 @@ export const SOCIAL_PUBLISHING_PLUGIN_ID = "me3.social-publishing";
 export const SOCIAL_PUBLISH_QUEUE_NAME = "me3-social-publish";
 export const SOCIAL_PUBLISH_DLQ_NAME = "me3-social-publish-dlq";
 export const SOCIAL_PUBLISH_QUEUE_BINDING = "SOCIAL_PUBLISH_QUEUE";
+const fetchWithGlobalContext: typeof fetch = (input, init) =>
+  globalThis.fetch(input, init);
 
 export const SOCIAL_PUBLISHING_RUNTIME = {
   id: SOCIAL_PUBLISHING_PLUGIN_ID,
@@ -760,7 +762,7 @@ async function managedXUsageRequest<T>(
 
 export async function getManagedXUsageWarning(
   env: SocialPublishingEnv,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = fetchWithGlobalContext,
 ): Promise<ManagedXUsageWarning | null> {
   if (!isManagedDeployment(env)) return null;
   try {
@@ -1145,7 +1147,12 @@ export async function disconnectSocialPublishingAccount(
     account.platform === "x" &&
     parseJsonObject(account.metadata_json).credentialSource === "hosted_oauth"
   ) {
-    await releaseManagedXUsageForAccount(env, ownerId, account.id, fetch);
+    await releaseManagedXUsageForAccount(
+      env,
+      ownerId,
+      account.id,
+      fetchWithGlobalContext,
+    );
   }
   return true;
 }
@@ -1906,7 +1913,7 @@ async function createQueuedSocialVariantPublicationAndEnqueue(
   env: SocialPublishingEnv,
   ownerId: string,
   variantIdInput: unknown,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = fetchWithGlobalContext,
 ): Promise<SocialVariantPublication | null> {
   const gate = await getSocialPublishingRuntimeStatus(env);
   if (!gate.ready) throw new SocialPublishingGateError(gate);
@@ -2166,7 +2173,7 @@ export async function createPostVersionPublication(
   ownerId: string,
   versionId: unknown,
   input: CreatePublicationInput = {},
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = fetchWithGlobalContext,
   internal: CreatePublicationInternalOptions = {},
 ): Promise<Publication | null> {
   const gate = await getSocialPublishingRuntimeStatus(env);
@@ -2585,7 +2592,7 @@ export async function confirmPostingPlan(
               repost: item.isRepost,
             },
           },
-          fetch,
+          fetchWithGlobalContext,
           {
             publicationId: reservation.publicationId,
             reservationId: reservation.id,
@@ -2757,7 +2764,7 @@ export async function reschedulePublication(
     ownerId,
     publicationId,
     scheduledFor,
-    fetch,
+    fetchWithGlobalContext,
   );
   const restoreManagedXReservation = async () => {
     if (!managedXReservation.managed) return;
@@ -2766,7 +2773,7 @@ export async function reschedulePublication(
       ownerId,
       publicationId,
       existing.scheduled_for,
-      fetch,
+      fetchWithGlobalContext,
     ).catch(() => undefined);
   };
 
@@ -2984,7 +2991,7 @@ export async function cancelPublication(
     env,
     publication.platform,
     publication.id,
-    fetch,
+    fetchWithGlobalContext,
   );
   return refreshed;
 }
@@ -3144,7 +3151,7 @@ export async function dispatchDueSocialPublications(
       await resumeQueuedPublicationHandoff(
         env,
         { id: claim.id, status: "queued", queuedAt: null },
-        fetch,
+        fetchWithGlobalContext,
       );
       queued += 1;
     } catch {
@@ -3174,7 +3181,7 @@ export async function dispatchDueSocialPublications(
 
 export async function recoverStrandedQueuedSocialPublications(
   env: SocialPublishingEnv,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = fetchWithGlobalContext,
 ): Promise<{ requeued: number; skipped: number }> {
   const staleRows = await env.DB.prepare(
     `SELECT id, updated_at
@@ -3243,7 +3250,11 @@ export async function processSocialPublishBatch(
         message.ack();
         continue;
       }
-      await publishQueuedPublication(env, message.body.publicationId, fetch);
+      await publishQueuedPublication(
+        env,
+        message.body.publicationId,
+        fetchWithGlobalContext,
+      );
       message.ack();
     } catch (error) {
       if (isDeadLetterBatch) {
@@ -3305,7 +3316,7 @@ async function recoverUnexpectedSocialPublishFailure(
       env,
       row.platform,
       managedXReservationIdForAttempt(row.publication_id, attempt),
-      fetch,
+      fetchWithGlobalContext,
     );
   }
   const code = "retryable:unexpected_pre_provider_failure";
@@ -3404,7 +3415,7 @@ export async function markSocialPublishQueueMessageDeadLettered(
       env,
       row.platform,
       managedXReservationIdForAttempt(row.publication_id, attempt),
-      fetch,
+      fetchWithGlobalContext,
     );
   }
   return failed;
@@ -3413,7 +3424,7 @@ export async function markSocialPublishQueueMessageDeadLettered(
 export async function publishQueuedPublication(
   env: SocialPublishingEnv,
   publicationIdInput: unknown,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = fetchWithGlobalContext,
 ): Promise<void> {
   const gate = await getSocialPublishingRuntimeStatus(env);
   const publicationId = normalizeId(publicationIdInput);
@@ -4945,7 +4956,7 @@ async function revokeSocialVariantApproval(
       env,
       publication.platform,
       publication.id,
-      fetch,
+      fetchWithGlobalContext,
     );
   }
 }

@@ -11,6 +11,7 @@ import { API_BASE } from "../api";
 import { useAppToast } from "../composables/useAppToast";
 import { socialPlatformIconPath } from "../utils/social-platform-icons";
 import { resolveLocalDateTimeToUtc } from "../utils/timezone";
+import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import {
   useSocialStore,
@@ -19,6 +20,7 @@ import {
   type DriveFolder,
   type SocialAccountRow,
   type SocialContentType,
+  type SocialLinkPreview,
   type SocialPlatform,
   type SocialPlatformCapabilities,
   type SocialPlatformContentRule,
@@ -61,6 +63,18 @@ type PublicationPreparation = {
   titleChanged: boolean;
 };
 
+type EditorDraft = {
+  bodyText: string;
+  title: string;
+  targetAccountId: string | null;
+};
+
+type DeleteCandidate = {
+  detail: SocialPostDetail;
+  version: PostVersion | null;
+};
+
+const auth = useAuthStore();
 const sites = useSitesStore();
 const social = useSocialStore();
 const selectedSiteId = ref("");
@@ -93,20 +107,31 @@ const mediaError = ref("");
 const showSchedule = ref(false);
 const scheduleDate = ref("");
 const scheduleTime = ref("09:00");
-const scheduleTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+const scheduleTimezone = computed(
+  () => auth.user?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+);
 const scheduleError = ref("");
-const publishError = ref("");
 const scheduling = ref(false);
-const deleteCandidate = ref<SocialPostDetail | null>(null);
+const deleteCandidate = ref<DeleteCandidate | null>(null);
+const linkPreview = ref<SocialLinkPreview | null>(null);
+const linkPreviewLoading = ref(false);
 const showPublishingChecks = ref(false);
 const showDestinations = ref(false);
 const destinationMode = ref<"create" | "manage">("create");
-const destinationContentType = ref<SocialContentType>("short_video");
+const destinationContentType = ref<SocialContentType>("text");
 const selectedDestinationAccountIds = ref<string[]>([]);
 const destinationError = ref("");
 const { toast, toastError, toastSuccess } = useAppToast();
 let deliveryPollTimer: ReturnType<typeof setInterval> | null = null;
+let editorSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let linkPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+let linkPreviewSequence = 0;
 let workspaceLoadSequence = 0;
+const MEDIA_CACHE_TTL_MS = 60_000;
+const mediaFileCache = new Map<string, { files: DriveFile[]; cachedAt: number }>();
+let mediaFolderCache: { folders: DriveFolder[]; cachedAt: number } | null = null;
+const editorDrafts = new Map<string, EditorDraft>();
+const linkPreviewCache = new Map<string, SocialLinkPreview | null>();
 
 const currentSite = computed(
   () => sites.sites.find((site) => site.id === selectedSiteId.value) || null,
@@ -161,6 +186,16 @@ const selectedVersion = computed(
     null,
 );
 
+const editorLinkUrl = computed(() => {
+  if (
+    sharedEditor.value ||
+    (selectedVersion.value?.platform !== "linkedin" && selectedVersion.value?.platform !== "x")
+  ) {
+    return null;
+  }
+  return previewLinkUrl(editorBody.value);
+});
+
 const selectedVisibleVersions = computed(() =>
   selectedPost.value ? visibleVersionsFor(selectedPost.value) : [],
 );
@@ -195,11 +230,6 @@ const sharedMediaMixed = computed(() => {
 const selectedPostReadOnly = computed(
   () => selectedPost.value?.post.sourceType === "legacy_content_bank_read_only",
 );
-
-const editorDirty = computed(() => editorVersions.value.some((version) =>
-  editorBody.value.trim() !== version.bodyText ||
-  (!sharedEditor.value && (editorAccountId.value || null) !== version.targetAccountId),
-));
 
 const titleDirty = computed(() =>
   Boolean(
@@ -280,13 +310,29 @@ const canPublishNow = computed(() => Boolean(
   ),
 ));
 
-const canDeleteDraft = computed(() =>
-  Boolean(selectedPost.value && canDeletePost(selectedPost.value)),
+const canOpenSchedule = computed(() => canSchedule.value || canPublishNow.value);
+
+const selectedDeleteVersion = computed(() =>
+  !sharedEditor.value && selectedPost.value && selectedPost.value.versions.length > 1
+    ? selectedVersion.value
+    : null,
 );
 
+const canDeleteDraft = computed(() => {
+  const detail = selectedPost.value;
+  if (!detail) return false;
+  return selectedDeleteVersion.value
+    ? canRemoveVersion(selectedDeleteVersion.value)
+    : canDeletePost(detail);
+});
+
 const deleteConfirmationMessage = computed(() => {
-  const detail = deleteCandidate.value;
-  if (!detail) return "";
+  const candidate = deleteCandidate.value;
+  if (!candidate) return "";
+  const { detail, version } = candidate;
+  if (version) {
+    return `Remove ${platformLabel(version.platform)} from this Post? Other platform versions will be kept.`;
+  }
   const title = postPreviewText(detail);
   const hasScheduledDelivery = detail.versions.some((version) =>
     Boolean(version.scheduledFor) || version.publicationStatus === "scheduled",
@@ -310,11 +356,19 @@ const deleteConfirmationMessage = computed(() => {
 });
 
 const deleteConfirmationLabel = computed(() =>
-  deleteCandidate.value?.versions.some((version) =>
+  deleteCandidate.value?.version
+    ? `Remove ${platformLabel(deleteCandidate.value.version.platform)}`
+    : deleteCandidate.value?.detail.versions.some((version) =>
     Boolean(version.scheduledFor) || version.publicationStatus === "scheduled",
   )
     ? "Cancel and delete"
-    : "Delete",
+    : "Delete"
+);
+
+const deleteActionLabel = computed(() =>
+  selectedDeleteVersion.value
+    ? `Delete ${platformLabel(selectedDeleteVersion.value.platform)} draft`
+    : "Delete draft",
 );
 
 const publishingCheckIssueCount = computed(() =>
@@ -414,8 +468,8 @@ function contentTypeFor(
   if (assets.some(isVideoAsset)) return "short_video";
   if (assets.length > 1) return "carousel";
   if (assets.length === 1) return "image";
-  if (format === "short_video" || format === "image" || format === "carousel") return format;
   if (capability?.contentRules?.some((rule) => rule.contentType === "text")) return "text";
+  if (format === "short_video" || format === "image" || format === "carousel") return format;
   if (capability?.contentRules?.some((rule) => rule.contentType === destinationContentType.value)) {
     return destinationContentType.value;
   }
@@ -562,26 +616,46 @@ function previewLinkHost(bodyText: string): string {
   }
 }
 
+function scheduleLinkPreview(url: string | null) {
+  if (linkPreviewTimer) clearTimeout(linkPreviewTimer);
+  linkPreviewTimer = null;
+  linkPreviewSequence += 1;
+  linkPreview.value = null;
+  linkPreviewLoading.value = false;
+  if (!url) return;
+
+  if (linkPreviewCache.has(url)) {
+    linkPreview.value = linkPreviewCache.get(url) || null;
+    return;
+  }
+
+  const sequence = linkPreviewSequence;
+  linkPreviewLoading.value = true;
+  linkPreviewTimer = setTimeout(async () => {
+    linkPreviewTimer = null;
+    try {
+      const preview = await social.fetchLinkPreview(url);
+      linkPreviewCache.set(url, preview);
+      if (sequence === linkPreviewSequence && editorLinkUrl.value === url) {
+        linkPreview.value = preview;
+      }
+    } catch {
+      linkPreviewCache.set(url, null);
+    } finally {
+      if (sequence === linkPreviewSequence) linkPreviewLoading.value = false;
+    }
+  }, 350);
+}
+
+function hidePreviewImage() {
+  if (linkPreview.value) {
+    linkPreview.value = { ...linkPreview.value, imageUrl: null };
+  }
+}
+
 function externalSourceUrl(detail: SocialPostDetail): string | null {
   const sourceRef = detail.post.sourceRef?.trim();
   return sourceRef && /^https?:\/\//i.test(sourceRef) ? sourceRef : null;
-}
-
-function versionState(version: PostVersion): string {
-  if (version.publicationStatus === "failed") return "Failed";
-  if (version.publicationStatus === "cancelled") return "Cancelled";
-  if (version.publicationStatus === "publishing" || version.publicationStatus === "queued") {
-    if (version.failureClass === "retryable") return "Retrying";
-    if (version.failureClass === "outcome_unknown") return "Needs review";
-    return "Publishing";
-  }
-  if (version.failureClass) return "Failed";
-  if (version.publicationStatus === "published") {
-    return version.platform === "tiktok" ? "Sent to TikTok" : "Published";
-  }
-  if (version.scheduledFor) return "Scheduled";
-  if (version.approvalStatus === "approved") return "Approved";
-  return "Draft";
 }
 
 function versionMode(version: PostVersion): WorkspaceMode {
@@ -594,20 +668,6 @@ function versionMode(version: PostVersion): WorkspaceMode {
     return "scheduled";
   }
   return "drafts";
-}
-
-function postStatus(detail: SocialPostDetail): string {
-  const states = visibleVersionsFor(detail).map(versionState);
-  if (states.includes("Failed")) return "Failed";
-  if (states.includes("Needs review")) return "Needs review";
-  if (states.includes("Retrying")) return "Retrying";
-  if (states.includes("Publishing")) return "Publishing";
-  if (states.includes("Scheduled")) return "Scheduled";
-  if (states.includes("Sent to TikTok")) return "Sent to TikTok";
-  if (states.includes("Published")) return "Published";
-  if (states.includes("Cancelled")) return "Cancelled";
-  if (states.includes("Approved")) return "Approved";
-  return "Draft";
 }
 
 function versionHasActivePublication(version: PostVersion): boolean {
@@ -708,24 +768,26 @@ function selectPost(detail: SocialPostDetail, openDetail = true) {
 }
 
 function selectVersion(version: PostVersion | null) {
+  const draft = version ? editorDrafts.get(version.id) : null;
   editorScope.value = "platform";
   selectedVersionId.value = version?.id || null;
   instagramPreviewIndex.value = 0;
-  editorTitle.value = version?.title || "";
-  editorBody.value = version?.bodyText || "";
-  editorAccountId.value = version?.targetAccountId || activeAccounts.value.find(
+  editorTitle.value = draft?.title ?? version?.title ?? "";
+  editorBody.value = draft?.bodyText ?? version?.bodyText ?? "";
+  editorAccountId.value = draft?.targetAccountId || version?.targetAccountId || activeAccounts.value.find(
     (account) => account.platform === version?.platform,
   )?.id || "";
 }
 
 function selectSharedVersions(versions = selectedVisibleVersions.value) {
   const first = versions[0] || null;
+  const draft = first ? editorDrafts.get(first.id) : null;
   editorScope.value = versions.length > 1 ? "shared" : "platform";
   selectedVersionId.value = first?.id || null;
   instagramPreviewIndex.value = 0;
   editorTitle.value = "";
-  editorBody.value = first?.bodyText || "";
-  editorAccountId.value = first?.targetAccountId || "";
+  editorBody.value = draft?.bodyText ?? first?.bodyText ?? "";
+  editorAccountId.value = draft?.targetAccountId || first?.targetAccountId || "";
 }
 
 function setInstagramPreview(index: number) {
@@ -887,7 +949,7 @@ async function refreshDeliveryStates() {
 }
 
 
-function replaceVersion(version: PostVersion) {
+function replaceVersion(version: PostVersion, syncEditor = true) {
   posts.value = posts.value.map((detail) =>
     detail.post.id === version.postId
       ? {
@@ -896,7 +958,7 @@ function replaceVersion(version: PostVersion) {
         }
       : detail,
   );
-  if (!sharedEditor.value && selectedVersionId.value === version.id) {
+  if (syncEditor && !sharedEditor.value && selectedVersionId.value === version.id) {
     selectVersion(version);
   }
 }
@@ -933,43 +995,100 @@ function versionById(versionId: string): PostVersion | null {
     .find((version) => version.id === versionId) || null;
 }
 
-async function saveDraft() {
-  const post = selectedPost.value;
-  const versions = [...editorVersions.value];
-  if (!post || versions.length === 0 || selectedPostReadOnly.value || !editorBody.value.trim()) return;
-  if (!editorDirty.value && !titleDirty.value) return;
+function clearEditorSaveTimer() {
+  if (!editorSaveTimer) return;
+  clearTimeout(editorSaveTimer);
+  editorSaveTimer = null;
+}
+
+function editorDraftMatches(left: EditorDraft | undefined, right: EditorDraft): boolean {
+  return Boolean(
+    left &&
+    left.bodyText === right.bodyText &&
+    left.title === right.title &&
+    left.targetAccountId === right.targetAccountId
+  );
+}
+
+function captureEditorDraft() {
   const wasShared = sharedEditor.value;
-  const selectedId = selectedVersionId.value;
-  const nextBodyText = editorBody.value.trim();
+  for (const version of editorVersions.value) {
+    const draft: EditorDraft = {
+      bodyText: editorBody.value.trim(),
+      title:
+        !wasShared && version.platform === "youtube"
+          ? editorTitle.value.trim()
+          : version.title || "",
+      targetAccountId:
+        wasShared ? version.targetAccountId : editorAccountId.value || null,
+    };
+    const unchanged =
+      draft.bodyText === version.bodyText &&
+      draft.title === (version.title || "") &&
+      draft.targetAccountId === version.targetAccountId;
+    if (unchanged) editorDrafts.delete(version.id);
+    else editorDrafts.set(version.id, draft);
+  }
+}
+
+function scheduleEditorSave() {
+  queueEditorSave(true);
+}
+
+function queueEditorSave(capture: boolean) {
+  if (capture) captureEditorDraft();
+  clearEditorSaveTimer();
+  if (
+    selectedPostReadOnly.value ||
+    editorDrafts.size === 0
+  ) return;
+  editorSaveTimer = setTimeout(() => {
+    editorSaveTimer = null;
+    void saveDraft();
+  }, 700);
+}
+
+async function flushPendingEditorSave() {
+  clearEditorSaveTimer();
+  await saveDraft();
+}
+
+async function saveDraft() {
+  const pending = [...editorDrafts.entries()]
+    .map(([versionId, draft]) => ({ version: versionById(versionId), draft }))
+    .filter(
+      (item): item is { version: PostVersion; draft: EditorDraft } =>
+        Boolean(item.version && item.draft.bodyText),
+    );
+  if (pending.length === 0 || selectedPostReadOnly.value) return;
+  if (saving.value) {
+    queueEditorSave(false);
+    return;
+  }
+  let saveFailed = false;
   saving.value = true;
   error.value = "";
   try {
-    for (const version of versions) {
+    for (const { version, draft } of pending) {
       replaceVersion(await social.updatePostVersion(version.id, {
-        bodyText: nextBodyText,
-        ...(!wasShared && version.platform === "youtube"
-          ? { title: editorTitle.value.trim() }
+        bodyText: draft.bodyText,
+        ...(version.platform === "youtube"
+          ? { title: draft.title }
           : {}),
-        ...(wasShared
-          ? {}
-          : { targetAccountId: editorAccountId.value || null }),
-      }));
+        targetAccountId: draft.targetAccountId,
+      }), false);
+      if (editorDraftMatches(editorDrafts.get(version.id), draft)) {
+        editorDrafts.delete(version.id);
+      }
     }
-    const current = posts.value.find((detail) => detail.post.id === post.post.id);
-    if (current) {
-      if (wasShared) selectSharedVersions(visibleVersionsFor(current));
-      else selectVersion(
-        current.versions.find((version) => version.id === selectedId) || current.versions[0] || null,
-      );
-    }
-    toastSuccess(wasShared && versions.length > 1
-      ? `Shared copy saved to ${versions.length} platforms.`
-      : "Draft saved. Approval was removed if its content changed.");
   } catch (value) {
+    saveFailed = true;
     social.setErrorFromApi(value, "Failed to save this draft");
     error.value = social.error || "Failed to save this draft";
+    toastError(error.value);
   } finally {
     saving.value = false;
+    if (!saveFailed && editorDrafts.size > 0) queueEditorSave(false);
   }
 }
 
@@ -1098,7 +1217,7 @@ async function persistPublicationPreparation(
 
 function openCreateDraft() {
   destinationMode.value = "create";
-  destinationContentType.value = "short_video";
+  destinationContentType.value = "text";
   selectedDestinationAccountIds.value = [];
   destinationError.value = "";
   showDestinations.value = true;
@@ -1109,9 +1228,10 @@ function openManageDestinations() {
   if (!detail || selectedPostReadOnly.value) return;
   destinationMode.value = "manage";
   const base = selectedVersion.value || detail.versions[0] || null;
-  destinationContentType.value = base
+  const contentType = base
     ? contentTypeFor(capabilityFor(base.platform), base.assetManifest, base.format)
     : "short_video";
+  destinationContentType.value = contentType === "carousel" ? "image" : contentType;
   selectedDestinationAccountIds.value = detail.versions
     .map((version) => version.targetAccountId)
     .filter((accountId): accountId is string => Boolean(accountId));
@@ -1252,13 +1372,22 @@ async function loadLocalDemo() {
 
 function requestDeleteDraft() {
   const detail = selectedPost.value;
-  if (!detail || !canDeletePost(detail) || saving.value || deleting.value) return;
-  deleteCandidate.value = detail;
+  const version = selectedDeleteVersion.value;
+  if (
+    !detail ||
+    saving.value ||
+    deleting.value ||
+    (version ? !canRemoveVersion(version) : !canDeletePost(detail))
+  ) return;
+  deleteCandidate.value = { detail, version };
 }
 
 async function confirmDeleteDraft() {
-  const detail = deleteCandidate.value;
-  if (!detail || !canDeletePost(detail) || deleting.value) return;
+  const candidate = deleteCandidate.value;
+  if (!candidate || deleting.value) return;
+  const { detail, version } = candidate;
+  if (version && !canRemoveVersion(version)) return;
+  if (!version && !canDeletePost(detail)) return;
   const hasFailedHistory = detail.versions.some((version) =>
     version.publicationStatus === "failed" ||
     version.publicationStatus === "cancelled" ||
@@ -1272,24 +1401,50 @@ async function confirmDeleteDraft() {
   deleteCandidate.value = null;
   deleting.value = true;
   error.value = "";
-  posts.value = posts.value.filter(
-    (postDetail) => postDetail.post.id !== detail.post.id,
-  );
-  if (selectedPostId.value === detail.post.id) {
-    selectedPostId.value = null;
-    selectVersion(null);
-    ensureVisibleSelection();
+  if (version) {
+    const remainingVersions = detail.versions.filter((item) => item.id !== version.id);
+    editorDrafts.delete(version.id);
+    posts.value = posts.value.map((postDetail) =>
+      postDetail.post.id === detail.post.id
+        ? { ...postDetail, versions: remainingVersions }
+        : postDetail,
+    );
+    if (remainingVersions.length > 1) selectSharedVersions(remainingVersions);
+    else selectVersion(remainingVersions[0] || null);
+  } else {
+    for (const item of detail.versions) editorDrafts.delete(item.id);
+    posts.value = posts.value.filter(
+      (postDetail) => postDetail.post.id !== detail.post.id,
+    );
+    if (selectedPostId.value === detail.post.id) {
+      selectedPostId.value = null;
+      selectVersion(null);
+      ensureVisibleSelection();
+    }
   }
 
   try {
-    await social.deleteSocialPost(detail.post.id, detail.post.updatedAt);
-    toastSuccess(
-      hasScheduledHistory
-        ? "Post deleted and scheduled delivery cancelled."
-        : hasFailedHistory
-          ? "Post deleted. Delivery history was retained."
-          : "Draft deleted.",
-    );
+    if (version) {
+      const updated = await social.deletePostVersion(version.id);
+      posts.value = posts.value.map((postDetail) =>
+        postDetail.post.id === updated.post.id ? updated : postDetail,
+      );
+      const remaining = updated.versions.filter(
+        (item) => versionMode(item) === activeMode.value,
+      );
+      if (remaining.length > 1) selectSharedVersions(remaining);
+      else selectVersion(remaining[0] || updated.versions[0] || null);
+      toastSuccess(`${platformLabel(version.platform)} draft removed.`);
+    } else {
+      await social.deleteSocialPost(detail.post.id, detail.post.updatedAt);
+      toastSuccess(
+        hasScheduledHistory
+          ? "Post deleted and scheduled delivery cancelled."
+          : hasFailedHistory
+            ? "Post deleted. Delivery history was retained."
+            : "Draft deleted.",
+      );
+    }
   } catch (value) {
     restoreWorkspaceSnapshot(snapshot);
     social.setErrorFromApi(value, "Failed to delete this draft");
@@ -1315,10 +1470,19 @@ function driveFileUrl(fileId: string): string {
 }
 
 async function loadMediaFiles() {
+  const cacheKey = mediaFolderId.value || "";
+  const cached = mediaFileCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < MEDIA_CACHE_TTL_MS) {
+    mediaFiles.value = cached.files;
+    mediaLoading.value = false;
+    return;
+  }
   mediaLoading.value = true;
   mediaError.value = "";
   try {
-    mediaFiles.value = (await social.listDriveFiles(mediaFolderId.value)).filter(isMediaFile);
+    const files = (await social.listDriveFiles(mediaFolderId.value)).filter(isMediaFile);
+    mediaFiles.value = files;
+    mediaFileCache.set(cacheKey, { files, cachedAt: Date.now() });
   } catch (value) {
     social.setErrorFromApi(value, "Failed to load media from Files");
     mediaError.value = social.error || "Failed to load media from Files";
@@ -1333,14 +1497,29 @@ async function openMediaPicker() {
   selectedMediaFileIds.value = [];
   mediaFolderId.value = null;
   mediaError.value = "";
+  const cachedFiles = mediaFileCache.get("");
+  if (
+    mediaFolderCache &&
+    cachedFiles &&
+    Date.now() - mediaFolderCache.cachedAt < MEDIA_CACHE_TTL_MS &&
+    Date.now() - cachedFiles.cachedAt < MEDIA_CACHE_TTL_MS
+  ) {
+    mediaFolders.value = mediaFolderCache.folders;
+    mediaFiles.value = cachedFiles.files;
+    mediaLoading.value = false;
+    return;
+  }
   mediaLoading.value = true;
   try {
     const [folders, files] = await Promise.all([
       social.listDriveFolders(),
       social.listDriveFiles(null),
     ]);
+    const readyFiles = files.filter(isMediaFile);
     mediaFolders.value = folders;
-    mediaFiles.value = files.filter(isMediaFile);
+    mediaFiles.value = readyFiles;
+    mediaFolderCache = { folders, cachedAt: Date.now() };
+    mediaFileCache.set("", { files: readyFiles, cachedAt: Date.now() });
   } catch (value) {
     social.setErrorFromApi(value, "Failed to load media from Files");
     mediaError.value = social.error || "Failed to load media from Files";
@@ -1502,8 +1681,10 @@ async function removeMedia(assetUrl: string) {
   }
 }
 
-function openSchedule() {
-  if (!canSchedule.value) return;
+async function openSchedule() {
+  if (!canOpenSchedule.value) return;
+  await flushPendingEditorSave();
+  if (!canOpenSchedule.value) return;
   const start = new Date(Date.now() + 60 * 60 * 1000);
   scheduleDate.value = start.toISOString().slice(0, 10);
   scheduleTime.value = start.toTimeString().slice(0, 5);
@@ -1564,7 +1745,14 @@ async function schedulePost() {
     const succeeded = results.filter((result) => result.status === "fulfilled").length;
     const failed = results.length - succeeded;
     if (failed) {
-      scheduleError.value = `${succeeded} platform${succeeded === 1 ? "" : "s"} scheduled; ${failed} need attention. Successful schedules were kept.`;
+      const firstFailure = results.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (firstFailure) {
+        social.setErrorFromApi(firstFailure.reason, "One or more platforms could not be scheduled.");
+      }
+      const summary = `${succeeded} platform${succeeded === 1 ? "" : "s"} scheduled; ${failed} need attention. Successful schedules were kept.`;
+      scheduleError.value = social.error ? `${summary} ${social.error}` : summary;
       error.value = scheduleError.value;
       toastError(scheduleError.value);
       if (succeeded === 0) activeMode.value = snapshot.activeMode;
@@ -1589,8 +1777,8 @@ async function publishNow() {
   const snapshot = captureWorkspaceSnapshot();
 
   scheduling.value = true;
-  publishError.value = "";
   error.value = "";
+  showSchedule.value = false;
   applyOptimisticPublication(preparation, {
     publicationStatus: "queued",
     scheduledFor: null,
@@ -1638,13 +1826,12 @@ async function publishNow() {
         providerMessage ||
         social.error ||
         "One or more platforms could not start publishing.";
-      publishError.value = succeeded > 0
+      const message = succeeded > 0
         ? `${succeeded} platform${succeeded === 1 ? "" : "s"} started; ${failed} failed. ${failureReason}`
         : failureReason;
-      error.value = publishError.value;
       if (succeeded === 0) activeMode.value = snapshot.activeMode;
       ensureVisibleSelection();
-      toastError(publishError.value);
+      toastError(message);
       return;
     }
     const includesTikTok = versions.some((version) => version.platform === "tiktok");
@@ -1671,9 +1858,7 @@ async function publishNow() {
   } catch (value) {
     restoreWorkspaceSnapshot(snapshot);
     social.setErrorFromApi(value, "Failed to publish this post");
-    publishError.value = social.error || "Failed to publish this post";
-    error.value = publishError.value;
-    toastError(publishError.value);
+    toastError(social.error || "Failed to publish this post");
   } finally {
     scheduling.value = false;
   }
@@ -1690,6 +1875,10 @@ watch(destinationContentType, () => {
   });
 });
 
+watch(editorLinkUrl, (url) => {
+  scheduleLinkPreview(url);
+}, { immediate: true });
+
 watch(selectedSiteId, () => {
   if (initializing.value) return;
   void loadWorkspace();
@@ -1704,6 +1893,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (deliveryPollTimer) clearInterval(deliveryPollTimer);
+  clearEditorSaveTimer();
+  if (linkPreviewTimer) clearTimeout(linkPreviewTimer);
+  linkPreviewSequence += 1;
 });
 
 function currentQueryParam(name: string): string | null {
@@ -1717,7 +1909,6 @@ function currentQueryParam(name: string): string | null {
   <div class="social-page">
     <main class="social-main">
       <h1 class="sr-only">Social Publishing</h1>
-      <div v-if="error" class="state-banner state-banner--error" role="alert">{{ error }}</div>
 
       <header class="social-toolbar">
         <div class="toolbar-actions">
@@ -1842,7 +2033,6 @@ function currentQueryParam(name: string): string | null {
                       <span class="sr-only">{{ accountLabel(version) }}</span>
                     </span>
                   </span>
-                  <span class="row-status">{{ postStatus(detail) }}</span>
                 </span>
               </button>
             </article>
@@ -1906,7 +2096,6 @@ function currentQueryParam(name: string): string | null {
               title="Edit shared copy and media for every selected platform"
               @click="selectSharedVersions()"
             >
-              <UiIcon name="Copy" :size="17" aria-hidden="true" />
               <span>All</span>
             </button>
             <button
@@ -1945,11 +2134,6 @@ function currentQueryParam(name: string): string | null {
             :class="['version-workspace', { 'version-workspace--shared': sharedEditor }]"
           >
             <div class="version-editor">
-              <div class="editor-context">
-                <strong>{{ sharedEditor ? 'All selected platforms' : platformLabel(selectedVersion.platform) }}</strong>
-                <span v-if="sharedEditor">Shared edits replace copy and media on every selected platform. Open a platform tab to customise it.</span>
-                <span v-else>Edit only this platform version.</span>
-              </div>
               <div v-if="sharedEditor && (sharedBodyMixed || sharedMediaMixed)" class="state-banner shared-variation-notice" role="status">
                 Some platforms already have custom {{ sharedBodyMixed && sharedMediaMixed ? 'copy and media' : sharedBodyMixed ? 'copy' : 'media' }}. Saving here will replace those custom fields across all selected platforms.
               </div>
@@ -1959,18 +2143,20 @@ function currentQueryParam(name: string): string | null {
                   v-model="editorTitle"
                   type="text"
                   maxlength="100"
-                  :disabled="saving"
                   :readonly="selectedPostReadOnly"
                   required
+                  @input="scheduleEditorSave"
+                  @blur="flushPendingEditorSave"
                 />
               </label>
               <label class="field">
-                <span>{{ selectedVersion.platform === 'youtube' && !sharedEditor ? 'Caption' : 'Post text' }}</span>
                 <textarea
                   v-model="editorBody"
-                  rows="10"
-                  :disabled="saving"
+                  rows="6"
+                  :aria-label="selectedVersion.platform === 'youtube' && !sharedEditor ? 'Caption' : 'Post text'"
                   :readonly="selectedPostReadOnly"
+                  @input="scheduleEditorSave"
+                  @blur="flushPendingEditorSave"
                 />
               </label>
               <div class="editor-validation-summary" aria-live="polite">
@@ -1986,7 +2172,7 @@ function currentQueryParam(name: string): string | null {
                     <UiIcon name="Images" :size="17" aria-hidden="true" />
                     Add media
                   </Button>
-                  <span v-if="editorAssetManifest.length">{{ editorAssetManifest.length }} attached</span>
+                  <span v-if="editorAssetManifest.length > 1">{{ editorAssetManifest.length }} attached</span>
                 </div>
                 <div v-if="editorAssetManifest.length" class="media-attachments__items">
                   <figure v-for="(asset, index) in editorAssetManifest" :key="asset.url" class="media-attachment">
@@ -2011,20 +2197,16 @@ function currentQueryParam(name: string): string | null {
               </div>
 
               <div v-if="!selectedPostReadOnly" class="editor-actions">
-                <Button color="outline" shape="soft" size="compact" type="button" :disabled="saving || scheduling || (!editorDirty && !titleDirty)" @click="saveDraft">
-                  Save Draft
-                </Button>
-                <Button color="outline" shape="soft" size="compact" type="button" :disabled="saving || scheduling || !canPublishNow" @click="publishNow">
-                  <UiIcon name="Send" :size="16" aria-hidden="true" />
-                  {{ scheduling ? 'Posting…' : 'Post now' }}
-                </Button>
-                <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || scheduling || !canSchedule" @click="openSchedule">
-                  <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
+                <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || scheduling || !canOpenSchedule" @click="openSchedule">
+                  <template #icon>
+                    <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
+                  </template>
                   Schedule
                 </Button>
                 <Button
+                  v-if="publishingCheckIssueCount"
                   class="editor-actions__checks"
-                  color="outline"
+                  color="ghost"
                   shape="soft"
                   size="compact"
                   icon-only
@@ -2033,14 +2215,7 @@ function currentQueryParam(name: string): string | null {
                   :title="publishingChecksLabel"
                   @click="showPublishingChecks = true"
                 >
-                  <UiIcon name="ClipboardCheck" :size="17" aria-hidden="true" />
-                  <span
-                    v-if="publishingCheckIssueCount"
-                    class="editor-actions__check-count"
-                    aria-hidden="true"
-                  >
-                    {{ publishingCheckIssueCount }}
-                  </span>
+                  <UiIcon name="Info" :size="19" aria-hidden="true" />
                 </Button>
                 <Button
                   v-if="canDeleteDraft"
@@ -2052,11 +2227,12 @@ function currentQueryParam(name: string): string | null {
                   :disabled="saving || scheduling || deleting"
                   @click="requestDeleteDraft"
                 >
-                  <UiIcon name="Trash2" :size="16" aria-hidden="true" />
-                  Delete draft
+                  <template #icon>
+                    <UiIcon name="Trash2" :size="16" aria-hidden="true" />
+                  </template>
+                  {{ deleteActionLabel }}
                 </Button>
               </div>
-              <p v-if="publishError" class="form-error editor-action-error" role="alert" aria-live="assertive">{{ publishError }}</p>
             </div>
 
             <aside v-if="!sharedEditor" :class="['post-preview', `post-preview--${selectedVersion.platform}`]" aria-label="Post preview">
@@ -2212,14 +2388,33 @@ function currentQueryParam(name: string): string | null {
                   </span>
                 </div>
                 <a
-                  v-if="previewLinkUrl(editorBody)"
+                  v-if="editorLinkUrl"
                   class="preview-link-card"
-                  :href="previewLinkUrl(editorBody)!"
+                  :href="linkPreview?.url || editorLinkUrl"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  <span class="preview-link-card__eyebrow">{{ previewLinkHost(editorBody) }}</span>
-                  <strong>{{ previewLinkUrl(editorBody) }}</strong>
+                  <img
+                    v-if="linkPreview?.imageUrl"
+                    class="preview-link-card__image"
+                    :src="linkPreview.imageUrl"
+                    alt=""
+                    loading="lazy"
+                    referrerpolicy="no-referrer"
+                    @error="hidePreviewImage"
+                  />
+                  <span class="preview-link-card__content">
+                    <span class="preview-link-card__eyebrow">
+                      {{ linkPreview?.siteName || previewLinkHost(editorBody) }}
+                    </span>
+                    <strong>{{ linkPreview?.title || editorLinkUrl }}</strong>
+                    <span v-if="linkPreview?.description" class="preview-link-card__description">
+                      {{ linkPreview.description }}
+                    </span>
+                    <span v-else-if="linkPreviewLoading" class="preview-link-card__loading">
+                      Loading preview…
+                    </span>
+                  </span>
                 </a>
                 <a v-if="selectedVersion.platformPostUrl" :href="selectedVersion.platformPostUrl" target="_blank" rel="noopener noreferrer">
                   View published Post
@@ -2258,7 +2453,6 @@ function currentQueryParam(name: string): string | null {
         <header>
           <div>
             <h2 id="social-destinations-title">{{ destinationMode === 'create' ? 'Choose publishing platforms' : 'Publishing platforms' }}</h2>
-            <p>No platform is selected by default. Choose only the destinations for this Post.</p>
           </div>
           <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close platform picker" @click="showDestinations = false">
             <UiIcon name="X" :size="17" aria-hidden="true" />
@@ -2272,15 +2466,10 @@ function currentQueryParam(name: string): string | null {
             <UiIcon name="Play" :size="17" aria-hidden="true" />
             <span>Short video</span>
           </label>
-          <label :class="{ 'is-selected': destinationContentType === 'image' }">
+          <label :class="{ 'is-selected': destinationContentType === 'image' || destinationContentType === 'carousel' }">
             <input v-model="destinationContentType" type="radio" value="image" />
-            <UiIcon name="Image" :size="17" aria-hidden="true" />
-            <span>Image</span>
-          </label>
-          <label :class="{ 'is-selected': destinationContentType === 'carousel' }">
-            <input v-model="destinationContentType" type="radio" value="carousel" />
             <UiIcon name="Images" :size="17" aria-hidden="true" />
-            <span>Carousel</span>
+            <span>Images</span>
           </label>
           <label :class="{ 'is-selected': destinationContentType === 'text' }">
             <input v-model="destinationContentType" type="radio" value="text" />
@@ -2321,7 +2510,6 @@ function currentQueryParam(name: string): string | null {
 
         <p v-if="destinationError" class="form-error" role="alert">{{ destinationError }}</p>
         <footer>
-          <span>{{ selectedDestinationAccountIds.length }} selected</span>
           <div class="inline-actions">
             <Button color="outline" shape="soft" size="compact" type="button" :disabled="saving" @click="showDestinations = false">Cancel</Button>
             <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || selectedDestinationAccountIds.length === 0" @click="saveDestinations">
@@ -2368,7 +2556,7 @@ function currentQueryParam(name: string): string | null {
           >
             <span class="social-media-picker__preview">
               <video v-if="isVideoFile(file)" :src="driveFileUrl(file.id)" muted preload="metadata" aria-hidden="true" />
-              <img v-else :src="driveFileUrl(file.id)" alt="" />
+              <img v-else :src="driveFileUrl(file.id)" alt="" loading="lazy" decoding="async" />
               <span v-if="selectedMediaFileIds.includes(file.id)" class="social-media-picker__order" aria-hidden="true">
                 {{ selectedMediaFileIds.indexOf(file.id) + 1 }}
               </span>
@@ -2473,34 +2661,34 @@ function currentQueryParam(name: string): string | null {
       <form class="social-schedule-dialog" @submit.prevent="schedulePost">
         <header>
           <div>
-            <h2 id="social-schedule-title">Schedule post</h2>
-            <p>{{ targetValidations.length }} selected platform{{ targetValidations.length === 1 ? '' : 's' }}. Each receives its exact platform version.</p>
+            <h2 id="social-schedule-title">Publish post</h2>
+            <p>Publish immediately or choose a date and time.</p>
           </div>
           <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close schedule dialog" @click="showSchedule = false">
             <UiIcon name="X" :size="17" aria-hidden="true" />
           </Button>
         </header>
 
-        <ul class="publish-target-list">
-          <li v-for="validation in targetValidations" :key="validation.version.id">
-            <span>
-              <strong>{{ platformLabel(validation.version.platform) }}</strong>
-              <small>{{ validation.capability?.deliveryLabel }}</small>
-            </span>
-            <span :class="['validation-state', { 'validation-state--ready': !validation.issue && validation.capability?.publish }]">
-              {{ validation.issue || (validation.capability?.publish ? 'Ready' : validation.capability?.reason || 'Unavailable') }}
-            </span>
-          </li>
-        </ul>
-
         <div class="schedule-fields">
           <label class="field"><span>Date</span><input v-model="scheduleDate" type="date" required /></label>
           <label class="field"><span>Time</span><input v-model="scheduleTime" type="time" required /></label>
         </div>
-        <label class="field"><span>Timezone</span><input v-model="scheduleTimezone" required /></label>
         <p v-if="scheduleError" class="form-error" role="alert">{{ scheduleError }}</p>
         <footer>
           <Button color="outline" shape="soft" size="compact" type="button" :disabled="scheduling" @click="showSchedule = false">Cancel</Button>
+          <Button
+            color="outline"
+            shape="soft"
+            size="compact"
+            type="button"
+            :disabled="scheduling || !canPublishNow"
+            @click="publishNow"
+          >
+            <template #icon>
+              <UiIcon name="Send" :size="16" aria-hidden="true" />
+            </template>
+            {{ scheduling ? 'Posting…' : 'Post now' }}
+          </Button>
           <Button
             color="primary"
             shape="soft"
@@ -2508,7 +2696,9 @@ function currentQueryParam(name: string): string | null {
             type="submit"
             :disabled="scheduling || !canSchedule"
           >
-            <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
+            <template #icon>
+              <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
+            </template>
             {{ scheduling ? 'Scheduling…' : 'Schedule' }}
           </Button>
         </footer>
@@ -2613,6 +2803,12 @@ function currentQueryParam(name: string): string | null {
   padding: 4px 8px 0;
   box-sizing: border-box;
   background: var(--ui-bg);
+}
+
+.social-tabs-rail :deep(.workspace-tabs__tab--active) {
+  margin-bottom: 0;
+  padding-bottom: 6px;
+  border-bottom: 0;
 }
 
 .toolbar-actions :deep(button) {
@@ -2791,41 +2987,19 @@ function currentQueryParam(name: string): string | null {
   gap: 6px;
 }
 
-.row-status {
-  padding: 3px 7px;
-  border: 1px solid var(--ui-border);
-  border-radius: 999px;
-  color: var(--ui-text-muted);
-  font-size: 0.72rem;
-}
-
 .editor-actions__delete {
   margin-inline-start: auto;
 }
 
 .editor-actions__checks {
-  position: relative;
-  width: 44px;
-  min-width: 44px;
-  min-height: 44px;
+  width: 36px;
+  min-width: 36px;
+  color: #a54545;
 }
 
-.editor-actions__check-count {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  display: grid;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
-  place-items: center;
-  border: 2px solid var(--ui-surface);
-  border-radius: 999px;
-  background: #a54545;
-  color: #fff;
-  font-size: 0.65rem;
-  font-weight: 750;
-  line-height: 1;
+.editor-actions__checks:hover:not(:disabled) {
+  background: color-mix(in srgb, #a54545 10%, transparent);
+  color: #a54545;
 }
 
 .platform-chip {
@@ -2991,8 +3165,7 @@ function currentQueryParam(name: string): string | null {
 .version-tab--shared {
   grid-auto-flow: column;
   width: auto;
-  min-width: 58px;
-  gap: 5px;
+  min-width: 44px;
   padding: 0 8px;
   filter: none;
   font: inherit;
@@ -3017,19 +3190,20 @@ function currentQueryParam(name: string): string | null {
 
 .version-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+  grid-template-columns: minmax(0, 0.9fr) minmax(280px, 1.1fr);
   gap: 20px;
   margin-top: 20px;
 }
 
 .version-workspace--shared {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 680px);
 }
 
 .version-editor,
 .field {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .version-editor {
@@ -3037,12 +3211,6 @@ function currentQueryParam(name: string): string | null {
   min-width: 0;
 }
 
-.editor-context {
-  display: grid;
-  gap: 3px;
-}
-
-.editor-context > span,
 .editor-validation-summary {
   color: var(--ui-text-muted);
   font-size: 0.76rem;
@@ -3180,6 +3348,7 @@ input {
 }
 
 textarea {
+  min-width: 0;
   resize: vertical;
   padding: 12px;
   line-height: 1.5;
@@ -3317,15 +3486,30 @@ input:focus {
 
 .preview-link-card {
   display: grid;
-  gap: 3px;
   margin: 0 14px 12px;
-  padding: 10px 11px;
+  padding: 0;
   border: 1px solid #d8e0e5;
   border-radius: 11px;
   background: #f8fafc;
   color: #111827;
   overflow: hidden;
   text-decoration: none;
+}
+
+.preview-link-card__image {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  aspect-ratio: 1.91 / 1;
+  border-bottom: 1px solid #d8e0e5;
+  object-fit: cover;
+}
+
+.preview-link-card__content {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 11px;
 }
 
 .preview-link-card:hover {
@@ -3344,6 +3528,21 @@ input:focus {
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.preview-link-card__description {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #475569;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.preview-link-card__loading {
+  color: #64748b;
+  font-size: 0.72rem;
 }
 
 .preview-platform-bar {
@@ -3926,6 +4125,10 @@ input:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.social-destinations-dialog > footer {
+  justify-content: flex-end;
 }
 
 .social-destinations-dialog h2,

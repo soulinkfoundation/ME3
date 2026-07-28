@@ -634,6 +634,40 @@ describe("reusable social Publications", () => {
     )).toEqual({ count: 3 });
   });
 
+  it("preserves the Worker global fetch context for provider requests", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    await enableProviderDelivery(fixture, publication.id);
+    const providerFetcher = linkedInFetcher(201);
+    const contextSensitiveFetch = vi.fn(function (
+      this: unknown,
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) {
+      if (this !== globalThis) {
+        throw new TypeError("Illegal invocation: incorrect this reference");
+      }
+      return providerFetcher(input);
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", contextSensitiveFetch);
+
+    const message = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [message] },
+      fixture.env as never,
+    );
+
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
+    expect(contextSensitiveFetch).toHaveBeenCalledTimes(2);
+    expect(fixture.db.first<{ status: string; platform_post_id: string }>(
+      "SELECT status, platform_post_id FROM social_publications WHERE id = ?",
+      publication.id,
+    )).toEqual({
+      status: "published",
+      platform_post_id: "urn:li:share:stale-provider-result",
+    });
+  });
+
   it("authenticates a hosted LinkedIn refresh as the linked installation", async () => {
     const publication = await createPublication(fixture, "version-1");
     fixture.db.exec(

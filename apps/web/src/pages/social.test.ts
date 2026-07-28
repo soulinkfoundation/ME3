@@ -2,6 +2,7 @@ import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
+import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import SocialPage from "./social.vue";
 
@@ -32,7 +33,7 @@ const account = {
 };
 
 function platformCapability(
-  platform: "linkedin" | "instagram" | "tiktok" | "youtube",
+  platform: "linkedin" | "x" | "instagram" | "tiktok" | "youtube",
   options: { schedule: boolean; deliveryMode: "direct_publish" | "provider_draft" },
 ) {
   const isTikTok = platform === "tiktok";
@@ -72,7 +73,7 @@ function platformCapability(
           contentType: "text",
           label: "Text post",
           requiresText: true,
-          maxTextCharacters: 3_000,
+          maxTextCharacters: platform === "x" ? 280 : 3_000,
           minMediaItems: 0,
           maxMediaItems: 0,
           allowedMediaKinds: [],
@@ -138,6 +139,15 @@ describe("SocialPage", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    useAuthStore().user = {
+      id: "owner",
+      email: "owner@example.com",
+      name: "Kieran",
+      username: "kieran",
+      timezone: "Europe/Dublin",
+      locale: "en-IE",
+      localeSource: "explicit",
+    };
     useSitesStore().sites = [{
       id: "site-1", username: "kieran", user_id: "owner", custom_domain: null,
       custom_domain_status: null, created_at: "2026-07-01T08:00:00Z",
@@ -218,6 +228,7 @@ describe("SocialPage", () => {
     expect(wrapper.findAll(".publication-history")).toHaveLength(0);
     expect(wrapper.text()).not.toContain("Suggestions");
     expect(wrapper.text()).not.toContain("Posting plan");
+    expect(wrapper.text()).not.toContain("Edit only this platform version.");
     expect(wrapper.classes()).toBeTruthy();
     expect(wrapper.get(".social-workspace").classes())
       .not.toContain("social-workspace--mobile-detail-open");
@@ -229,7 +240,98 @@ describe("SocialPage", () => {
       .not.toContain("social-workspace--mobile-detail-open");
   });
 
-  it("uses Schedule as the primary action and keeps Post now out of the dialog", async () => {
+  it("uses tabs as context and hides singular media and row status labels", async () => {
+    const singleImagePost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        assetManifest: [post.versions[0].assetManifest[0]],
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [singleImagePost] });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+      if (endpoint === "/social/status") {
+        return Promise.resolve({
+          plugin: {
+            status: "installed",
+            enabled: true,
+            ready: true,
+            statusLabel: "Installed",
+            platformCapabilities: [
+              platformCapability("linkedin", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+            ],
+          },
+          hostedOAuth: { configured: false, platforms: [] },
+        });
+      }
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.find(".editor-context").exists()).toBe(false);
+    expect(wrapper.get(".version-editor textarea").attributes("aria-label")).toBe("Post text");
+    expect(wrapper.find(".version-editor > .field > span").exists()).toBe(false);
+    expect(wrapper.get(".media-attachments__toolbar").text()).not.toContain("attached");
+    expect(wrapper.find(".row-status").exists()).toBe(false);
+  });
+
+  it("treats an empty X draft as text even when its stored format is short video", async () => {
+    const xAccount = {
+      ...account,
+      id: "account-x",
+      platform: "x",
+      handle: "kieranofearth",
+      displayName: "Kieran Butler",
+    };
+    const xPost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        id: "version-x",
+        platform: "x" as const,
+        targetAccountId: xAccount.id,
+        format: "short_video" as const,
+        bodyText: "Untitled draft",
+        assetManifest: [],
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") return Promise.resolve({ posts: [xPost] });
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [xAccount] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("x", {
+              schedule: true,
+              deliveryMode: "direct_publish",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Add one video.");
+    expect(wrapper.find(".validation-issue").exists()).toBe(false);
+  });
+
+  it("keeps the editor actions minimal and moves Post now into the publish dialog", async () => {
     const textOnlyPost = {
       ...post,
       versions: [{
@@ -265,22 +367,21 @@ describe("SocialPage", () => {
 
     const actions = wrapper.get(".editor-actions");
     expect(actions.findAll("button").map((button) => button.text().trim())).toEqual([
-      "Save Draft",
-      "Post now",
       "Schedule",
-      "",
       "Delete draft",
     ]);
-    actions.get("[aria-label^='Review publishing checks']");
+    expect(actions.find("[aria-label^='Review publishing checks']").exists()).toBe(false);
     const schedule = actions.findAll("button")
       .find((button) => button.text().trim() === "Schedule");
     expect(schedule?.attributes("disabled")).toBeUndefined();
     await schedule!.trigger("click");
     await flushPromises();
 
-    expect(wrapper.get(".social-schedule-dialog h2").text()).toBe("Schedule post");
+    expect(wrapper.get(".social-schedule-dialog h2").text()).toBe("Publish post");
     expect(wrapper.find(".social-schedule-dialog input[type='radio']").exists()).toBe(false);
-    expect(wrapper.get(".social-schedule-dialog").text()).not.toContain("Post now");
+    expect(wrapper.get(".social-schedule-dialog").text()).toContain("Post now");
+    expect(wrapper.find(".social-schedule-dialog .publish-target-list").exists()).toBe(false);
+    expect(wrapper.get(".social-schedule-dialog").text()).not.toContain("Timezone");
   });
 
   it("moves a Post into Scheduled immediately while its schedule is being saved", async () => {
@@ -344,11 +445,10 @@ describe("SocialPage", () => {
     await schedule!.trigger("click");
     await wrapper.get(".social-schedule-dialog input[type='date']").setValue("2099-07-30");
     await wrapper.get(".social-schedule-dialog input[type='time']").setValue("10:00");
-    await wrapper.get(".social-schedule-dialog input:not([type])").setValue("Europe/Dublin");
     await wrapper.get(".social-schedule-dialog").trigger("submit");
 
     expect(wrapper.find(".social-schedule-dialog").exists()).toBe(false);
-    expect(wrapper.get(".row-status").text()).toBe("Scheduled");
+    expect(wrapper.find(".row-status").exists()).toBe(false);
     expect(wrapper.get(".workspace-tabs").text()).toContain("Scheduled1");
 
     resolveApproval({
@@ -424,11 +524,14 @@ describe("SocialPage", () => {
 
     const wrapper = mountPage();
     await flushPromises();
-    const postNow = wrapper.findAll(".editor-actions button")
+    const schedule = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Schedule");
+    await schedule!.trigger("click");
+    const postNow = wrapper.findAll(".social-schedule-dialog button")
       .find((button) => button.text().trim() === "Post now");
     await postNow!.trigger("click");
 
-    expect(wrapper.get(".row-status").text()).toBe("Publishing");
+    expect(wrapper.find(".row-status").exists()).toBe(false);
     expect(wrapper.get(".workspace-tabs").text()).toContain("Scheduled1");
 
     resolveApproval({
@@ -473,6 +576,153 @@ describe("SocialPage", () => {
     expect(wrapper.find(".post-detail").exists()).toBe(false);
     resolveDelete({ ok: true });
     await flushPromises();
+  });
+
+  it("deletes only the active platform draft when a Post has multiple platforms", async () => {
+    const xAccount = {
+      ...account,
+      id: "account-x",
+      platform: "x",
+      handle: "@kieranofearth",
+      displayName: "Kieran Butler",
+    };
+    const xVersion = {
+      ...post.versions[0],
+      id: "version-x",
+      platform: "x" as const,
+      targetAccountId: xAccount.id,
+      assetManifest: [],
+    };
+    const multiPlatformPost = {
+      ...post,
+      versions: [
+        { ...post.versions[0], assetManifest: [] },
+        xVersion,
+      ],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [multiPlatformPost] });
+      }
+      if (endpoint === "/social/accounts") {
+        return Promise.resolve({ accounts: [account, xAccount] });
+      }
+      if (endpoint === "/social/status") {
+        return Promise.resolve({
+          plugin: {
+            status: "installed",
+            enabled: true,
+            ready: true,
+            statusLabel: "Installed",
+            platformCapabilities: [
+              platformCapability("linkedin", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+              platformCapability("x", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+            ],
+          },
+          hostedOAuth: { configured: false, platforms: [] },
+        });
+      }
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.delete).mockResolvedValue({
+      post: {
+        ...multiPlatformPost,
+        versions: [xVersion],
+      },
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    await wrapper.get(".version-tab[title^='LinkedIn ·']").trigger("click");
+
+    const deleteAction = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Delete LinkedIn draft");
+    expect(deleteAction).toBeTruthy();
+    await deleteAction!.trigger("click");
+    expect(wrapper.get(".confirmation-dialog").text()).toContain(
+      "Remove LinkedIn from this Post? Other platform versions will be kept.",
+    );
+    const confirm = wrapper.get(".confirmation-dialog").findAll("button")
+      .find((button) => button.text().trim() === "Remove LinkedIn");
+    await confirm!.trigger("click");
+    await flushPromises();
+
+    expect(api.delete).toHaveBeenCalledWith("/social/versions/version-1");
+    expect(wrapper.find(".version-tab[title^='LinkedIn ·']").exists()).toBe(false);
+    expect(wrapper.find(".version-tab[title^='X ·']").exists()).toBe(true);
+  });
+
+  it("deletes the whole multi-platform Post from the All tab", async () => {
+    const xAccount = {
+      ...account,
+      id: "account-x",
+      platform: "x",
+      handle: "@kieranofearth",
+    };
+    const multiPlatformPost = {
+      ...post,
+      versions: [
+        { ...post.versions[0], assetManifest: [] },
+        {
+          ...post.versions[0],
+          id: "version-x",
+          platform: "x" as const,
+          targetAccountId: xAccount.id,
+          assetManifest: [],
+        },
+      ],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [multiPlatformPost] });
+      }
+      if (endpoint === "/social/accounts") {
+        return Promise.resolve({ accounts: [account, xAccount] });
+      }
+      if (endpoint === "/social/status") {
+        return Promise.resolve({
+          plugin: {
+            status: "installed",
+            enabled: true,
+            ready: true,
+            statusLabel: "Installed",
+            platformCapabilities: [
+              platformCapability("linkedin", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+              platformCapability("x", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+            ],
+          },
+          hostedOAuth: { configured: false, platforms: [] },
+        });
+      }
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.delete).mockResolvedValue({ ok: true });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.get(".version-tab--shared").classes()).toContain("version-tab--active");
+    await wrapper.get(".editor-actions__delete").trigger("click");
+    const confirm = wrapper.get(".confirmation-dialog").findAll("button")
+      .find((button) => button.text().trim() === "Delete");
+    await confirm!.trigger("click");
+    await flushPromises();
+
+    expect(api.delete).toHaveBeenCalledWith(
+      "/social/posts/post-1?expectedUpdatedAt=2026-07-18T07%3A00%3A00Z",
+    );
+    expect(wrapper.find(".post-detail").exists()).toBe(false);
   });
 
   it("shows and orders scheduled posts by their scheduled date and time", async () => {
@@ -594,7 +844,14 @@ describe("SocialPage", () => {
     await flushPromises();
 
     expect(api.post).not.toHaveBeenCalled();
-    await wrapper.get(".content-type-picker input[value='text']").setValue();
+    expect(
+      (wrapper.get(".content-type-picker input[value='text']").element as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(wrapper.findAll(".content-type-picker label").map((label) => label.text().trim()))
+      .toEqual(["Short video", "Images", "Text"]);
+    expect(wrapper.get(".social-destinations-dialog").text())
+      .not.toContain("No platform is selected by default");
+    expect(wrapper.find(".social-destinations-dialog > footer > span").exists()).toBe(false);
     await wrapper.get(".destination-option").trigger("click");
     const createDraft = wrapper.findAll("button").find((button) => button.text().includes("Create draft"));
     expect(createDraft).toBeTruthy();
@@ -737,9 +994,7 @@ describe("SocialPage", () => {
     expect((titleInput.element as HTMLInputElement).value).toBe("Original YouTube title");
     await titleInput.setValue("Saved YouTube title");
     await wrapper.get(".version-editor textarea").setValue("Saved body");
-    const save = wrapper.findAll(".editor-actions button")
-      .find((button) => button.text().includes("Save Draft"));
-    await save!.trigger("click");
+    await wrapper.get(".version-editor textarea").trigger("blur");
     await flushPromises();
 
     expect(api.patch).toHaveBeenCalledWith("/social/versions/version-1", {
@@ -753,6 +1008,183 @@ describe("SocialPage", () => {
       .toBe("Saved body");
   });
 
+  it("autosaves text changes after the journal-style debounce", async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.patch).mockImplementation(async (_endpoint, input) => ({
+      version: {
+        ...post.versions[0],
+        bodyText: (input as { bodyText: string }).bodyText,
+      },
+    }));
+    const wrapper = mountPage();
+    try {
+      await flushPromises();
+      await wrapper.get(".version-editor textarea").setValue("Autosaved body");
+
+      expect(api.patch).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(699);
+      expect(api.patch).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await flushPromises();
+
+      expect(api.patch).toHaveBeenCalledWith("/social/versions/version-1", {
+        bodyText: "Autosaved body",
+        targetAccountId: "account-linkedin",
+      });
+      expect(wrapper.get(".editor-actions").text()).not.toContain("Save Draft");
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a platform edit when switching tabs before autosave finishes", async () => {
+    vi.useFakeTimers();
+    const xAccount = {
+      ...account,
+      id: "account-x",
+      platform: "x",
+      handle: "@kieranofearth",
+      displayName: "Kieran Butler",
+    };
+    const multiPlatformPost = {
+      ...post,
+      versions: [
+        { ...post.versions[0], assetManifest: [], bodyText: "LinkedIn original" },
+        {
+          ...post.versions[0],
+          id: "version-x",
+          platform: "x" as const,
+          targetAccountId: xAccount.id,
+          bodyText: "X original",
+          assetManifest: [],
+        },
+      ],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [multiPlatformPost] });
+      }
+      if (endpoint === "/social/accounts") {
+        return Promise.resolve({ accounts: [account, xAccount] });
+      }
+      if (endpoint === "/social/status") {
+        return Promise.resolve({
+          plugin: {
+            status: "installed",
+            enabled: true,
+            ready: true,
+            statusLabel: "Installed",
+            platformCapabilities: [
+              platformCapability("linkedin", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+              platformCapability("x", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+            ],
+          },
+          hostedOAuth: { configured: false, platforms: [] },
+        });
+      }
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.patch).mockImplementation(async (endpoint, input) => {
+      const version = multiPlatformPost.versions.find(
+        (item) => endpoint.endsWith(item.id),
+      )!;
+      return { version: { ...version, ...(input as Record<string, unknown>) } };
+    });
+
+    const wrapper = mountPage();
+    try {
+      await flushPromises();
+      await wrapper.get(".version-tab[title^='LinkedIn ·']").trigger("click");
+      await wrapper.get(".version-editor textarea").setValue("LinkedIn edited");
+      await wrapper.get(".version-tab[title^='X ·']").trigger("click");
+      expect((wrapper.get(".version-editor textarea").element as HTMLTextAreaElement).value)
+        .toBe("X original");
+      await wrapper.get(".version-tab[title^='LinkedIn ·']").trigger("click");
+      expect((wrapper.get(".version-editor textarea").element as HTMLTextAreaElement).value)
+        .toBe("LinkedIn edited");
+
+      await vi.advanceTimersByTimeAsync(700);
+      await flushPromises();
+      expect(api.patch).toHaveBeenCalledWith("/social/versions/version-1", {
+        bodyText: "LinkedIn edited",
+        targetAccountId: "account-linkedin",
+      });
+      expect((wrapper.get(".version-editor textarea").element as HTMLTextAreaElement).value)
+        .toBe("LinkedIn edited");
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders an image-rich link card for LinkedIn and X captions", async () => {
+    vi.useFakeTimers();
+    const textOnlyPost = {
+      ...post,
+      versions: [{ ...post.versions[0], assetManifest: [] }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [textOnlyPost] });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+      if (endpoint === "/social/status") {
+        return Promise.resolve({
+          plugin: {
+            status: "installed",
+            enabled: true,
+            ready: true,
+            statusLabel: "Installed",
+            platformCapabilities: [
+              platformCapability("linkedin", {
+                schedule: true,
+                deliveryMode: "direct_publish",
+              }),
+            ],
+          },
+          hostedOAuth: { configured: false, platforms: [] },
+        });
+      }
+      if (endpoint.startsWith("/social/link-preview?url=")) {
+        return Promise.resolve({
+          preview: {
+            url: "https://example.com/story",
+            title: "A useful visual story",
+            description: "The short version of the story.",
+            imageUrl: "https://example.com/card.jpg",
+            siteName: "Example",
+          },
+        });
+      }
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    try {
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(350);
+      await flushPromises();
+
+      const card = wrapper.get(".preview-link-card");
+      expect(card.text()).toContain("A useful visual story");
+      expect(card.text()).toContain("The short version of the story.");
+      expect(card.get("img").attributes("src")).toBe("https://example.com/card.jpg");
+      expect(api.get).toHaveBeenCalledWith(
+        `/social/link-preview?url=${encodeURIComponent("https://example.com/story")}`,
+      );
+    } finally {
+      wrapper.unmount();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps video selection exclusive in the Files picker", async () => {
     const wrapper = mountPage();
     await flushPromises();
@@ -760,6 +1192,17 @@ describe("SocialPage", () => {
     const addMedia = wrapper.findAll("button").find((button) => button.text().includes("Add media"));
     await addMedia!.trigger("click");
     await flushPromises();
+    expect(vi.mocked(api.get).mock.calls.filter(([endpoint]) =>
+      endpoint === "/files/folders" || endpoint === "/files/items"
+    )).toHaveLength(2);
+    const cancel = wrapper.findAll(".social-media-picker button")
+      .find((button) => button.text().trim() === "Cancel");
+    await cancel!.trigger("click");
+    await addMedia!.trigger("click");
+    await flushPromises();
+    expect(vi.mocked(api.get).mock.calls.filter(([endpoint]) =>
+      endpoint === "/files/folders" || endpoint === "/files/items"
+    )).toHaveLength(2);
     const choices = wrapper.findAll(".social-media-picker__grid button");
     await choices[0]!.trigger("click");
     await choices[2]!.trigger("click");
@@ -853,23 +1296,22 @@ describe("SocialPage", () => {
     await flushPromises();
 
     expect(wrapper.get(".version-tab--shared").classes()).toContain("version-tab--active");
+    expect(wrapper.get(".version-tab--shared").find("svg").exists()).toBe(false);
     expect(wrapper.find(".publishing-checks").exists()).toBe(false);
     expect(wrapper.get(".version-workspace").classes()).toContain("version-workspace--shared");
-    await wrapper.get("[aria-label^='Review publishing checks']").trigger("click");
-    expect(wrapper.get(".publishing-checks-dialog").text()).toContain("Publishes directly");
-    expect(wrapper.get(".publishing-checks-dialog").text()).toContain("Sends a creator draft");
-    expect(wrapper.get(".editor-actions").text()).toContain("Post now");
+    expect(wrapper.text()).not.toContain("All selected platforms");
+    expect(wrapper.text()).not.toContain("Shared edits replace copy and media");
+    expect(wrapper.find("[aria-label^='Review publishing checks']").exists()).toBe(false);
+    expect(wrapper.get(".editor-actions").text()).not.toContain("Post now");
     expect(wrapper.get(".editor-actions").text()).toContain("Schedule");
     expect(wrapper.get(".editor-actions").text()).not.toContain("Send to TikTok");
     const scheduleButton = wrapper.findAll(".editor-actions button")
       .find((button) => button.text().trim() === "Schedule");
-    expect(scheduleButton?.attributes("disabled")).toBeDefined();
+    expect(scheduleButton?.attributes("disabled")).toBeUndefined();
     expect(wrapper.findAll(".social-account-avatar__image").length).toBeGreaterThan(0);
 
     await wrapper.get(".version-editor textarea").setValue("Revised shared caption.");
-    const save = wrapper.findAll(".editor-actions button")
-      .find((button) => button.text().includes("Save Draft"));
-    await save!.trigger("click");
+    await wrapper.get(".version-editor textarea").trigger("blur");
     await flushPromises();
 
     const versionUpdates = vi.mocked(api.patch).mock.calls.filter(
@@ -984,7 +1426,11 @@ describe("SocialPage", () => {
     expect(wrapper.get(".delivery-error-banner").text())
       .toContain("TikTok delivery failed");
     expect(wrapper.get(".delivery-error-banner").text()).toContain(failedMessage);
-    const postNow = wrapper.findAll(".editor-actions button")
+    const schedule = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Schedule");
+    expect(schedule?.attributes("disabled")).toBeUndefined();
+    await schedule!.trigger("click");
+    const postNow = wrapper.findAll(".social-schedule-dialog button")
       .find((button) => button.text().trim() === "Post now");
     expect(postNow?.attributes("disabled")).toBeUndefined();
   });
@@ -1045,10 +1491,12 @@ describe("SocialPage", () => {
     await scheduledTab!.trigger("click");
     await flushPromises();
 
-    expect(wrapper.get(".row-status").text()).toBe("Publishing");
-    const postNow = wrapper.findAll(".editor-actions button")
-      .find((button) => button.text().trim() === "Post now");
-    expect(postNow?.attributes("disabled")).toBeDefined();
+    expect(wrapper.find(".row-status").exists()).toBe(false);
+    const schedule = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Schedule");
+    expect(schedule?.attributes("disabled")).toBeDefined();
+    expect(wrapper.findAll(".editor-actions button")
+      .some((button) => button.text().trim() === "Post now")).toBe(false);
   });
 
   it("allows a needs-review Post to be removed without discarding delivery history", async () => {
@@ -1092,7 +1540,8 @@ describe("SocialPage", () => {
       .find((button) => button.text().includes("Scheduled"));
     await scheduledTab!.trigger("click");
 
-    expect(wrapper.get(".row-status").text()).toBe("Needs review");
+    expect(wrapper.find(".row-status").exists()).toBe(false);
+    expect(wrapper.get(".delivery-error-banner").text()).toContain("Check X before trying again.");
     const deleteAction = wrapper.findAll(".editor-actions button")
       .find((button) => button.text().trim() === "Delete draft");
     expect(deleteAction).toBeTruthy();
@@ -1144,8 +1593,11 @@ describe("SocialPage", () => {
     await scheduledTab!.trigger("click");
     await flushPromises();
 
-    expect(wrapper.get(".row-status").text()).toBe("Retrying");
-    await wrapper.get("[aria-label^='Review publishing checks']").trigger("click");
+    expect(wrapper.find(".row-status").exists()).toBe(false);
+    const checks = wrapper.get("[aria-label^='Review publishing checks']");
+    expect(checks.classes()).toContain("me3-btn--ghost");
+    expect(checks.classes()).not.toContain("me3-btn--outline");
+    await checks.trigger("click");
     expect(wrapper.get(".publishing-checks-dialog").text())
       .toContain("Retrying automatically");
     const deleteAction = wrapper.findAll(".editor-actions button")
@@ -1235,7 +1687,12 @@ describe("SocialPage", () => {
     const wrapper = mountPage();
     await flushPromises();
 
-    const postNow = wrapper.findAll("button").find(
+    const schedule = wrapper.findAll(".editor-actions button").find(
+      (button) => button.text().trim() === "Schedule",
+    );
+    expect(schedule).toBeTruthy();
+    await schedule!.trigger("click");
+    const postNow = wrapper.findAll(".social-schedule-dialog button").find(
       (button) => button.text().trim() === "Post now",
     );
     expect(postNow).toBeTruthy();
@@ -1245,7 +1702,10 @@ describe("SocialPage", () => {
     const message =
       "ME3 needs an exact public API origin before private Files media can be delivered.";
     expect(wrapper.find(".social-schedule-dialog").exists()).toBe(false);
-    expect(wrapper.get(".editor-action-error").text()).toContain(message);
+    expect(wrapper.find(".editor-action-error").exists()).toBe(false);
+    expect(wrapper.find(".social-main > .state-banner--error").exists()).toBe(false);
+    expect(wrapper.get(".delivery-error-banner").text()).toContain(message);
+    expect(wrapper.findAll("[role='alert']")).toHaveLength(1);
     expect(toastHarness.error).toHaveBeenCalledWith(message);
     expect(toastHarness.success).not.toHaveBeenCalled();
     expect(api.post).toHaveBeenCalledWith("/social/versions/version-tiktok/publish", {});

@@ -47,8 +47,23 @@ import {
   type UpdatePreferredPostingTimesInput,
 } from "../social-publishing";
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
+import { fetchSocialLinkPreview } from "../social-link-preview";
 
 export function registerSocialContentRoutes(app: AppHono, deps: OwnerRouteDeps) {
+  app.get("/api/social/link-preview", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      const preview = await fetchSocialLinkPreview(c.req.query("url"));
+      return c.json({ preview }, 200, {
+        "Cache-Control": "private, max-age=1800",
+      });
+    } catch {
+      return c.json({ preview: null });
+    }
+  });
+
   app.post("/api/social/local-demo", async (c) => {
     if (c.env.ENVIRONMENT !== "local") return c.notFound();
     const ownerId = await deps.requireOwner(c);
