@@ -12,10 +12,21 @@ import {
   modelSupportsImageInput,
 } from "@me3-core/plugin-agent-chat/model-capabilities";
 
-const gemmaConfig = FIXED_MODEL_EVALUATION_CANDIDATES[0];
+const gemmaConfig = FIXED_MODEL_EVALUATION_CANDIDATES.find(
+  (candidate) => candidate.id === "workers-gemma-4-26b",
+)!;
 
 describe("fixed live model evaluation", () => {
   it("registers the managed Kimi K3 model with vision-input capabilities", () => {
+    expect(
+      FIXED_MODEL_EVALUATION_CANDIDATES.find(
+        (candidate) => candidate.id === "workers-kimi-k3",
+      ),
+    ).toMatchObject({
+      providerId: "workers-ai",
+      model: "moonshotai/kimi-k3",
+      enabledByDefault: false,
+    });
     expect(modelCapabilitiesFor("workers-ai", "moonshotai/kimi-k3")).toEqual([
       "text",
       "image_input",
@@ -41,10 +52,10 @@ describe("fixed live model evaluation", () => {
     ).toBe(true);
   });
 
-  it("keeps one versioned 35-task suite across the required categories", () => {
-    expect(FIXED_MODEL_EVALUATION_SUITE_VERSION).toBe("me3-fixed-35-v2");
-    expect(FIXED_MODEL_EVALUATION_TASKS).toHaveLength(35);
-    expect(new Set(FIXED_MODEL_EVALUATION_TASKS.map((task) => task.id)).size).toBe(35);
+  it("keeps one versioned 37-task suite across the required categories", () => {
+    expect(FIXED_MODEL_EVALUATION_SUITE_VERSION).toBe("me3-fixed-37-v3");
+    expect(FIXED_MODEL_EVALUATION_TASKS).toHaveLength(37);
+    expect(new Set(FIXED_MODEL_EVALUATION_TASKS.map((task) => task.id)).size).toBe(37);
     expect(new Set(FIXED_MODEL_EVALUATION_TASKS.map((task) => task.category))).toEqual(
       new Set([
         "conversation",

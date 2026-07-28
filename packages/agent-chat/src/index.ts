@@ -5813,7 +5813,8 @@ function toolResultTraceStatus(
 
 function isCoreRuntimeToolSpecialist(specialist: string | null): boolean {
   return Boolean(
-    specialist?.startsWith("core.reminders.") ||
+    specialist === "core.calendar.events.list" ||
+      specialist?.startsWith("core.reminders.") ||
       specialist?.startsWith("core.mission.task.") ||
       specialist?.startsWith("core.mailbox.") ||
       specialist === "core.journal.read",

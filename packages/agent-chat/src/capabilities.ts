@@ -164,6 +164,59 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.calendar.events.list",
+    owner: "plugin",
+    pluginId: "me3.calendar",
+    ownerFacingLabel: "List calendar events",
+    summary:
+      "Read the owner's personal and imported calendar events for an inclusive date range of up to 31 days.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.calendar.events.list",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["calendar.events"],
+    inputSchema: {
+      type: "object",
+      required: ["dateFrom", "dateTo"],
+      properties: {
+        dateFrom: {
+          type: "string",
+          description: "Inclusive start date as YYYY-MM-DD in the owner's timezone.",
+          format: "date",
+        },
+        dateTo: {
+          type: "string",
+          description:
+            "Inclusive end date as YYYY-MM-DD in the owner's timezone, no more than 31 days after dateFrom.",
+          format: "date",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum events to return, from 1 to 50. Defaults to 30.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "calendar_events_read",
+    examples: {
+      positive: [
+        "What is on my calendar today?",
+        "Show my calendar events for next week.",
+      ],
+      negative: [
+        "Remind me tomorrow to call Sam.",
+        "What calendar tools can you use?",
+      ],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.reminders.list",
     owner: "core",
     pluginId: null,

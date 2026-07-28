@@ -1,4 +1,8 @@
-import { normalizeTimeZone } from "@me3-core/plugin-calendar";
+import {
+  normalizeTimeZone,
+  readCalendarEventsForAgent,
+  type CalendarAgentEvent,
+} from "@me3-core/plugin-calendar";
 import {
   confirmPostingPlan,
   createPostingPlan,
@@ -113,6 +117,7 @@ export type CoreMailboxToolServices = {
 
 const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
   (tool) =>
+    tool.capabilityId === "core.calendar.events.list" ||
     tool.capabilityId.startsWith("core.reminders.") ||
     tool.capabilityId === "core.journal.read" ||
     tool.capabilityId === "core.owner_content.search" ||
@@ -345,6 +350,9 @@ function executeCoreToolCall(input: {
   mailboxServices?: CoreMailboxToolServices;
   socialSources: Map<string, AgentSocialSource>;
 }): Promise<CoreToolOutcome> {
+  if (input.tool.capabilityId === "core.calendar.events.list") {
+    return executeCalendarEventsListToolCall(input);
+  }
   if (input.tool.capabilityId.startsWith("core.reminders.")) {
     return executeReminderToolCall(input);
   }
@@ -364,6 +372,46 @@ function executeCoreToolCall(input: {
     return executeSocialToolCall(input);
   }
   return executeMailboxToolCall(input);
+}
+
+async function executeCalendarEventsListToolCall(input: {
+  db: CoreAgentDb;
+  userId: string;
+  ownerTimezone: string | null | undefined;
+  call: AgentToolCall;
+  tool: CoreChatToolDefinition;
+}): Promise<CoreToolOutcome> {
+  enforceCalendarEventsListToolPolicy(input.tool);
+  assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+  const result = await readCalendarEventsForAgent(
+    input.db,
+    input.userId,
+    input.ownerTimezone,
+    {
+      dateFrom: requiredToolString(
+        input.call.arguments.dateFrom,
+        "Calendar start date",
+      ),
+      dateTo: requiredToolString(
+        input.call.arguments.dateTo,
+        "Calendar end date",
+      ),
+      limit: optionalToolNumber(input.call.arguments.limit),
+    },
+  );
+  return {
+    capabilityId: "core.calendar.events.list",
+    result: { ok: true, ...result },
+    fallbackReply: formatCalendarEventsReply(
+      result.events,
+      result.timezone,
+      result.dateFrom,
+      result.dateTo,
+      result.hasMore,
+    ),
+    reminderAction: null,
+    actionCards: [],
+  };
 }
 
 async function executeJournalReadToolCall(input: {
@@ -1468,6 +1516,9 @@ function withCoreToolInstructions(
     "- If the requested date or time is missing or ambiguous, ask one concise clarification question and do not call a write tool.",
     "- Before update/cancel, list reminders unless a stable reminder ID is already present in the conversation. Never invent or infer an ID from a title.",
     "- If multiple listed reminders could match, ask the owner which one they mean and do not write.",
+    "Calendar event tool rules:",
+    "- Use core_calendar_events_list to read personal and imported calendar events. Use reminder tools for reminders and booking lookup for bookings.",
+    "- Resolve relative dates in the owner's timezone. Calendar reads require an inclusive dateFrom and dateTo and are limited to 31 days.",
     "Mission Control task tool rules:",
     "- Use task tools only when the owner clearly asks to list, read, create, update, move, complete, or archive Mission Control tasks.",
     "- When the owner remembers a task or Journal entry by title or content, use core_owner_content_search. Search returns lightweight candidates with stable source IDs; read the selected source before using its full body.",
@@ -1534,6 +1585,19 @@ function enforceOwnerContentSearchToolPolicy(tool: CoreChatToolDefinition): void
     tool.requiredSetupChecks.length !== 0
   ) {
     throw new Error(`Tool "${tool.name}" is not allowed by the owner content search runtime policy.`);
+  }
+}
+
+function enforceCalendarEventsListToolPolicy(tool: CoreChatToolDefinition): void {
+  if (
+    tool.capabilityId !== "core.calendar.events.list" ||
+    tool.handlerRoute !== tool.capabilityId ||
+    tool.approvalMode !== "none" ||
+    tool.requiredSetupChecks.some((check) => check !== "calendar.events")
+  ) {
+    throw new Error(
+      `Tool "${tool.name}" is not allowed by the Calendar read runtime policy.`,
+    );
   }
 }
 
@@ -1790,17 +1854,22 @@ function replyContainsSearchResultId(
   replyText: string,
   outcome: CoreToolOutcome,
 ): boolean {
-  const candidates = outcome.capabilityId === "core.owner_content.search"
-    ? outcome.result.results
-    : outcome.capabilityId === "core.journal.read"
-      ? outcome.result.entries
-      : null;
+  const candidates =
+    outcome.capabilityId === "core.owner_content.search"
+      ? outcome.result.results
+      : outcome.capabilityId === "core.journal.read"
+        ? outcome.result.entries
+        : outcome.capabilityId === "core.calendar.events.list"
+          ? outcome.result.events
+          : null;
   if (!Array.isArray(candidates)) return false;
   const reply = replyText.toLowerCase();
   return candidates.some((result) => {
     if (!result || typeof result !== "object" || Array.isArray(result)) return false;
     const record = result as Record<string, unknown>;
-    const sourceId = outcome.capabilityId === "core.journal.read"
+    const sourceId =
+      outcome.capabilityId === "core.journal.read" ||
+      outcome.capabilityId === "core.calendar.events.list"
       ? record.id
       : record.sourceId;
     return typeof sourceId === "string" &&
@@ -1885,6 +1954,36 @@ function formatMissionTaskList(tasks: AgentMissionTask[]): string {
     ...tasks.map(
       (task) => `- ${task.title} — ${task.projectName} — ${task.status} — priority ${task.priority} (ID: ${task.id})`,
     ),
+  ].join("\n");
+}
+
+function formatCalendarEventsReply(
+  events: CalendarAgentEvent[],
+  timezone: string,
+  dateFrom: string,
+  dateTo: string,
+  hasMore: boolean,
+): string {
+  if (!events.length) {
+    return dateFrom === dateTo
+      ? `I could not find any personal or imported calendar events for ${dateFrom}.`
+      : `I could not find any personal or imported calendar events from ${dateFrom} through ${dateTo}.`;
+  }
+  const lines = events.map((event) => {
+    const time = event.allDay
+      ? `${event.startsAt.slice(0, 10)} (all day)`
+      : formatAgentDateTime(event.startsAt, timezone);
+    const location = event.location ? ` at ${event.location}` : "";
+    return `- ${event.title} — ${time}${location} (${event.sourceName})`;
+  });
+  if (hasMore) {
+    lines.push("- More events matched; narrow the date range to read them.");
+  }
+  return [
+    dateFrom === dateTo
+      ? `Calendar events for ${dateFrom}:`
+      : `Calendar events from ${dateFrom} through ${dateTo}:`,
+    ...lines,
   ].join("\n");
 }
 

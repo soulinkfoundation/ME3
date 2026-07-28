@@ -14,7 +14,7 @@ import {
 } from "./tool-runtime";
 import { CORE_CHAT_TOOLS } from "./tools";
 
-export const FIXED_MODEL_EVALUATION_SUITE_VERSION = "me3-fixed-35-v2";
+export const FIXED_MODEL_EVALUATION_SUITE_VERSION = "me3-fixed-37-v3";
 
 export type ModelEvaluationMode = "everyday" | "advanced";
 export type ModelEvaluationProvider = "workers-ai" | "openai" | "anthropic";
@@ -85,6 +85,19 @@ export type ModelEvaluationReport = {
 };
 
 export const FIXED_MODEL_EVALUATION_CANDIDATES: readonly ModelEvaluationCandidateConfig[] = [
+  {
+    id: "workers-kimi-k3",
+    label: "Kimi K3",
+    mode: "everyday",
+    providerId: "workers-ai",
+    model: "moonshotai/kimi-k3",
+    enabledByDefault: false,
+    pricing: {
+      inputPerMillionUsd: 3,
+      cachedInputPerMillionUsd: 0.3,
+      outputPerMillionUsd: 15,
+    },
+  },
   {
     id: "workers-gemma-4-26b",
     label: "Gemma 4 26B",
@@ -349,6 +362,32 @@ export const FIXED_MODEL_EVALUATION_TASKS: readonly FixedModelEvaluationTask[] =
       {
         name: "core_mailbox_search",
         arguments: { query: "Ada launch", direction: "inbound", limit: 5 },
+      },
+    ],
+  },
+  {
+    id: "tool-journal-date-read",
+    category: "tool_selection",
+    turns: ["Read my Journal entry for 2026-07-15 using the appropriate tool."],
+    checkText: nonEmpty,
+    expectedCalls: [
+      {
+        name: "core_journal_read",
+        arguments: { mode: "date", date: "2026-07-15" },
+      },
+    ],
+  },
+  {
+    id: "tool-calendar-events-range",
+    category: "tool_selection",
+    turns: [
+      "Use the appropriate tool to list my calendar events from 2026-07-15 through 2026-07-21.",
+    ],
+    checkText: nonEmpty,
+    expectedCalls: [
+      {
+        name: "core_calendar_events_list",
+        arguments: { dateFrom: "2026-07-15", dateTo: "2026-07-21" },
       },
     ],
   },
@@ -806,6 +845,36 @@ function executeSyntheticTool(
       message: { id: "message-ada", body: "Is the launch checklist ready?" },
     },
     core_mailbox_draft: { ok: true, draft: { id: "draft-1", ...call.arguments } },
+    core_journal_read: {
+      ok: true,
+      mode: "date",
+      dateFrom: "2026-07-15",
+      dateTo: "2026-07-15",
+      entries: [
+        {
+          id: "journal-2026-07-15",
+          date: "2026-07-15",
+          title: "Synthetic Journal entry",
+          body: "Prepared the launch checklist.",
+        },
+      ],
+      hasMore: false,
+    },
+    core_calendar_events_list: {
+      ok: true,
+      dateFrom: "2026-07-15",
+      dateTo: "2026-07-21",
+      timezone: "Europe/Dublin",
+      events: [
+        {
+          id: "calendar-event-1",
+          title: "Synthetic planning session",
+          startsAt: "2026-07-16T09:00:00.000Z",
+          endsAt: "2026-07-16T10:00:00.000Z",
+        },
+      ],
+      hasMore: false,
+    },
     core_mission_task_list: {
       ok: true,
       projects: [{ id: "project-launch", name: "ME3 Launch" }],

@@ -22,7 +22,61 @@ export type CalendarEventLike = {
   recurrence_rule: string | null;
 };
 
+type CalendarAgentStatement = {
+  all<T = unknown>(): Promise<{ results?: T[] }>;
+};
+
+export type CalendarAgentDb = {
+  prepare(sql: string): {
+    bind(...values: unknown[]): CalendarAgentStatement;
+  };
+};
+
+export type CalendarAgentReadInput = {
+  dateFrom: string;
+  dateTo: string;
+  limit?: number;
+};
+
+export type CalendarAgentEvent = {
+  id: string;
+  title: string;
+  notes: string | null;
+  location: string | null;
+  startsAt: string;
+  endsAt: string;
+  timezone: string;
+  allDay: boolean;
+  sourceKind: "native" | "imported";
+  sourceName: string;
+  recurrenceRule: string | null;
+};
+
+export type CalendarAgentReadResult = {
+  dateFrom: string;
+  dateTo: string;
+  timezone: string;
+  events: CalendarAgentEvent[];
+  hasMore: boolean;
+};
+
+type CalendarAgentNativeRow = CalendarEventLike & {
+  id: string;
+  title: string;
+  notes: string | null;
+  location: string | null;
+  kind: CalendarEventKind;
+};
+
+type CalendarAgentImportedRow = Omit<CalendarAgentNativeRow, "kind"> & {
+  source_name: string;
+};
+
 const WEEKDAY_TOKENS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+const DEFAULT_AGENT_CALENDAR_LIMIT = 30;
+const MAX_AGENT_CALENDAR_LIMIT = 50;
+const MAX_AGENT_CALENDAR_RANGE_DAYS = 31;
+const MAX_AGENT_RECURRING_DEFINITIONS = 100;
 type CustomRecurrenceUnit = "day" | "week" | "month" | "year";
 type CustomRecurrenceRule = {
   interval: number;
@@ -147,6 +201,99 @@ export function formatEventRecurrence(rule: string | null | undefined): string {
     return `Every ${custom.interval} ${unit}${suffix}`;
   }
   return rule || "";
+}
+
+export async function readCalendarEventsForAgent(
+  db: CalendarAgentDb,
+  userId: string,
+  timezoneInput: string | null | undefined,
+  input: CalendarAgentReadInput,
+): Promise<CalendarAgentReadResult> {
+  const dateFrom = requiredCalendarDate(input.dateFrom, "Calendar start date");
+  const dateTo = requiredCalendarDate(input.dateTo, "Calendar end date");
+  if (dateFrom > dateTo) {
+    throw new Error("Calendar start date must be on or before the end date.");
+  }
+  const rangeDays =
+    Math.round(
+      (Date.parse(`${dateTo}T12:00:00.000Z`) -
+        Date.parse(`${dateFrom}T12:00:00.000Z`)) /
+        86_400_000,
+    ) + 1;
+  if (rangeDays > MAX_AGENT_CALENDAR_RANGE_DAYS) {
+    throw new Error(`Calendar reads are limited to ${MAX_AGENT_CALENDAR_RANGE_DAYS} days.`);
+  }
+
+  const timezone = resolveTimeZone(timezoneInput);
+  const windowStart = localDateBoundary(dateFrom, timezone);
+  const windowEnd = localDateBoundary(addDaysToDateString(dateTo, 1), timezone);
+  const limit = boundedCalendarLimit(input.limit);
+  const [nativeRows, recurringRows, importedRows] = await Promise.all([
+    db.prepare(
+      `SELECT id, title, notes, location, starts_at, ends_at, timezone,
+              all_day, kind, recurrence_rule
+       FROM user_calendar_events
+       WHERE user_id = ? AND recurrence_rule IS NULL
+         AND ends_at > ? AND starts_at < ?
+       ORDER BY starts_at ASC
+       LIMIT ?`,
+    )
+      .bind(userId, windowStart, windowEnd, limit + 1)
+      .all<CalendarAgentNativeRow>(),
+    db.prepare(
+      `SELECT id, title, notes, location, starts_at, ends_at, timezone,
+              all_day, kind, recurrence_rule
+       FROM user_calendar_events
+       WHERE user_id = ? AND recurrence_rule IS NOT NULL
+       ORDER BY starts_at ASC
+       LIMIT ?`,
+    )
+      .bind(userId, MAX_AGENT_RECURRING_DEFINITIONS + 1)
+      .all<CalendarAgentNativeRow>(),
+    db.prepare(
+      `SELECT cse.id, cse.title, cse.notes, cse.location, cse.starts_at,
+              cse.ends_at, cse.timezone, cse.all_day, NULL AS recurrence_rule,
+              cs.name AS source_name
+       FROM calendar_source_events cse
+       JOIN calendar_sources cs ON cs.id = cse.source_id
+       WHERE cs.user_id = ? AND cs.status = 'active'
+         AND cse.ends_at > ? AND cse.starts_at < ?
+       ORDER BY cse.starts_at ASC
+       LIMIT ?`,
+    )
+      .bind(userId, windowStart, windowEnd, limit + 1)
+      .all<CalendarAgentImportedRow>(),
+  ]);
+
+  const native = nativeRows.results || [];
+  const recurring = recurringRows.results || [];
+  const imported = importedRows.results || [];
+  const events = [
+    ...native.slice(0, limit).map(serializeNativeAgentCalendarEvent),
+    ...expandRecurringCalendarEvents(
+      recurring.slice(0, MAX_AGENT_RECURRING_DEFINITIONS),
+      windowStart,
+      windowEnd,
+    ).map(serializeNativeAgentCalendarEvent),
+    ...imported.slice(0, limit).map(serializeImportedAgentCalendarEvent),
+  ].sort(
+    (left, right) =>
+      left.startsAt.localeCompare(right.startsAt) ||
+      left.endsAt.localeCompare(right.endsAt) ||
+      left.title.localeCompare(right.title),
+  );
+
+  return {
+    dateFrom,
+    dateTo,
+    timezone,
+    events: events.slice(0, limit),
+    hasMore:
+      events.length > limit ||
+      native.length > limit ||
+      imported.length > limit ||
+      recurring.length > MAX_AGENT_RECURRING_DEFINITIONS,
+  };
 }
 
 export function expandRecurringCalendarEvents<T extends CalendarEventLike>(
@@ -308,6 +455,76 @@ export function expandRecurringCalendarEvents<T extends CalendarEventLike>(
   }
 
   return expanded;
+}
+
+function serializeNativeAgentCalendarEvent(
+  row: CalendarAgentNativeRow,
+): CalendarAgentEvent {
+  return {
+    id: row.id,
+    title: boundedCalendarText(row.title, 300) || "Untitled event",
+    notes: boundedCalendarText(row.notes, 4_000),
+    location: boundedCalendarText(row.location, 500),
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    timezone: resolveTimeZone(row.timezone),
+    allDay: Boolean(row.all_day),
+    sourceKind: "native",
+    sourceName: row.kind === "birthday" ? "Birthdays" : "Personal events",
+    recurrenceRule: row.recurrence_rule,
+  };
+}
+
+function serializeImportedAgentCalendarEvent(
+  row: CalendarAgentImportedRow,
+): CalendarAgentEvent {
+  return {
+    id: row.id,
+    title: boundedCalendarText(row.title, 300) || "Untitled event",
+    notes: boundedCalendarText(row.notes, 4_000),
+    location: boundedCalendarText(row.location, 500),
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    timezone: resolveTimeZone(row.timezone),
+    allDay: Boolean(row.all_day),
+    sourceKind: "imported",
+    sourceName: boundedCalendarText(row.source_name, 200) || "Imported calendar",
+    recurrenceRule: null,
+  };
+}
+
+function requiredCalendarDate(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} must use YYYY-MM-DD.`);
+  const date = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error(`${label} must use YYYY-MM-DD.`);
+  }
+  const parsed = new Date(`${date}T12:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+    throw new Error(`${label} must use YYYY-MM-DD.`);
+  }
+  return date;
+}
+
+function localDateBoundary(date: string, timezone: string): string {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(
+    getUtcMsForLocalTime({ year, month, day, hour: 0, minute: 0 }, timezone),
+  ).toISOString();
+}
+
+function boundedCalendarLimit(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_AGENT_CALENDAR_LIMIT;
+  }
+  return Math.max(1, Math.min(Math.floor(value), MAX_AGENT_CALENDAR_LIMIT));
+}
+
+function boundedCalendarText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!text) return null;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
 }
 
 function localDateParts(value: string, timezone: string) {

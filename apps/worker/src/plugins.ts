@@ -769,8 +769,12 @@ const CALENDAR_PLUGIN: CorePluginManifestSummary = {
   defaultEnabled: true,
   showInPluginList: false,
   implementationStatus: CALENDAR_RUNTIME.bundled ? "bundled" : "catalog_only",
-  capabilityIds: ["workspace.calendar"],
+  capabilityIds: ["workspace.calendar", "calendar.events.read"],
   permissions: [
+    {
+      id: "calendar.events.read",
+      label: "Read personal and imported calendar events",
+    },
     {
       id: "calendar.events.manage",
       label: "Create and manage personal calendar events",
@@ -842,6 +846,20 @@ const CALENDAR_PLUGIN: CorePluginManifestSummary = {
   ],
   agentTools: [
     agentTool({
+      id: "calendar.events.read",
+      label: "Read calendar events",
+      sideEffect: "read_private",
+      approvalMode: "none",
+      auditEventKind: "calendar_events_read",
+      examples: {
+        positive: [
+          "What is on my calendar today?",
+          "Show my calendar events for next week.",
+        ],
+        negative: ["Remind me tomorrow to call Sam."],
+      },
+    }),
+    agentTool({
       id: "calendar.event.create",
       label: "Create calendar event",
       sideEffect: "internal_write",
@@ -866,6 +884,7 @@ const CALENDAR_PLUGIN: CorePluginManifestSummary = {
     "Bundled through @me3-core/plugin-calendar as a first-party Core package.",
     "Calendar is currently a default workspace surface while plugin install state becomes the long-term owner configuration surface.",
     "Recurring event normalization and feed expansion live in the plugin package so hosted ME3 can mirror the same behavior.",
+    "Assistant reads use the explicit owner-scoped core.calendar.events.list capability.",
   ],
 };
 
