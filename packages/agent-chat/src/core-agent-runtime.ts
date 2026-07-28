@@ -176,6 +176,8 @@ export async function runCoreAgentToolTurn(input: {
     : ACTIVE_CORE_TOOLS.filter(
       (tool) => !tool.capabilityId.startsWith("core.mailbox."),
     );
+  const requiredReadTool = requiredPrivateReadTool(input.messages, tools);
+  let requiredReadToolAttempted = false;
   const models = input.route.backupModel && input.route.backupModel !== input.route.model
     ? [input.route.model, input.route.backupModel]
     : [input.route.model];
@@ -187,29 +189,48 @@ export async function runCoreAgentToolTurn(input: {
       const result = await runAgentToolLoop({
         messages,
         tools,
-        model: async (turnMessages, tools) => {
+        model: async (turnMessages, availableTools) => {
           throwIfStreamAborted(input.streamOptions?.signal);
           modelStep += 1;
+          const forcedTool = !requiredReadToolAttempted
+            ? requiredReadTool
+            : null;
+          const modelTools = forcedTool ? [forcedTool] : availableTools;
           await emit({
             event: "status",
             data: { state: "model_started", modelStep, model },
           });
-          return input.streamOptions
+          const response = input.streamOptions
             ? runAgentToolModelStreamStep(
                 { ...input.route, model },
                 turnMessages,
-                tools,
-                emitDelta,
+                modelTools,
+                forcedTool ? () => undefined : emitDelta,
                 input.streamOptions.signal,
+                forcedTool?.name,
               )
             : runAgentToolModelStep(
                 { ...input.route, model },
                 turnMessages,
-                tools,
+                modelTools,
+                forcedTool?.name,
               );
+          const resolved = await response;
+          if (
+            forcedTool &&
+            !resolved.toolCalls.some((call) => call.name === forcedTool.name)
+          ) {
+            throw new Error(
+              `Model did not select required tool "${forcedTool.name}".`,
+            );
+          }
+          return resolved;
         },
         executeTool: async (call, tool) => {
           throwIfStreamAborted(input.streamOptions?.signal);
+          if (call.name === requiredReadTool?.name) {
+            requiredReadToolAttempted = true;
+          }
           await emit({
             event: "tool",
             data: {
@@ -1566,6 +1587,127 @@ export function buildReminderActionCard(
     primaryAction: { label: "Open calendar", href: "/calendar" },
     secondaryActions: [],
   };
+}
+
+function requiredPrivateReadTool(
+  messages: readonly AgentToolMessage[],
+  tools: readonly CoreChatToolDefinition[],
+): CoreChatToolDefinition | null {
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user")
+    ?.content.toLowerCase()
+    .replaceAll("’", "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!latestUserMessage) return null;
+
+  const hasAny = (values: readonly string[]) =>
+    values.some((value) => latestUserMessage.includes(value));
+  const mutationRequest = hasAny([
+    "create a ",
+    "create an ",
+    "write a ",
+    "write an ",
+    "write in ",
+    "draft a ",
+    "draft an ",
+    "edit the ",
+    "update the ",
+    "change the ",
+    "publish ",
+    "unpublish ",
+    "delete ",
+    "archive ",
+    "send ",
+    "reply to ",
+    "cancel ",
+    "schedule a ",
+    "add a ",
+    "move the ",
+    "complete the ",
+    "mark the ",
+  ]);
+  if (mutationRequest) return null;
+
+  const directReadRequest = hasAny([
+    "read ",
+    "show ",
+    "list ",
+    "find ",
+    "search ",
+    "check ",
+    "review ",
+    "summar",
+    "latest",
+    "recent",
+    "upcoming",
+    "do i have",
+    "have i got",
+    "how many",
+    "what's on",
+    "what is on",
+    "which ",
+    "who ",
+    "anything",
+  ]);
+  if (!directReadRequest) return null;
+
+  const requiredCapabilities = new Set<CoreChatToolDefinition["capabilityId"]>();
+  const ownerContentSearch = hasAny(["search ", "find "]) &&
+    hasAny([" about ", " containing ", " mentions ", " titled ", " called "]);
+
+  if (hasAny(["journal", "journal entry", "journal entries"])) {
+    requiredCapabilities.add(
+      ownerContentSearch
+        ? "core.owner_content.search"
+        : "core.journal.read",
+    );
+  }
+  if (hasAny(["blog post", "blog posts", "site blog", "my blog"])) {
+    requiredCapabilities.add("core.sites.blog_post.read");
+  }
+  if (
+    hasAny([
+      "booking",
+      "bookings",
+      "booked call",
+      "booked calls",
+      "client session",
+      "client sessions",
+      "appointment",
+      "appointments",
+    ])
+  ) {
+    requiredCapabilities.add("core.bookings.lookup");
+  }
+  if (hasAny(["calendar", "agenda", "calendar event", "calendar events"])) {
+    requiredCapabilities.add("core.calendar.events.list");
+  }
+  if (hasAny(["email", "emails", "inbox", "mailbox"])) {
+    requiredCapabilities.add("core.mailbox.search");
+  }
+  if (
+    hasAny([
+      "mission control task",
+      "mission control tasks",
+      "project task",
+      "project tasks",
+      "my task",
+      "my tasks",
+      "backlog",
+    ])
+  ) {
+    requiredCapabilities.add(
+      ownerContentSearch
+        ? "core.owner_content.search"
+        : "core.mission.task.list",
+    );
+  }
+
+  if (requiredCapabilities.size !== 1) return null;
+  const [capabilityId] = requiredCapabilities;
+  return tools.find((tool) => tool.capabilityId === capabilityId) || null;
 }
 
 function withCoreToolInstructions(

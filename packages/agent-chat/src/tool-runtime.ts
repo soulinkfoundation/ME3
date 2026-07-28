@@ -8,6 +8,10 @@ export type AgentToolDefinition = {
   parameters: Me3AgentCapabilitySchema;
 };
 
+export type AgentToolChoice = {
+  name: string;
+};
+
 export type AgentToolCall = {
   id: string;
   name: string;
@@ -135,7 +139,9 @@ export async function runAgentToolLoop(input: {
 export function toOpenAiToolRequest(
   messages: readonly AgentToolMessage[],
   tools: readonly AgentToolDefinition[],
+  toolChoice?: AgentToolChoice,
 ): Record<string, unknown> {
+  assertAvailableToolChoice(tools, toolChoice);
   return {
     messages: messages.map((message) => {
       if (message.role === "tool") {
@@ -173,6 +179,14 @@ export function toOpenAiToolRequest(
     // Providers may select several calls together; ME3 still executes them
     // sequentially through the policy and idempotency layer below.
     parallel_tool_calls: true,
+    ...(toolChoice
+      ? {
+          tool_choice: {
+            type: "function",
+            function: { name: toolChoice.name },
+          },
+        }
+      : {}),
   };
 }
 
@@ -201,7 +215,9 @@ export function fromOpenAiToolResponse(payload: unknown): AgentToolModelResponse
 export function toAnthropicToolRequest(
   messages: readonly AgentToolMessage[],
   tools: readonly AgentToolDefinition[],
+  toolChoice?: AgentToolChoice,
 ): Record<string, unknown> {
+  assertAvailableToolChoice(tools, toolChoice);
   const turns: Array<Record<string, unknown>> = [];
   let toolResults: Array<Record<string, unknown>> = [];
 
@@ -257,6 +273,9 @@ export function toAnthropicToolRequest(
       input_schema: tool.parameters,
       strict: true,
     })),
+    ...(toolChoice
+      ? { tool_choice: { type: "tool", name: toolChoice.name } }
+      : {}),
   };
 }
 
@@ -300,8 +319,21 @@ export function fromAnthropicToolResponse(
 export function toWorkersAiToolRequest(
   messages: readonly AgentToolMessage[],
   tools: readonly AgentToolDefinition[],
+  toolChoice?: AgentToolChoice,
 ): Record<string, unknown> {
-  return toOpenAiToolRequest(messages, tools);
+  return toOpenAiToolRequest(messages, tools, toolChoice);
+}
+
+function assertAvailableToolChoice(
+  tools: readonly AgentToolDefinition[],
+  toolChoice: AgentToolChoice | undefined,
+): void {
+  if (
+    toolChoice &&
+    !tools.some((tool) => tool.name === toolChoice.name)
+  ) {
+    throw new Error(`Required agent tool "${toolChoice.name}" is unavailable.`);
+  }
 }
 
 export function fromWorkersAiToolResponse(

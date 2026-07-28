@@ -140,6 +140,7 @@ export {
   toOpenAiToolRequest,
   toWorkersAiToolRequest,
   type AgentToolCall,
+  type AgentToolChoice,
   type AgentToolDefinition,
   type AgentToolExecutor,
   type AgentToolLoopResult,

@@ -44,6 +44,119 @@ describe("Assistant read tools Runtime v2 contract", () => {
     expect(JSON.stringify(aiRun.mock.calls[1]?.[1])).toContain("Ada Lovelace");
     expect(JSON.stringify(aiRun.mock.calls[1]?.[1])).not.toContain("Other Owner");
     expect(database.executions[0]?.tool_name).toBe("core_bookings_lookup");
+    expect(aiRun.mock.calls[0]?.[1]).toMatchObject({
+      tool_choice: {
+        type: "function",
+        function: { name: "core_bookings_lookup" },
+      },
+      tools: [
+        {
+          function: { name: "core_bookings_lookup" },
+        },
+      ],
+    });
+  });
+
+  it("forces an explicit Journal read before the model can answer", async () => {
+    const database = createReadToolsDb();
+    const aiRun = vi.fn()
+      .mockResolvedValueOnce({
+        tool_calls: [
+          {
+            id: "journal-read-1",
+            name: "core_journal_read",
+            arguments: { mode: "latest", limit: 7 },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        response: "Your latest Journal entry is grounded in the stored entry.",
+      });
+
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "journal-read-request",
+      turnId: "journal-read-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: testRoute(aiRun),
+      messages: baseMessages("Read my latest 7 Journal entries."),
+    });
+
+    expect(response).toMatchObject({
+      specialist: "core.journal.read",
+    });
+    expect(aiRun.mock.calls[0]?.[1]).toMatchObject({
+      tool_choice: {
+        type: "function",
+        function: { name: "core_journal_read" },
+      },
+      tools: [
+        {
+          function: { name: "core_journal_read" },
+        },
+      ],
+    });
+    expect(JSON.stringify(aiRun.mock.calls[1]?.[1])).toContain(
+      "A grounded Journal entry",
+    );
+    expect(database.executions[0]?.tool_name).toBe("core_journal_read");
+  });
+
+  it("does not return model prose when a required read tool is ignored", async () => {
+    const database = createReadToolsDb();
+    const aiRun = vi.fn().mockResolvedValue({
+      response: "I do not have access to your Journal entries.",
+    });
+
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "journal-ignored-request",
+      turnId: "journal-ignored-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: testRoute(aiRun),
+      messages: baseMessages("Read my latest 7 Journal entries."),
+    });
+
+    expect(response.source).toBe("fallback");
+    expect(response.replyText).not.toContain("do not have access");
+    expect(database.executions).toHaveLength(0);
+  });
+
+  it("does not stream model prose when a required read tool is ignored", async () => {
+    const database = createReadToolsDb();
+    const aiRun = vi.fn().mockResolvedValue({
+      response: "I do not have access to your Journal entries.",
+    });
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "journal-stream-ignored-request",
+      turnId: "journal-stream-ignored-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: testRoute(aiRun),
+      messages: baseMessages("Read my latest 7 Journal entries."),
+      streamOptions: {
+        onEvent(event) {
+          events.push(event as never);
+        },
+      },
+    });
+
+    expect(response.source).toBe("fallback");
+    expect(
+      events.filter((event) => event.event === "delta"),
+    ).toHaveLength(0);
+    expect(aiRun.mock.calls[0]?.[1]).toMatchObject({
+      stream: true,
+      tool_choice: {
+        type: "function",
+        function: { name: "core_journal_read" },
+      },
+    });
   });
 
   it("lists and reads owner blog posts through one read-only tool", async () => {
@@ -79,6 +192,17 @@ describe("Assistant read tools Runtime v2 contract", () => {
     expect(secondModelInput).toContain("Context keeps the assistant grounded");
     expect(secondModelInput).not.toContain("Other Owner Post");
     expect(database.executions[0]?.tool_name).toBe("core_sites_blog_post_read");
+    expect(aiRun.mock.calls[0]?.[1]).toMatchObject({
+      tool_choice: {
+        type: "function",
+        function: { name: "core_sites_blog_post_read" },
+      },
+      tools: [
+        {
+          function: { name: "core_sites_blog_post_read" },
+        },
+      ],
+    });
   });
 });
 
@@ -188,6 +312,21 @@ function createReadToolsDb() {
                       },
                     ];
                 return { results: rows as T[] };
+              }
+              if (sql.includes("FROM journal_entries")) {
+                return {
+                  results: [
+                    {
+                      id: "journal-owner",
+                      entry_date: "2026-07-28",
+                      title: "A grounded Journal entry",
+                      body: "Stored Journal body.",
+                      body_format: "plain_text",
+                      updated_at: "2026-07-28T08:00:00.000Z",
+                      revision: 1,
+                    },
+                  ] as T[],
+                };
               }
               if (sql.includes("FROM sites")) {
                 const rows = values[0] === "owner"

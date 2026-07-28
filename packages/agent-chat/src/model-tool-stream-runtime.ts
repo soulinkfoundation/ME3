@@ -24,14 +24,23 @@ export async function runAgentToolModelStreamStep(
   tools: readonly AgentToolDefinition[],
   onDelta: StreamDelta,
   signal?: AbortSignal,
+  requiredToolName?: string,
 ): Promise<AgentToolModelResponse> {
   throwIfAborted(signal);
+  const toolChoice = requiredToolName ? { name: requiredToolName } : undefined;
   if (route.providerId === "workers-ai") {
     if (!route.ai) throw new Error("Workers AI binding is not configured");
     const anthropicModel = isAnthropicUnifiedModel(route.model);
     const request = anthropicModel
-      ? { max_tokens: 800, ...toAnthropicToolRequest(messages, tools), stream: true }
-      : { ...toWorkersAiToolRequest(messages, tools), stream: true };
+      ? {
+          max_tokens: 800,
+          ...toAnthropicToolRequest(messages, tools, toolChoice),
+          stream: true,
+        }
+      : {
+          ...toWorkersAiToolRequest(messages, tools, toolChoice),
+          stream: true,
+        };
     const options = route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
       ? { gateway: { id: route.aiGateway.gatewayId } }
       : undefined;
@@ -78,7 +87,7 @@ export async function runAgentToolModelStreamStep(
         signal,
         body: JSON.stringify({
           model: route.model,
-          ...toOpenAiToolRequest(messages, tools),
+          ...toOpenAiToolRequest(messages, tools, toolChoice),
           stream: true,
           stream_options: { include_usage: true },
         }),
@@ -109,7 +118,7 @@ export async function runAgentToolModelStreamStep(
       body: JSON.stringify({
         model: route.model,
         max_tokens: 800,
-        ...toAnthropicToolRequest(messages, tools),
+        ...toAnthropicToolRequest(messages, tools, toolChoice),
         stream: true,
       }),
     },

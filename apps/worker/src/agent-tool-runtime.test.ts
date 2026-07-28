@@ -315,6 +315,39 @@ describe("agent tool provider adapters", () => {
     });
   });
 
+  it("maps one required tool across provider request formats", () => {
+    expect(
+      toOpenAiToolRequest(transcript, TOOLS, {
+        name: "reminders_create",
+      }),
+    ).toMatchObject({
+      tool_choice: {
+        type: "function",
+        function: { name: "reminders_create" },
+      },
+    });
+    expect(
+      toWorkersAiToolRequest(transcript, TOOLS, {
+        name: "reminders_create",
+      }),
+    ).toMatchObject({
+      tool_choice: {
+        type: "function",
+        function: { name: "reminders_create" },
+      },
+    });
+    expect(
+      toAnthropicToolRequest(transcript, TOOLS, {
+        name: "reminders_create",
+      }),
+    ).toMatchObject({
+      tool_choice: {
+        type: "tool",
+        name: "reminders_create",
+      },
+    });
+  });
+
   it("keeps provider token usage as metadata", () => {
     expect(
       fromOpenAiToolResponse({
