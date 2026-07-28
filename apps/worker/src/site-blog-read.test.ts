@@ -44,24 +44,32 @@ describe("site blog Agent read contract", () => {
 });
 
 function createBlogEnv() {
-  const files = new Map<string, string>([
+  const files = new Map<string, unknown>([
     [
       "site-profile:src/me.json",
-      JSON.stringify({
-        handle: "kieran",
-        posts: [
-          {
-            slug: "agent-context",
-            title: "Agent Context",
-            file: "blog/agent-context.md",
-            draft: false,
-          },
-        ],
-      }),
+      Array.from(
+        new TextEncoder().encode(
+          JSON.stringify({
+            handle: "kieran",
+            posts: [
+              {
+                slug: "agent-context",
+                title: "Agent Context",
+                file: "blog/agent-context.md",
+                draft: false,
+              },
+            ],
+          }),
+        ),
+      ),
     ],
     [
       "site-profile:src/blog/agent-context.md",
-      "# Agent Context\n\nContext keeps the assistant grounded.",
+      Object.fromEntries(
+        new TextEncoder()
+          .encode("# Agent Context\n\nContext keeps the assistant grounded.")
+          .entries(),
+      ),
     ],
   ]);
 

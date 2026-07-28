@@ -427,7 +427,20 @@ function decodeText(value: unknown): string | null {
       new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
     );
   }
+  if (Array.isArray(value) && value.every(isByte)) {
+    return new TextDecoder().decode(new Uint8Array(value));
+  }
+  if (value && typeof value === "object") {
+    const bytes = Object.values(value);
+    if (bytes.every(isByte)) {
+      return new TextDecoder().decode(new Uint8Array(bytes as number[]));
+    }
+  }
   return null;
+}
+
+function isByte(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 255;
 }
 
 function normalizeText(value: unknown, maxLength: number): string | null {

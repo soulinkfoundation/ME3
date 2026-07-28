@@ -3601,7 +3601,7 @@ function siteMeJsonRow(siteId: string, profile: Record<string, unknown>): Record
   return {
     site_id: siteId,
     path: "public/me.json",
-    content: JSON.stringify(profile),
+    content: Array.from(new TextEncoder().encode(JSON.stringify(profile))),
     content_type: "application/json",
     updated_at: "2026-05-15T09:00:00Z",
   };
