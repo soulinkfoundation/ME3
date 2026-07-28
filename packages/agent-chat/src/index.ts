@@ -3052,14 +3052,13 @@ function buildCoreConversationDecision(
 }
 
 function isCoreChatCapabilityExplorationRequest(messageText: string): boolean {
-  if (
-    /\b(?:(?:can|could|would)\s+you\s+)?(?:use|using|call|run)\s+(?:the\s+)?(?:[\w-]+\s+){0,3}tools?\b/i.test(
-      messageText,
-    )
-  ) {
-    return false;
-  }
   const normalized = messageText.toLowerCase();
+  const toolIndex = normalized.search(/\btools?\b/);
+  const actionIndex = ["use ", "using ", "call ", "run "]
+    .map((action) => normalized.indexOf(action))
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right)[0] ?? -1;
+  if (actionIndex >= 0 && toolIndex > actionIndex) return false;
   const mentionsAssistantScope =
     /\b(?:what|which)\s+(?:you|me3|the\s+agent|the\s+assistant)\s+can\s+(?:do|access|use|help\s+with)\b/i.test(messageText) ||
     /\b(?:tools?|capabilit(?:y|ies)|context|available|access|test\s+run|setting\s+up|setup|first\s+time|make\s+sense)\b/i.test(messageText) ||

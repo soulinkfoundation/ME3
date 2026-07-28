@@ -2457,6 +2457,60 @@ describe("Core chat native context", () => {
     });
   });
 
+  it("does not treat an explicit Journal tool request as capability exploration", async () => {
+    const aiRun = workersAiSequence(
+      {
+        tool_calls: [
+          {
+            id: "journal-list-1",
+            name: "core_journal_read",
+            arguments: { mode: "latest", limit: 7 },
+          },
+        ],
+      },
+      { response: "I found no stored Journal entries." },
+    );
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
+      } as never,
+      createStorage(),
+      dispatchInput(
+        "Read my latest 7 journal entries. Use only the journal read tool data and do not invent entries or dates.",
+      ),
+    );
+
+    expect(response.trace).toMatchObject({
+      route: {
+        path: "model",
+        capabilityId: "core.journal.read",
+      },
+      modelCall: {
+        status: "succeeded",
+      },
+      toolResult: {
+        status: "succeeded",
+        specialist: "core.journal.read",
+      },
+    });
+    const firstModelInput = (aiRun.mock.calls as unknown[][])[0]?.[1];
+    expect(firstModelInput).toMatchObject({
+      tool_choice: {
+        type: "function",
+        function: { name: "core_journal_read" },
+      },
+      tools: [
+        {
+          function: { name: "core_journal_read" },
+        },
+      ],
+    });
+  });
+
   it("shows failed context lookup details in development trace", async () => {
     const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
       response: "Plain reply.",
