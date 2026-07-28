@@ -3172,6 +3172,57 @@ export async function dispatchDueSocialPublications(
   return { queued, skipped };
 }
 
+export async function recoverStrandedQueuedSocialPublications(
+  env: SocialPublishingEnv,
+  fetcher: typeof fetch = fetch,
+): Promise<{ requeued: number; skipped: number }> {
+  const staleRows = await env.DB.prepare(
+    `SELECT id, updated_at
+     FROM social_publications
+     WHERE status = 'queued'
+       AND datetime(updated_at) <= datetime('now', '-10 minutes')
+     ORDER BY updated_at ASC
+     LIMIT 25`,
+  ).bind().all<{ id: string; updated_at: string }>();
+
+  let requeued = 0;
+  let skipped = 0;
+  for (const row of staleRows.results || []) {
+    const claimed = await env.DB.prepare(
+      `UPDATE social_publications
+       SET queued_at = NULL, updated_at = datetime('now')
+       WHERE id = ? AND status = 'queued' AND updated_at = ?
+       RETURNING id`,
+    )
+      .bind(row.id, row.updated_at)
+      .first<{ id: string }>();
+    if (!claimed) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      await resumeQueuedPublicationHandoff(
+        env,
+        { id: row.id, status: "queued", queuedAt: null },
+        fetcher,
+      );
+      const publication = await getQueuedPublicationRow(env, row.id);
+      if (publication) {
+        await insertSocialPublicationEvent(env, {
+          publicationId: row.id,
+          variantId: publication.variant_id,
+          eventType: "queued",
+          payload: { dispatch: "stranded_queue_recovery" },
+        });
+      }
+      requeued += 1;
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { requeued, skipped };
+}
+
 export async function processSocialPublishBatch(
   batch: {
     queue?: string;

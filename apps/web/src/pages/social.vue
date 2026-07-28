@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import AppDialog from "../components/AppDialog.vue";
 import Button from "../components/Button.vue";
@@ -71,6 +71,7 @@ const scheduleTimezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone ||
 const scheduleError = ref("");
 const publishError = ref("");
 const scheduling = ref(false);
+const showPublishingChecks = ref(false);
 const showDestinations = ref(false);
 const destinationMode = ref<"create" | "manage">("create");
 const destinationContentType = ref<SocialContentType>("short_video");
@@ -87,6 +88,7 @@ const libraryPublishedTo = ref("");
 const libraryResults = ref<PostLibraryItem[] | null>(null);
 const librarySearching = ref(false);
 const { toast, toastError, toastSuccess } = useAppToast();
+let deliveryPollTimer: ReturnType<typeof setInterval> | null = null;
 
 const currentSite = computed(
   () => sites.sites.find((site) => site.id === selectedSiteId.value) || null,
@@ -166,10 +168,6 @@ const selectedVersion = computed(
 
 const selectedVisibleVersions = computed(() =>
   selectedPost.value ? visibleVersionsFor(selectedPost.value) : [],
-);
-
-const includesYouTubeDestination = computed(() =>
-  selectedVisibleVersions.value.some((version) => version.platform === "youtube"),
 );
 
 const sharedEditor = computed(
@@ -284,9 +282,35 @@ const canDeleteDraft = computed(() =>
   Boolean(selectedPost.value && canDeletePost(selectedPost.value)),
 );
 
+const publishingCheckIssueCount = computed(() =>
+  targetValidations.value.filter((validation) =>
+    Boolean(
+      validation.issue ||
+      !validation.capability?.publish ||
+      validation.version.failureClass ||
+      validation.version.publicationStatus === "failed" ||
+      validation.version.publicationStatus === "cancelled",
+    ),
+  ).length,
+);
+
+const publishingChecksLabel = computed(() =>
+  publishingCheckIssueCount.value > 0
+    ? `Review publishing checks, ${publishingCheckIssueCount.value} issue${publishingCheckIssueCount.value === 1 ? "" : "s"}`
+    : `Review publishing checks, all ${targetValidations.value.length} platform${targetValidations.value.length === 1 ? "" : "s"} ready`,
+);
+
 const selectedVersionDeliveryError = computed(() => {
   const version = sharedEditor.value ? null : selectedVersion.value;
   return version ? versionDeliveryError(version) : "";
+});
+
+const selectedVersionDeliveryHeading = computed(() => {
+  const version = sharedEditor.value ? null : selectedVersion.value;
+  if (!version) return "";
+  return version.failureClass === "outcome_unknown"
+    ? `${platformLabel(version.platform)} delivery needs review`
+    : `${platformLabel(version.platform)} delivery failed`;
 });
 
 const advancedFiltersActive = computed(() =>
@@ -467,9 +491,12 @@ function canDeletePost(detail: SocialPostDetail): boolean {
   return detail.versions.every((version) =>
     !version.scheduledFor &&
     version.publicationStatus !== "scheduled" &&
-    version.publicationStatus !== "queued" &&
     version.publicationStatus !== "publishing" &&
-    version.publicationStatus !== "published",
+    version.publicationStatus !== "published" &&
+    (
+      version.publicationStatus !== "queued" ||
+      version.failureClass === "retryable"
+    ),
   );
 }
 
@@ -515,10 +542,14 @@ function externalSourceUrl(detail: SocialPostDetail): string | null {
 }
 
 function versionState(version: PostVersion): string {
-  if (version.failureClass || version.publicationStatus === "failed") return "Failed";
+  if (version.publicationStatus === "failed") return "Failed";
+  if (version.publicationStatus === "cancelled") return "Cancelled";
   if (version.publicationStatus === "publishing" || version.publicationStatus === "queued") {
+    if (version.failureClass === "retryable") return "Retrying";
+    if (version.failureClass === "outcome_unknown") return "Needs review";
     return "Publishing";
   }
+  if (version.failureClass) return "Failed";
   if (version.publicationStatus === "published") {
     return version.platform === "tiktok" ? "Sent to TikTok" : "Published";
   }
@@ -542,10 +573,13 @@ function versionMode(version: PostVersion): WorkspaceMode {
 function postStatus(detail: SocialPostDetail): string {
   const states = visibleVersionsFor(detail).map(versionState);
   if (states.includes("Failed")) return "Failed";
+  if (states.includes("Needs review")) return "Needs review";
+  if (states.includes("Retrying")) return "Retrying";
   if (states.includes("Publishing")) return "Publishing";
   if (states.includes("Scheduled")) return "Scheduled";
   if (states.includes("Sent to TikTok")) return "Sent to TikTok";
   if (states.includes("Published")) return "Published";
+  if (states.includes("Cancelled")) return "Cancelled";
   if (states.includes("Approved")) return "Approved";
   return "Draft";
 }
@@ -568,7 +602,8 @@ function versionHasActivePublication(version: PostVersion): boolean {
 function versionDeliveryError(version: PostVersion): string {
   if (
     version.publicationStatus !== "failed" &&
-    version.publicationStatus !== "cancelled"
+    version.publicationStatus !== "cancelled" &&
+    version.failureClass !== "outcome_unknown"
   ) {
     return "";
   }
@@ -581,6 +616,14 @@ function versionDeliveryError(version: PostVersion): string {
 function versionDeliveryFeedback(version: PostVersion): string {
   const deliveryError = versionDeliveryError(version);
   if (deliveryError) return deliveryError;
+  if (
+    version.publicationStatus === "queued" &&
+    version.failureClass === "retryable"
+  ) {
+    return version.errorMessage
+      ? `Retrying automatically — ${version.errorMessage}`
+      : "Retrying automatically";
+  }
   if (
     version.publicationStatus === "queued" ||
     version.publicationStatus === "publishing"
@@ -748,6 +791,53 @@ async function loadWorkspace() {
     error.value = social.error || "Failed to load social posts";
   } finally {
     loading.value = false;
+  }
+}
+
+function workspaceHasActiveDeliveries(): boolean {
+  return posts.value.some((detail) =>
+    detail.versions.some((version) =>
+      version.publicationStatus === "queued" ||
+      version.publicationStatus === "publishing",
+    ),
+  );
+}
+
+async function refreshDeliveryStates() {
+  if (
+    !selectedSiteId.value ||
+    loading.value ||
+    saving.value ||
+    scheduling.value ||
+    !workspaceHasActiveDeliveries()
+  ) return;
+  const requestedSiteId = selectedSiteId.value;
+  try {
+    const nextPosts = await social.fetchSocialPosts(requestedSiteId);
+    if (selectedSiteId.value !== requestedSiteId) return;
+    const selectedId = selectedVersionId.value;
+    posts.value = nextPosts;
+    const refreshedVersion = selectedId
+      ? nextPosts.flatMap((detail) => detail.versions)
+        .find((version) => version.id === selectedId)
+      : null;
+    const refreshedDetail = refreshedVersion
+      ? nextPosts.find((detail) => detail.post.id === refreshedVersion.postId)
+      : null;
+    const selectedPostStillInMode = refreshedDetail?.versions.some(
+      (version) => versionMode(version) === activeMode.value,
+    );
+    if (
+      refreshedVersion &&
+      !selectedPostStillInMode &&
+      versionMode(refreshedVersion) !== activeMode.value
+    ) {
+      activeMode.value = versionMode(refreshedVersion);
+    }
+    if (!selectedPost.value) ensureVisibleSelection();
+  } catch {
+    // Polling is best-effort. Explicit actions still surface errors through the
+    // workspace banner while a temporary refresh failure leaves the editor usable.
   }
 }
 
@@ -1025,10 +1115,17 @@ async function deleteDraft() {
   const detail = selectedPost.value;
   if (!detail || !canDeletePost(detail) || saving.value) return;
   const hasFailedHistory = detail.versions.some((version) =>
-    version.publicationStatus === "failed" || version.publicationStatus === "cancelled",
+    version.publicationStatus === "failed" ||
+    version.publicationStatus === "cancelled" ||
+    version.failureClass === "retryable",
+  );
+  const hasQueuedRetries = detail.versions.some((version) =>
+    version.publicationStatus === "queued" && version.failureClass === "retryable",
   );
   if (!window.confirm(
-    hasFailedHistory
+    hasQueuedRetries
+      ? `Stop pending retries and remove “${detail.post.ideaText}”? Its delivery history will be retained.`
+      : hasFailedHistory
       ? `Remove “${detail.post.ideaText}” from Drafts? Its failed delivery history will be retained.`
       : `Delete “${detail.post.ideaText}”? This cannot be undone.`,
   )) return;
@@ -1411,6 +1508,13 @@ onMounted(async () => {
     sites.sites.find((site) => site.id === linkedSiteId)?.id ||
     sites.sites[0]?.id ||
     "";
+  deliveryPollTimer = setInterval(() => {
+    void refreshDeliveryStates();
+  }, 5_000);
+});
+
+onUnmounted(() => {
+  if (deliveryPollTimer) clearInterval(deliveryPollTimer);
 });
 
 function currentQueryParam(name: string): string | null {
@@ -1597,9 +1701,6 @@ function currentQueryParam(name: string): string | null {
                 :disabled="saving"
                 aria-label="Post title"
               />
-              <span v-if="includesYouTubeDestination" class="post-title-guidance">
-                Used as the YouTube title. Private uploads are reviewed in YouTube Studio.
-              </span>
               <a
                 v-if="externalSourceUrl(selectedPost)"
                 class="source-link"
@@ -1629,7 +1730,7 @@ function currentQueryParam(name: string): string | null {
             class="state-banner state-banner--error delivery-error-banner"
             role="alert"
           >
-            <strong>{{ platformLabel(selectedVersion!.platform) }} delivery failed</strong>
+            <strong>{{ selectedVersionDeliveryHeading }}</strong>
             <span>{{ selectedVersionDeliveryError }}</span>
           </aside>
 
@@ -1677,7 +1778,10 @@ function currentQueryParam(name: string): string | null {
             </button>
           </div>
 
-          <div v-if="selectedVersion" class="version-workspace">
+          <div
+            v-if="selectedVersion"
+            :class="['version-workspace', { 'version-workspace--shared': sharedEditor }]"
+          >
             <div class="version-editor">
               <div class="editor-context">
                 <strong>{{ sharedEditor ? 'All selected platforms' : platformLabel(selectedVersion.platform) }}</strong>
@@ -1746,6 +1850,26 @@ function currentQueryParam(name: string): string | null {
                   Schedule
                 </Button>
                 <Button
+                  class="editor-actions__checks"
+                  color="outline"
+                  shape="soft"
+                  size="compact"
+                  icon-only
+                  type="button"
+                  :aria-label="publishingChecksLabel"
+                  :title="publishingChecksLabel"
+                  @click="showPublishingChecks = true"
+                >
+                  <UiIcon name="ClipboardCheck" :size="17" aria-hidden="true" />
+                  <span
+                    v-if="publishingCheckIssueCount"
+                    class="editor-actions__check-count"
+                    aria-hidden="true"
+                  >
+                    {{ publishingCheckIssueCount }}
+                  </span>
+                </Button>
+                <Button
                   v-if="canDeleteDraft"
                   class="editor-actions__delete"
                   color="danger"
@@ -1762,51 +1886,7 @@ function currentQueryParam(name: string): string | null {
               <p v-if="publishError" class="form-error editor-action-error" role="alert" aria-live="assertive">{{ publishError }}</p>
             </div>
 
-            <aside v-if="sharedEditor" class="post-preview publishing-checks" aria-label="Publishing checks">
-              <header class="publishing-checks__header">
-                <div>
-                  <strong>Publishing checks</strong>
-                  <span>{{ targetValidations.length }} selected destination{{ targetValidations.length === 1 ? '' : 's' }}</span>
-                </div>
-              </header>
-              <ul class="publishing-checks__list">
-                <li v-for="validation in targetValidations" :key="validation.version.id">
-                  <span :class="['social-account-avatar', 'social-account-avatar--compact', `social-account-avatar--${validation.version.platform}`]" aria-hidden="true">
-                    <img v-if="accountAvatarUrl(validation.version)" class="social-account-avatar__image" :src="accountAvatarUrl(validation.version)!" alt="" />
-                    <template v-else>{{ accountInitials(validation.version) }}</template>
-                    <span class="social-account-avatar__platform">
-                      <svg viewBox="0 0 24 24"><path :d="platformIconPath(validation.version.platform)" /></svg>
-                    </span>
-                  </span>
-                  <span class="publishing-checks__copy">
-                    <strong>{{ platformLabel(validation.version.platform) }}</strong>
-                    <small>{{ validation.capability?.deliveryLabel }}</small>
-                  </span>
-                  <span
-                    :class="[
-                      'validation-state',
-                      {
-                        'validation-state--ready':
-                          validation.contentValid &&
-                          validation.accountValid &&
-                          validation.capability?.publish &&
-                          !versionDeliveryFeedback(validation.version),
-                      },
-                    ]"
-                  >
-                    {{
-                      validation.issue ||
-                      versionDeliveryFeedback(validation.version) ||
-                      (validation.capability?.publish
-                        ? 'Ready'
-                        : validation.capability?.deliveryLabel || 'Unavailable')
-                    }}
-                  </span>
-                </li>
-              </ul>
-            </aside>
-
-            <aside v-else :class="['post-preview', `post-preview--${selectedVersion.platform}`]" aria-label="Post preview">
+            <aside v-if="!sharedEditor" :class="['post-preview', `post-preview--${selectedVersion.platform}`]" aria-label="Post preview">
               <template v-if="selectedVersion.platform === 'tiktok'">
                 <div class="tiktok-preview__platform-bar">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="platformIconPath(selectedVersion.platform)" /></svg>
@@ -2128,6 +2208,79 @@ function currentQueryParam(name: string): string | null {
           <Button color="outline" shape="soft" size="compact" type="button" @click="showMediaPicker = false">Cancel</Button>
           <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || selectedMediaFileIds.length === 0" @click="attachSelectedMedia">
             Add {{ selectedMediaFileIds.length || "" }} {{ selectedMediaFileIds.some((id) => mediaFiles.find((file) => file.id === id && isVideoFile(file))) ? "video" : `image${selectedMediaFileIds.length === 1 ? "" : "s"}` }}
+          </Button>
+        </footer>
+      </section>
+    </AppDialog>
+
+    <AppDialog
+      :open="showPublishingChecks"
+      labelled-by="social-publishing-checks-title"
+      @close="showPublishingChecks = false"
+    >
+      <section class="publishing-checks-dialog">
+        <header>
+          <div>
+            <h2 id="social-publishing-checks-title">Publishing checks</h2>
+            <p>
+              {{ targetValidations.length }} selected destination{{ targetValidations.length === 1 ? '' : 's' }}.
+              {{ publishingCheckIssueCount ? `${publishingCheckIssueCount} need attention.` : 'Everything is ready.' }}
+            </p>
+          </div>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Close publishing checks"
+            @click="showPublishingChecks = false"
+          >
+            <UiIcon name="X" :size="17" aria-hidden="true" />
+          </Button>
+        </header>
+        <ul class="publish-target-list">
+          <li v-for="validation in targetValidations" :key="validation.version.id">
+            <span>
+              <strong>{{ platformLabel(validation.version.platform) }}</strong>
+              <small>{{ validation.capability?.deliveryLabel }}</small>
+            </span>
+            <span class="publishing-checks-dialog__result">
+              <span
+                :class="[
+                  'validation-state',
+                  {
+                    'validation-state--ready':
+                      validation.contentValid &&
+                      validation.accountValid &&
+                      validation.capability?.publish &&
+                      !versionDeliveryFeedback(validation.version),
+                  },
+                ]"
+              >
+                {{
+                  validation.issue ||
+                  versionDeliveryFeedback(validation.version) ||
+                  (validation.capability?.publish
+                    ? 'Ready'
+                    : validation.capability?.reason || 'Unavailable')
+                }}
+              </span>
+              <code v-if="validation.version.errorCode">
+                {{ validation.version.errorCode }}
+              </code>
+            </span>
+          </li>
+        </ul>
+        <footer>
+          <Button
+            color="primary"
+            shape="soft"
+            size="compact"
+            type="button"
+            @click="showPublishingChecks = false"
+          >
+            Done
           </Button>
         </footer>
       </section>
@@ -2583,6 +2736,31 @@ function currentQueryParam(name: string): string | null {
   margin-inline-start: auto;
 }
 
+.editor-actions__checks {
+  position: relative;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.editor-actions__check-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  place-items: center;
+  border: 2px solid var(--ui-surface);
+  border-radius: 999px;
+  background: #a54545;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 750;
+  line-height: 1;
+}
+
 .platform-chip {
   display: inline-flex;
   align-items: center;
@@ -2698,13 +2876,6 @@ function currentQueryParam(name: string): string | null {
   outline: 2px solid var(--ui-accent-soft);
 }
 
-.post-title-guidance {
-  display: block;
-  margin-top: 5px;
-  color: var(--ui-text-muted);
-  font-size: 0.76rem;
-}
-
 .publication-panel,
 .recovery-banner {
   margin-top: 18px;
@@ -2802,6 +2973,10 @@ function currentQueryParam(name: string): string | null {
   margin-top: 20px;
 }
 
+.version-workspace--shared {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .version-editor,
 .field {
   display: grid;
@@ -2842,49 +3017,11 @@ function currentQueryParam(name: string): string | null {
   text-align: right;
 }
 
-.publishing-checks {
-  align-self: start;
-  min-height: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-.publishing-checks__header {
-  padding: 16px;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.publishing-checks__header > div,
-.publishing-checks__copy {
-  display: grid;
-  gap: 2px;
-}
-
-.publishing-checks__header span,
-.publishing-checks__copy small {
-  color: var(--ui-text-muted);
-  font-size: 0.76rem;
-}
-
-.publishing-checks__list,
 .publish-target-list {
   display: grid;
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-.publishing-checks__list li {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 11px;
-  padding: 13px 16px;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.publishing-checks__list li:last-child {
-  border-bottom: 0;
 }
 
 .validation-state {
@@ -3699,7 +3836,8 @@ input:focus {
 .accounts-card,
 .social-destinations-dialog,
 .social-media-picker,
-.social-schedule-dialog {
+.social-schedule-dialog,
+.publishing-checks-dialog {
   position: relative;
   width: min(680px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
@@ -3763,7 +3901,8 @@ input:focus {
 }
 
 .social-media-picker,
-.social-schedule-dialog {
+.social-schedule-dialog,
+.publishing-checks-dialog {
   display: grid;
   gap: 18px;
 }
@@ -3778,7 +3917,9 @@ input:focus {
 .social-media-picker header,
 .social-media-picker footer,
 .social-schedule-dialog header,
-.social-schedule-dialog footer {
+.social-schedule-dialog footer,
+.publishing-checks-dialog header,
+.publishing-checks-dialog footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3789,13 +3930,16 @@ input:focus {
 .social-media-picker h2,
 .social-media-picker p,
 .social-schedule-dialog h2,
-.social-schedule-dialog p {
+.social-schedule-dialog p,
+.publishing-checks-dialog h2,
+.publishing-checks-dialog p {
   margin: 0;
 }
 
 .social-destinations-dialog header p,
 .social-media-picker header p,
-.social-schedule-dialog header p {
+.social-schedule-dialog header p,
+.publishing-checks-dialog header p {
   margin-top: 4px;
   color: var(--ui-text-muted);
 }
@@ -3929,6 +4073,18 @@ input:focus {
 .publish-target-list small {
   color: var(--ui-text-muted);
   font-size: 0.74rem;
+}
+
+.publishing-checks-dialog__result {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+}
+
+.publishing-checks-dialog__result code {
+  color: var(--ui-text-muted);
+  font-size: 0.66rem;
+  overflow-wrap: anywhere;
 }
 
 .social-media-picker__grid {

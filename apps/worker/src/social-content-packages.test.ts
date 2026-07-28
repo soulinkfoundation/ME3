@@ -302,6 +302,47 @@ describe("Social Posts", () => {
     await expect(listSocialPosts(env, "owner", "site-1")).resolves.toEqual([]);
   });
 
+  it("stops retryable queued deliveries before removing the Post", async () => {
+    const { env, packages, publications, events } = createEnv();
+    const created = await createSocialPost(env, "owner", {
+      siteId: "site-1",
+      sourceType: "pasted",
+      sourceSnapshot: "A Post with a retryable provider failure.",
+      sourceText: "A Post with a retryable provider failure.",
+      ideaText: "Retrying draft",
+      versions: [{
+        platform: "linkedin",
+        targetAccountId: "linkedin-1",
+        bodyText: "A Post with a retryable provider failure.",
+      }],
+    });
+    publications.push({
+      id: "publication-retrying",
+      variant_id: created.versions[0]!.id,
+      status: "queued",
+      error_code: "retryable:provider_timeout",
+      error_message: "The provider did not respond in time.",
+    });
+
+    await expect(
+      deleteSocialPost(env, "owner", created.post.id, created.post.updatedAt),
+    ).resolves.toBe(true);
+
+    expect(packages[0]?.status).toBe("archived");
+    expect(publications).toEqual([
+      expect.objectContaining({
+        id: "publication-retrying",
+        status: "cancelled",
+        error_code: "cancelled:owner_removed_retrying_post",
+      }),
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({
+      publication_id: "publication-retrying",
+      event_type: "cancelled",
+    }));
+    await expect(listSocialPosts(env, "owner", "site-1")).resolves.toEqual([]);
+  });
+
   it("atomically cancels a schedule committed immediately before a Version edit batch", async () => {
     const { db, env, publishingEnv, publications, events } = createEnv();
     const created = await createSocialPost(env, "owner", {
@@ -718,7 +759,11 @@ class Statement {
       return {
         total: publications.length,
         protected: publications.filter((row) =>
-          ["scheduled", "queued", "publishing", "published"].includes(String(row.status)),
+          ["scheduled", "publishing", "published"].includes(String(row.status)) ||
+          (
+            row.status === "queued" &&
+            !String(row.error_code || "").startsWith("retryable:")
+          ),
         ).length,
       } as T;
     }
@@ -1311,6 +1356,37 @@ class Statement {
       });
     } else if (this.sql.includes("INSERT INTO social_publication_events")) {
       if (this.sql.includes("FROM social_publications publication")) {
+        if (this.sql.includes("publication.error_code LIKE 'retryable:%'")) {
+          const [payload, createdAt, packageId, expectedUpdatedAt, ownerId] = this.values;
+          const pkg = this.state.packages.find(
+            (row) => row.id === packageId && row.updated_at === expectedUpdatedAt,
+          );
+          const site = this.state.sites.find(
+            (row) => row.id === pkg?.site_id && row.user_id === ownerId,
+          );
+          if (!pkg || !site) return {};
+          const versionIds = new Set(
+            this.state.variants
+              .filter((row) => row.package_id === packageId)
+              .map((row) => row.id),
+          );
+          for (const publication of this.state.publications.filter(
+            (row) =>
+              versionIds.has(row.variant_id) &&
+              row.status === "queued" &&
+              String(row.error_code || "").startsWith("retryable:"),
+          )) {
+            this.state.events.push({
+              id: `social-event-retry-cancel-${publication.id}`,
+              publication_id: publication.id,
+              variant_id: publication.variant_id,
+              event_type: "cancelled",
+              payload_json: payload,
+              created_at: createdAt,
+            });
+          }
+          return {};
+        }
         if (!this.sql.includes("'cancelled'")) {
           const [id, createdAt, publicationId] = this.values;
           const publication = this.state.publications.find((row) => row.id === publicationId);
@@ -1403,12 +1479,55 @@ class Statement {
       }
     } else if (
       this.sql.includes("UPDATE social_packages") &&
+      this.sql.includes("SET status = 'archived'")
+    ) {
+      const [updatedAt, packageId, expectedUpdatedAt, ownerId] = this.values;
+      const pkg = this.state.packages.find(
+        (row) => row.id === packageId && row.updated_at === expectedUpdatedAt,
+      );
+      const site = this.state.sites.find(
+        (row) => row.id === pkg?.site_id && row.user_id === ownerId,
+      );
+      if (pkg && site) {
+        pkg.status = "archived";
+        pkg.updated_at = updatedAt;
+      }
+    } else if (
+      this.sql.includes("UPDATE social_packages") &&
       this.sql.includes("SET updated_at = ?")
     ) {
       const [updatedAt, packageId] = this.values;
       const pkg = this.state.packages.find((row) => row.id === packageId);
       if (pkg) pkg.updated_at = updatedAt;
     } else if (this.sql.includes("UPDATE social_publications")) {
+      if (this.sql.includes("owner_removed_retrying_post")) {
+        const [updatedAt, packageId, expectedUpdatedAt, ownerId] = this.values;
+        const pkg = this.state.packages.find(
+          (row) => row.id === packageId && row.updated_at === expectedUpdatedAt,
+        );
+        const site = this.state.sites.find(
+          (row) => row.id === pkg?.site_id && row.user_id === ownerId,
+        );
+        if (!pkg || !site) return {};
+        const versionIds = new Set(
+          this.state.variants
+            .filter((row) => row.package_id === packageId)
+            .map((row) => row.id),
+        );
+        for (const publication of this.state.publications.filter(
+          (row) =>
+            versionIds.has(row.variant_id) &&
+            row.status === "queued" &&
+            String(row.error_code || "").startsWith("retryable:"),
+        )) {
+          publication.status = "cancelled";
+          publication.error_code = "cancelled:owner_removed_retrying_post";
+          publication.error_message =
+            "Automatic retries stopped when the owner removed the Post.";
+          publication.updated_at = updatedAt;
+        }
+        return {};
+      }
       if (this.sql.includes("WHERE variant_id = ?")) {
         const [errorCode, errorMessage, updatedAt, variantId] = this.values;
         for (const publication of this.state.publications.filter(

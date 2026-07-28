@@ -15,6 +15,7 @@ import {
   listPostVersionPublications,
   processSocialPublishBatch,
   publishQueuedPublication,
+  recoverStrandedQueuedSocialPublications,
   reschedulePublication,
   resolvePublicationOutcome,
   updatePostVersion,
@@ -1971,6 +1972,36 @@ describe("reusable social Publications", () => {
         reason: "queue_handoff_failed",
       }),
     });
+  });
+
+  it("re-enqueues a stranded queued Publication exactly once", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    fixture.queueMessages.length = 0;
+    fixture.send.mockClear();
+    fixture.db.run(
+      `UPDATE social_publications
+       SET queued_at = '2000-01-01T00:00:00.000Z',
+           updated_at = '2000-01-01T00:00:00.000Z'
+       WHERE id = ?`,
+      publication.id,
+    );
+
+    await expect(
+      recoverStrandedQueuedSocialPublications(fixture.env as never),
+    ).resolves.toEqual({ requeued: 1, skipped: 0 });
+    await expect(
+      recoverStrandedQueuedSocialPublications(fixture.env as never),
+    ).resolves.toEqual({ requeued: 0, skipped: 0 });
+
+    expect(fixture.queueMessages).toEqual([{ publicationId: publication.id }]);
+    expect(
+      fixture.db.first<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM social_publication_events
+         WHERE publication_id = ? AND event_type = 'queued'
+           AND payload_json LIKE '%stranded_queue_recovery%'`,
+        publication.id,
+      ),
+    ).toEqual({ count: 1 });
   });
 });
 

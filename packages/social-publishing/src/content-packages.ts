@@ -70,6 +70,7 @@ export type PostVersion = {
   platformPostUrl: string | null;
   publishedAt: string | null;
   failureClass: import("./adapters").SocialPublishFailureClass | null;
+  errorCode: string | null;
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
@@ -782,7 +783,13 @@ export async function deleteSocialPost(
   }
   const publicationSummary = await env.DB.prepare(
     `SELECT COUNT(*) AS total,
-            SUM(CASE WHEN publication.status IN ('scheduled', 'queued', 'publishing', 'published')
+            SUM(CASE WHEN publication.status IN ('scheduled', 'publishing', 'published')
+              OR (
+                publication.status = 'queued' AND (
+                  publication.error_code IS NULL OR
+                  publication.error_code NOT LIKE 'retryable:%'
+                )
+              )
               THEN 1 ELSE 0 END) AS protected
      FROM social_publications publication
      JOIN social_variants version ON version.id = publication.variant_id
@@ -803,16 +810,69 @@ export async function deleteSocialPost(
   }
 
   if (publicationCount > 0) {
-    const archived = await env.DB.prepare(
-      `UPDATE social_packages
-       SET status = 'archived', updated_at = ?
-       WHERE id = ? AND updated_at = ?
-         AND EXISTS (SELECT 1 FROM sites WHERE sites.id = social_packages.site_id AND sites.user_id = ?)
-       RETURNING id`,
-    )
-      .bind(monotonicUpdatedAt(existing.package.updatedAt), postId, expectedUpdatedAt, ownerId)
-      .first<{ id: string }>();
-    if (!archived) {
+    const archivedAt = monotonicUpdatedAt(existing.package.updatedAt);
+    const retryCancellationPayload = JSON.stringify({
+      action: "cancelled",
+      reason: "owner_removed_retrying_post",
+      ownerId,
+    });
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO social_publication_events (
+           id, publication_id, variant_id, event_type, payload_json, created_at
+         )
+         SELECT 'social-event-' || lower(hex(randomblob(16))), publication.id,
+                publication.variant_id, 'cancelled', ?, ?
+         FROM social_publications publication
+         JOIN social_variants version ON version.id = publication.variant_id
+         WHERE version.package_id = ?
+           AND publication.status = 'queued'
+           AND publication.error_code LIKE 'retryable:%'
+           AND EXISTS (
+             SELECT 1
+             FROM social_packages post
+             JOIN sites site ON site.id = post.site_id
+             WHERE post.id = version.package_id
+               AND post.updated_at = ?
+               AND site.user_id = ?
+           )`,
+      ).bind(
+        retryCancellationPayload,
+        archivedAt,
+        postId,
+        expectedUpdatedAt,
+        ownerId,
+      ),
+      env.DB.prepare(
+        `UPDATE social_publications AS publication
+         SET status = 'cancelled',
+             error_code = 'cancelled:owner_removed_retrying_post',
+             error_message = 'Automatic retries stopped when the owner removed the Post.',
+             updated_at = ?
+         WHERE publication.status = 'queued'
+           AND publication.error_code LIKE 'retryable:%'
+           AND publication.variant_id IN (
+             SELECT version.id
+             FROM social_variants version
+             JOIN social_packages post ON post.id = version.package_id
+             JOIN sites site ON site.id = post.site_id
+             WHERE version.package_id = ?
+               AND post.updated_at = ?
+               AND site.user_id = ?
+           )`,
+      ).bind(archivedAt, postId, expectedUpdatedAt, ownerId),
+      env.DB.prepare(
+        `UPDATE social_packages
+         SET status = 'archived', updated_at = ?
+         WHERE id = ? AND updated_at = ?
+           AND EXISTS (
+             SELECT 1 FROM sites
+             WHERE sites.id = social_packages.site_id AND sites.user_id = ?
+           )`,
+      ).bind(archivedAt, postId, expectedUpdatedAt, ownerId),
+    ]);
+    const archived = await getSocialContentPackage(env, ownerId, postId);
+    if (archived?.package.status !== "archived") {
       throw new SocialPostInputError(
         "This Post changed while it was being deleted. Refresh and try again.",
         409,
@@ -1065,6 +1125,7 @@ function serializeVariant(row: VariantRow): SocialAccountVariant {
     platformPostUrl: row.platform_post_url || null,
     publishedAt: row.published_at || null,
     failureClass: parseFailureClass(row.publication_error_code),
+    errorCode: row.publication_error_code || null,
     errorMessage: row.publication_error_message || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

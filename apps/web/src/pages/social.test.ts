@@ -213,8 +213,10 @@ describe("SocialPage", () => {
       "Save Draft",
       "Post now",
       "Schedule",
+      "",
       "Delete draft",
     ]);
+    actions.get("[aria-label^='Review publishing checks']");
     const schedule = actions.findAll("button")
       .find((button) => button.text().trim() === "Schedule");
     expect(schedule?.attributes("disabled")).toBeUndefined();
@@ -591,8 +593,11 @@ describe("SocialPage", () => {
     await flushPromises();
 
     expect(wrapper.get(".version-tab--shared").classes()).toContain("version-tab--active");
-    expect(wrapper.get(".publishing-checks").text()).toContain("Publishes directly");
-    expect(wrapper.get(".publishing-checks").text()).toContain("Sends a creator draft");
+    expect(wrapper.find(".publishing-checks").exists()).toBe(false);
+    expect(wrapper.get(".version-workspace").classes()).toContain("version-workspace--shared");
+    await wrapper.get("[aria-label^='Review publishing checks']").trigger("click");
+    expect(wrapper.get(".publishing-checks-dialog").text()).toContain("Publishes directly");
+    expect(wrapper.get(".publishing-checks-dialog").text()).toContain("Sends a creator draft");
     expect(wrapper.get(".editor-actions").text()).toContain("Post now");
     expect(wrapper.get(".editor-actions").text()).toContain("Schedule");
     expect(wrapper.get(".editor-actions").text()).not.toContain("Send to TikTok");
@@ -784,6 +789,68 @@ describe("SocialPage", () => {
     const postNow = wrapper.findAll(".editor-actions button")
       .find((button) => button.text().trim() === "Post now");
     expect(postNow?.attributes("disabled")).toBeDefined();
+  });
+
+  it("labels retryable queue failures clearly and lets the owner stop retries and delete", async () => {
+    const retryingPost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        assetManifest: [],
+        publicationStatus: "queued" as const,
+        failureClass: "retryable" as const,
+        errorMessage: "LinkedIn did not finish preparing the post.",
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") {
+        return Promise.resolve({ posts: [retryingPost] });
+      }
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("linkedin", {
+              schedule: true,
+              deliveryMode: "direct_publish",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.delete).mockResolvedValue({ ok: true });
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+
+    const wrapper = mountPage();
+    await flushPromises();
+    const scheduledTab = wrapper.findAll(".workspace-tabs button")
+      .find((button) => button.text().includes("Scheduled"));
+    await scheduledTab!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get(".row-status").text()).toBe("Retrying");
+    await wrapper.get("[aria-label^='Review publishing checks']").trigger("click");
+    expect(wrapper.get(".publishing-checks-dialog").text())
+      .toContain("Retrying automatically");
+    const deleteAction = wrapper.findAll(".editor-actions button")
+      .find((button) => button.text().trim() === "Delete draft");
+    expect(deleteAction).toBeTruthy();
+    await deleteAction!.trigger("click");
+    await flushPromises();
+
+    expect(confirm).toHaveBeenCalledWith(
+      "Stop pending retries and remove “A social post”? Its delivery history will be retained.",
+    );
+    expect(api.delete).toHaveBeenCalledWith(
+      "/social/posts/post-1?expectedUpdatedAt=2026-07-18T07%3A00%3A00Z",
+    );
   });
 
   it("shows a TikTok delivery failure instead of a success confirmation", async () => {

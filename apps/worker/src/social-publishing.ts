@@ -56,6 +56,7 @@ export {
   markSocialPublishQueueMessageDeadLettered,
   processSocialPublishBatch,
   publishQueuedPublication,
+  recoverStrandedQueuedSocialPublications,
   resolvePublicationOutcome,
   renderAndAttachSocialCarousel,
   resolveHostedSocialOAuthOrigin,

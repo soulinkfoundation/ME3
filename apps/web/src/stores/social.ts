@@ -129,6 +129,7 @@ export type PostVersion = {
   platformPostUrl: string | null;
   publishedAt: string | null;
   failureClass: "retryable" | "reconnect_required" | "rejected" | "unsupported" | "outcome_unknown" | null;
+  errorCode?: string | null;
   errorMessage: string | null;
   carouselRenderSetId?: string | null;
   createdAt: string;

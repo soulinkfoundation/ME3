@@ -13,6 +13,7 @@ import {
 import {
   dispatchDueSocialPublications,
   processSocialPublishBatch,
+  recoverStrandedQueuedSocialPublications,
   SOCIAL_PUBLISH_QUEUE_NAME,
 } from "./social-publishing";
 import {
@@ -96,6 +97,7 @@ const worker = {
       await dispatchDueScheduledAssistantJobs(env);
       await dispatchDueBookingReminders(env);
       await dispatchDueSocialPublications(env);
+      await recoverStrandedQueuedSocialPublications(env);
       await dispatchDueCalendarSourceRefreshes(env);
       await syncManagedAiUsage(env);
     } finally {
