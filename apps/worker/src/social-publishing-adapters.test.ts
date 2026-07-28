@@ -969,6 +969,104 @@ describe("TikTok draft upload adapter", () => {
     expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
+  it("resumes a pending upload by polling its existing publish id", async () => {
+    const markProviderWriteStarted = vi.fn(async () => undefined);
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      expect(url).toBe("https://open.tiktokapis.com/v2/post/publish/status/fetch/");
+      expect(JSON.parse(String(init?.body))).toEqual({ publish_id: "pending-draft" });
+      return Response.json({
+        data: { status: "SEND_TO_USER_INBOX", uploaded_bytes: 4 },
+        error: { code: "ok" },
+      });
+    });
+
+    const result = await adapterFor("tiktok").publish({
+      accessToken: "tiktok-token",
+      accountId: "creator-open-id",
+      bodyText: "Editable in TikTok.",
+      assets: [{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: 4,
+      }],
+      fetcher: fetcher as typeof fetch,
+      resumeProviderResponse: { publishId: "pending-draft" },
+      markProviderWriteStarted,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      platformPostId: "pending-draft",
+      providerResponse: {
+        delivery: "creator_draft",
+        creatorActionRequired: true,
+      },
+    });
+    expect(markProviderWriteStarted).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues another status check while TikTok is still processing", async () => {
+    vi.useFakeTimers();
+    try {
+      const videoBytes = new Uint8Array([1, 2, 3, 4]);
+      const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/v2/post/publish/inbox/video/init/")) {
+          return Response.json({
+            data: {
+              publish_id: "processing-draft",
+              upload_url: "https://open-upload.tiktokapis.com/video/?upload_id=processing",
+            },
+            error: { code: "ok" },
+          });
+        }
+        if (url === "https://media.example/short.mp4") {
+          return new Response(videoBytes, { status: 206 });
+        }
+        if (url.startsWith("https://open-upload.tiktokapis.com/video/")) {
+          return new Response(null, { status: 201 });
+        }
+        if (url.endsWith("/v2/post/publish/status/fetch/")) {
+          return Response.json({
+            data: { status: "PROCESSING_UPLOAD", uploaded_bytes: 4 },
+            error: { code: "ok" },
+          });
+        }
+        throw new Error(`Unexpected TikTok request: ${url}`);
+      });
+
+      const resultPromise = adapterFor("tiktok").publish({
+        accessToken: "tiktok-token",
+        accountId: "creator-open-id",
+        bodyText: "Editable in TikTok.",
+        assets: [{
+          url: "https://media.example/short.mp4",
+          kind: "video",
+          mimeType: "video/mp4",
+          byteLength: videoBytes.byteLength,
+        }],
+        fetcher: fetcher as typeof fetch,
+      });
+      await vi.runAllTimersAsync();
+
+      await expect(resultPromise).resolves.toMatchObject({
+        ok: false,
+        errorCode: "tiktok_processing_pending",
+        failureClass: "retryable",
+        providerResponse: {
+          publishId: "processing-draft",
+          status: { data: { status: "PROCESSING_UPLOAD" } },
+        },
+      });
+      expect(fetcher).toHaveBeenCalledTimes(9);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses sequential chunks and merges trailing bytes into the final chunk", async () => {
     const byteLength = 70 * 1024 * 1024;
     const uploadStatuses = [206, 201];

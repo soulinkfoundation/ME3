@@ -634,6 +634,85 @@ describe("reusable social Publications", () => {
     )).toEqual({ count: 3 });
   });
 
+  it("rechecks a stored TikTok publish id without uploading the video twice", async () => {
+    fixture.db.run(
+      `INSERT INTO social_accounts (
+         id, user_id, site_id, platform, platform_account_id, display_name, status,
+         scopes_json, metadata_json, access_token_ciphertext, created_at, updated_at
+       ) VALUES (?, 'owner', 'site-1', 'tiktok', 'tiktok-owner', 'TikTok account', 'active',
+                 '["video.upload"]', '{}', ?, datetime('now'), datetime('now'))`,
+      "account-tiktok",
+      await encryptTestSecret("tiktok-access-token", TEST_TOKEN_ENCRYPTION_KEY),
+    );
+    seedApprovedVersion(fixture.db, {
+      postId: "post-tiktok",
+      versionId: "version-tiktok",
+      bodyText: "Editable in TikTok.",
+      platform: "tiktok",
+      accountId: "account-tiktok",
+    });
+    fixture.db.run(
+      `UPDATE social_variants
+       SET format = 'short_video',
+           asset_manifest_json = ?
+       WHERE id = 'version-tiktok'`,
+      JSON.stringify([{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: 4,
+      }]),
+    );
+    fixture.env.SITE_ASSETS = {};
+
+    const publication = await createPublication(fixture, "version-tiktok");
+    fixture.db.run(
+      `UPDATE social_publications
+       SET error_code = 'retryable:tiktok_processing_pending',
+           error_message = 'TikTok is still processing the video.',
+           provider_response_json = ?
+       WHERE id = ?`,
+      JSON.stringify({
+        publishId: "pending-tiktok-draft",
+        status: { data: { status: "PROCESSING_UPLOAD" } },
+      }),
+      publication.id,
+    );
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      expect(url).toBe("https://open.tiktokapis.com/v2/post/publish/status/fetch/");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        publish_id: "pending-tiktok-draft",
+      });
+      return Response.json({
+        data: { status: "SEND_TO_USER_INBOX", uploaded_bytes: 4 },
+        error: { code: "ok" },
+      });
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    const resumedAttempt = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [resumedAttempt] },
+      fixture.env as never,
+    );
+
+    expect(resumedAttempt.ack).toHaveBeenCalledOnce();
+    expect(resumedAttempt.retry).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fixture.db.first<{
+      status: string;
+      platform_post_id: string;
+    }>(
+      `SELECT status, platform_post_id
+       FROM social_publications WHERE id = ?`,
+      publication.id,
+    )).toEqual({
+      status: "published",
+      platform_post_id: "pending-tiktok-draft",
+    });
+  });
+
   it("preserves the Worker global fetch context for provider requests", async () => {
     const publication = await createPublication(fixture, "version-1");
     await enableProviderDelivery(fixture, publication.id);
@@ -2189,7 +2268,7 @@ function seedApprovedVersion(
     postId: string;
     versionId: string;
     bodyText: string;
-    platform?: "linkedin" | "x";
+    platform?: "linkedin" | "x" | "tiktok";
     approvalStatus?: "approved" | "draft";
     siteId?: string;
     accountId?: string;

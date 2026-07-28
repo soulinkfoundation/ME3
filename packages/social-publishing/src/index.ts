@@ -504,6 +504,7 @@ type SocialPublicationRow = {
   scheduled_for: string | null;
   pub_updated_at: string;
   pub_error_code: string | null;
+  pub_provider_response_json: string | null;
   title: string;
   body: string;
   media_manifest_json: string;
@@ -3546,10 +3547,13 @@ export async function publishQueuedPublication(
   }
 
   const claimedAt = new Date().toISOString();
+  const resumeProviderResponse = row.pub_provider_response_json
+    ? parseJsonObject(row.pub_provider_response_json)
+    : undefined;
   const claim = await env.DB.prepare(
     `UPDATE social_publications
      SET status = 'publishing', error_code = NULL, error_message = NULL,
-         provider_response_json = NULL, updated_at = ?
+         updated_at = ?
      WHERE id = ? AND status = 'queued'
      RETURNING id, updated_at`,
   )
@@ -3696,6 +3700,7 @@ export async function publishQueuedPublication(
       bodyText: row.body,
       assets,
       fetcher,
+      resumeProviderResponse,
       markProviderCostStarted: managedXReservation.managed
         ? async () => {
             if (managedXCostStarted) return;
@@ -3709,7 +3714,12 @@ export async function publishQueuedPublication(
           }
         : undefined,
       markProviderWriteStarted: () =>
-        markSocialProviderWriteStarted(env, row, claim.updated_at),
+        markSocialProviderWriteStarted(
+          env,
+          row,
+          claim.updated_at,
+          resumeProviderResponse,
+        ),
     });
   } catch (error) {
     if (managedXReservation.managed && !managedXCostStarted) {
@@ -3857,11 +3867,13 @@ async function markSocialProviderWriteStarted(
   env: SocialPublishingEnv,
   row: Pick<SocialPublicationRow, "publication_id">,
   expectedUpdatedAt: string,
+  resumeProviderResponse?: unknown,
 ): Promise<void> {
   const marked = await env.DB.prepare(
     `UPDATE social_publications
      SET error_code = 'outcome_unknown:provider_write_started',
-         error_message = ?, provider_response_json = NULL,
+         error_message = ?,
+         provider_response_json = COALESCE(?, provider_response_json),
          updated_at = datetime('now')
      WHERE id = ? AND status = 'publishing'
        AND updated_at = ?
@@ -3876,6 +3888,9 @@ async function markSocialProviderWriteStarted(
   )
     .bind(
       "The provider publishing request started, but ME3 has not recorded a final outcome. Check the provider before trying again.",
+      resumeProviderResponse === undefined
+        ? null
+        : JSON.stringify(resumeProviderResponse),
       row.publication_id,
       expectedUpdatedAt,
     )
@@ -4352,6 +4367,7 @@ async function getQueuedPublicationRow(
             pub.scheduled_for,
             pub.updated_at AS pub_updated_at,
             pub.error_code AS pub_error_code,
+            pub.provider_response_json AS pub_provider_response_json,
             p.post_title_snapshot AS title,
             pub.body_text_snapshot AS body,
             COALESCE(pub.asset_manifest_json_snapshot, '[]') AS media_manifest_json,

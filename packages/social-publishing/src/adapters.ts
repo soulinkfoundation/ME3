@@ -32,6 +32,7 @@ export type SocialPublishAdapter = {
     bodyText: string;
     assets: SocialMediaAsset[];
     fetcher: typeof fetch;
+    resumeProviderResponse?: unknown;
     markProviderCostStarted?: () => Promise<void>;
     markProviderWriteStarted?: () => Promise<void>;
   }): Promise<SocialPublishAdapterResult>;
@@ -1049,6 +1050,14 @@ type TikTokApiResponse = {
   error?: { code?: string; message?: string; log_id?: string };
 };
 
+function tikTokResumePublishId(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const publishId = (value as Record<string, unknown>).publishId;
+  return typeof publishId === "string" && publishId.trim()
+    ? publishId.trim()
+    : null;
+}
+
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -1062,116 +1071,121 @@ const tikTokAdapter: SocialPublishAdapter = {
       return providerError("tiktok_validation_failed", validation.error, undefined, "unsupported");
     }
 
-    const asset = input.assets[0]!;
-    const byteLength = asset.byteLength!;
-    const mimeType = normalizeMimeType(asset.mimeType)!;
-    const plan = tikTokChunkPlan(byteLength);
-
     await input.markProviderWriteStarted?.();
-    let initResponse: Response;
-    try {
-      initResponse = await input.fetcher(TIKTOK_UPLOAD_INIT_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${input.accessToken}`,
-          "Content-Type": "application/json; charset=UTF-8",
-        },
-        body: JSON.stringify({
-          source_info: {
-            source: "FILE_UPLOAD",
-            video_size: byteLength,
-            chunk_size: plan.chunkSize,
-            total_chunk_count: plan.totalChunkCount,
-          },
-        }),
-      });
-    } catch (error) {
-      return providerError(
-        "tiktok_init_outcome_unknown",
-        "TikTok did not confirm whether it initialized the draft upload. Check TikTok before trying again.",
-        describeFetchError(error),
-        "outcome_unknown",
-      );
-    }
+    let publishId = tikTokResumePublishId(input.resumeProviderResponse);
+    let initialized: TikTokApiResponse | null = null;
 
-    const initialized = await readJson<TikTokApiResponse>(initResponse);
-    const apiError = initialized.error?.code?.trim();
-    if (!initResponse.ok || (apiError && apiError !== "ok")) {
-      return providerError(
-        apiError || "tiktok_upload_init",
-        initialized.error?.message || `TikTok could not initialize the draft upload (${initResponse.status}).`,
-        initialized,
-        failureClassForStatus(initResponse.status),
-      );
-    }
+    if (!publishId) {
+      const asset = input.assets[0]!;
+      const byteLength = asset.byteLength!;
+      const mimeType = normalizeMimeType(asset.mimeType)!;
+      const plan = tikTokChunkPlan(byteLength);
 
-    const publishId = initialized.data?.publish_id?.trim();
-    const uploadUrl = initialized.data?.upload_url?.trim();
-    if (!publishId || !uploadUrl) {
-      return providerError(
-        "tiktok_upload_init_incomplete",
-        "TikTok accepted the draft upload request without returning all upload details. Check TikTok before trying again.",
-        initialized,
-        "outcome_unknown",
-      );
-    }
-
-    for (const [index, range] of plan.ranges.entries()) {
-      const contentLength = range.end - range.start + 1;
-      let videoResponse: Response;
+      let initResponse: Response;
       try {
-        videoResponse = await input.fetcher(asset.url, {
-          headers: { Range: `bytes=${range.start}-${range.end}` },
-        });
-      } catch (error) {
-        return providerError(
-          "tiktok_video_fetch",
-          `ME3 could not load video chunk ${index + 1} for TikTok.`,
-          { ...describeFetchError(error), publishId },
-          "outcome_unknown",
-        );
-      }
-      if (!videoResponse.ok || !videoResponse.body) {
-        return providerError(
-          "tiktok_video_fetch",
-          `ME3 could not load video chunk ${index + 1} for TikTok (${videoResponse.status}).`,
-          { publishId },
-          "outcome_unknown",
-        );
-      }
-
-      let uploadResponse: Response;
-      try {
-        uploadResponse = await input.fetcher(uploadUrl, {
-          method: "PUT",
+        initResponse = await input.fetcher(TIKTOK_UPLOAD_INIT_URL, {
+          method: "POST",
           headers: {
-            "Content-Type": mimeType,
-            "Content-Length": String(contentLength),
-            "Content-Range": `bytes ${range.start}-${range.end}/${byteLength}`,
+            Authorization: `Bearer ${input.accessToken}`,
+            "Content-Type": "application/json; charset=UTF-8",
           },
-          body: videoResponse.body,
+          body: JSON.stringify({
+            source_info: {
+              source: "FILE_UPLOAD",
+              video_size: byteLength,
+              chunk_size: plan.chunkSize,
+              total_chunk_count: plan.totalChunkCount,
+            },
+          }),
         });
       } catch (error) {
         return providerError(
-          "tiktok_video_upload_outcome_unknown",
-          "TikTok did not confirm whether it received the full video. Check TikTok before trying again.",
-          { ...describeFetchError(error), publishId, chunk: index + 1 },
+          "tiktok_init_outcome_unknown",
+          "TikTok did not confirm whether it initialized the draft upload. Check TikTok before trying again.",
+          describeFetchError(error),
           "outcome_unknown",
         );
       }
 
-      const expectedStatus = index === plan.ranges.length - 1 ? 201 : 206;
-      if (uploadResponse.status !== expectedStatus) {
+      initialized = await readJson<TikTokApiResponse>(initResponse);
+      const apiError = initialized.error?.code?.trim();
+      if (!initResponse.ok || (apiError && apiError !== "ok")) {
         return providerError(
-          "tiktok_video_upload",
-          `TikTok did not accept video chunk ${index + 1} (${uploadResponse.status}).`,
-          {
-            publishId,
-            chunk: index + 1,
-            response: await uploadResponse.text().catch(() => ""),
-          },
+          apiError || "tiktok_upload_init",
+          initialized.error?.message || `TikTok could not initialize the draft upload (${initResponse.status}).`,
+          initialized,
+          failureClassForStatus(initResponse.status),
+        );
+      }
+
+      publishId = initialized.data?.publish_id?.trim() || null;
+      const uploadUrl = initialized.data?.upload_url?.trim();
+      if (!publishId || !uploadUrl) {
+        return providerError(
+          "tiktok_upload_init_incomplete",
+          "TikTok accepted the draft upload request without returning all upload details. Check TikTok before trying again.",
+          initialized,
           "outcome_unknown",
         );
+      }
+
+      for (const [index, range] of plan.ranges.entries()) {
+        const contentLength = range.end - range.start + 1;
+        let videoResponse: Response;
+        try {
+          videoResponse = await input.fetcher(asset.url, {
+            headers: { Range: `bytes=${range.start}-${range.end}` },
+          });
+        } catch (error) {
+          return providerError(
+            "tiktok_video_fetch",
+            `ME3 could not load video chunk ${index + 1} for TikTok.`,
+            { ...describeFetchError(error), publishId },
+            "outcome_unknown",
+          );
+        }
+        if (!videoResponse.ok || !videoResponse.body) {
+          return providerError(
+            "tiktok_video_fetch",
+            `ME3 could not load video chunk ${index + 1} for TikTok (${videoResponse.status}).`,
+            { publishId },
+            "outcome_unknown",
+          );
+        }
+
+        let uploadResponse: Response;
+        try {
+          uploadResponse = await input.fetcher(uploadUrl, {
+            method: "PUT",
+            headers: {
+              "Content-Type": mimeType,
+              "Content-Length": String(contentLength),
+              "Content-Range": `bytes ${range.start}-${range.end}/${byteLength}`,
+            },
+            body: videoResponse.body,
+          });
+        } catch (error) {
+          return providerError(
+            "tiktok_video_upload_outcome_unknown",
+            "TikTok did not confirm whether it received the full video. Check TikTok before trying again.",
+            { ...describeFetchError(error), publishId, chunk: index + 1 },
+            "outcome_unknown",
+          );
+        }
+
+        const expectedStatus = index === plan.ranges.length - 1 ? 201 : 206;
+        if (uploadResponse.status !== expectedStatus) {
+          return providerError(
+            "tiktok_video_upload",
+            `TikTok did not accept video chunk ${index + 1} (${uploadResponse.status}).`,
+            {
+              publishId,
+              chunk: index + 1,
+              response: await uploadResponse.text().catch(() => ""),
+            },
+            "outcome_unknown",
+          );
+        }
       }
     }
 
@@ -1235,10 +1249,10 @@ const tikTokAdapter: SocialPublishAdapter = {
     }
 
     return providerError(
-      "tiktok_status_outcome_unknown",
-      "TikTok received the video, but the draft is still processing. Check your TikTok inbox before trying again.",
-      { publishId, status: lastStatus },
-      "outcome_unknown",
+      "tiktok_processing_pending",
+      "TikTok is still processing the video. ME3 will check this draft again automatically.",
+      { publishId, init: initialized, status: lastStatus },
+      "retryable",
     );
   },
 };
