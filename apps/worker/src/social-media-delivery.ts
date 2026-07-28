@@ -7,7 +7,13 @@ type DeliveryGrantRow = {
   filename: string;
   mime_type: string;
   size: number | string;
+  provider: string;
 };
+
+const INSTAGRAM_IMAGE_PROVIDERS = new Set(["instagram", "instagram_business"]);
+const INSTAGRAM_TRANSCODE_MIME_TYPES = new Set(["image/png", "image/webp"]);
+const INSTAGRAM_JPEG_MAX_WIDTH = 1_440;
+const INSTAGRAM_JPEG_QUALITY = 90;
 
 export class SocialMediaDeliveryError extends Error {
   constructor(message = "Media delivery URL is invalid or expired.", public status = 404) {
@@ -25,7 +31,7 @@ export async function getSocialMediaDeliveryResponse(
   const token = normalizeDeliveryToken(tokenInput);
   const tokenHash = await sha256Hex(new TextEncoder().encode(token));
   const row = await env.DB.prepare(
-    `SELECT grant.id, file.storage_key, file.filename, file.mime_type, file.size
+    `SELECT grant.id, grant.provider, file.storage_key, file.filename, file.mime_type, file.size
      FROM social_media_delivery_grants grant
      JOIN drive_files file
        ON file.id = grant.file_id
@@ -40,8 +46,18 @@ export async function getSocialMediaDeliveryResponse(
     .first<DeliveryGrantRow>();
   if (!row) throw new SocialMediaDeliveryError();
 
+  const transcodeForInstagram = shouldTranscodeForInstagram(row);
+  if (transcodeForInstagram && !env.IMAGES) {
+    throw new SocialMediaDeliveryError(
+      "Instagram image conversion is unavailable.",
+      503,
+    );
+  }
+
   const size = Number(row.size || 0);
-  const range = options.head ? null : parseSingleByteRange(options.rangeHeader, size);
+  const range = options.head || transcodeForInstagram
+    ? null
+    : parseSingleByteRange(options.rangeHeader, size);
   if (range === "invalid") {
     return new Response(null, {
       status: 416,
@@ -60,14 +76,53 @@ export async function getSocialMediaDeliveryResponse(
       );
   if (!object) throw new SocialMediaDeliveryError();
 
-  await env.DB.prepare(
-    `UPDATE social_media_delivery_grants
-     SET access_count = access_count + 1,
-         last_accessed_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND revoked_at IS NULL`,
-  )
-    .bind(row.id)
-    .run();
+  await recordGrantAccess(env, row.id);
+
+  if (transcodeForInstagram) {
+    if (options.head) {
+      return new Response(null, {
+        status: 200,
+        headers: providerHeaders(row, {
+          contentType: "image/jpeg",
+          filename: instagramJpegFilename(row.filename),
+          acceptRanges: false,
+        }),
+      });
+    }
+
+    try {
+      const result = await env.IMAGES!
+        .input((object as R2ObjectBody).body)
+        .transform({
+          width: INSTAGRAM_JPEG_MAX_WIDTH,
+          fit: "scale-down",
+          background: "#FFFFFF",
+        })
+        .output({
+          format: "image/jpeg",
+          quality: INSTAGRAM_JPEG_QUALITY,
+        });
+      const transformed = result.response();
+      if (!transformed.ok || !transformed.body) {
+        throw new Error(`Image transformation failed (${transformed.status})`);
+      }
+      return new Response(transformed.body, {
+        status: transformed.status,
+        headers: providerHeaders(row, {
+          contentType: "image/jpeg",
+          filename: instagramJpegFilename(row.filename),
+          contentLength: responseContentLength(transformed),
+          etag: transformed.headers.get("ETag"),
+          acceptRanges: false,
+        }),
+      });
+    } catch {
+      throw new SocialMediaDeliveryError(
+        "Instagram image conversion failed.",
+        502,
+      );
+    }
+  }
 
   const headers = providerHeaders(row, {
     contentLength: range?.length ?? object.size,
@@ -82,19 +137,60 @@ export async function getSocialMediaDeliveryResponse(
 
 function providerHeaders(
   row: Pick<DeliveryGrantRow, "filename" | "mime_type">,
-  values: { contentLength: number; contentRange?: string | null; etag?: string | null },
+  values: {
+    contentLength?: number | null;
+    contentRange?: string | null;
+    contentType?: string;
+    filename?: string;
+    etag?: string | null;
+    acceptRanges?: boolean;
+  },
 ): Headers {
   const headers = new Headers({
-    "Accept-Ranges": "bytes",
     "Cache-Control": "private, max-age=60",
-    "Content-Disposition": `inline; filename="${sanitizeFilename(row.filename)}"`,
-    "Content-Length": String(values.contentLength),
-    "Content-Type": row.mime_type,
+    "Content-Disposition": `inline; filename="${sanitizeFilename(values.filename || row.filename)}"`,
+    "Content-Type": values.contentType || row.mime_type,
     "X-Content-Type-Options": "nosniff",
   });
+  if (values.acceptRanges !== false) headers.set("Accept-Ranges", "bytes");
+  if (values.contentLength !== null && values.contentLength !== undefined) {
+    headers.set("Content-Length", String(values.contentLength));
+  }
   if (values.contentRange) headers.set("Content-Range", values.contentRange);
   if (values.etag) headers.set("ETag", values.etag);
   return headers;
+}
+
+async function recordGrantAccess(env: Env, grantId: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE social_media_delivery_grants
+     SET access_count = access_count + 1,
+         last_accessed_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND revoked_at IS NULL`,
+  )
+    .bind(grantId)
+    .run();
+}
+
+function shouldTranscodeForInstagram(
+  row: Pick<DeliveryGrantRow, "provider" | "mime_type">,
+): boolean {
+  return (
+    INSTAGRAM_IMAGE_PROVIDERS.has(row.provider) &&
+    INSTAGRAM_TRANSCODE_MIME_TYPES.has(row.mime_type.toLowerCase())
+  );
+}
+
+function instagramJpegFilename(filename: string): string {
+  const stem = filename.replace(/\.[^.]+$/, "") || "instagram-image";
+  return `${stem}.jpg`;
+}
+
+function responseContentLength(response: Response): number | null {
+  const header = response.headers.get("Content-Length");
+  if (!header) return null;
+  const value = Number(header);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function normalizeDeliveryToken(value: string): string {

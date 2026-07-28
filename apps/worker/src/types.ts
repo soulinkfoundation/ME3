@@ -2,6 +2,7 @@ export interface Env {
   DB: D1Database;
   ME3_USER_AGENT?: DurableObjectNamespace;
   AI?: Ai;
+  IMAGES?: ImageTransformationsBinding;
   ASSETS?: Fetcher;
   SITE_ASSETS?: R2Bucket;
   ASSISTANT_JOB_EVENTS?: Queue<AssistantJobEventQueueMessage>;
@@ -70,6 +71,24 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET?: string;
   ME3_COMMERCE_BRIDGE_ORIGIN?: string;
   ME3_COMMERCE_BRIDGE_TOKEN?: string;
+}
+
+export interface ImageTransformationsBinding {
+  input(
+    image: ReadableStream | ArrayBuffer | Uint8Array,
+  ): ImageTransformationsPipeline;
+}
+
+export interface ImageTransformationsPipeline {
+  transform(options: {
+    width?: number;
+    fit?: "scale-down";
+    background?: string;
+  }): ImageTransformationsPipeline;
+  output(options: {
+    format: "image/jpeg";
+    quality?: number;
+  }): Promise<{ response(): Response }>;
 }
 
 export type AssistantJobIngressEventQueueMessage = {

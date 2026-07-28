@@ -8,9 +8,13 @@ const grantRow = {
   filename: "short.mp4",
   mime_type: "video/mp4",
   size: 42,
+  provider: "tiktok",
 };
 
-function createEnv(row: typeof grantRow | null = grantRow) {
+function createEnv(
+  row: typeof grantRow | null = grantRow,
+  images?: Env["IMAGES"],
+) {
   const update = vi.fn(async () => ({ meta: { changes: 1 } }));
   const get = vi.fn(async () => ({
     body: new Uint8Array(10),
@@ -31,7 +35,7 @@ function createEnv(row: typeof grantRow | null = grantRow) {
     },
   };
   return {
-    env: { DB: db, SITE_ASSETS: { get, head } } as unknown as Env,
+    env: { DB: db, IMAGES: images, SITE_ASSETS: { get, head } } as unknown as Env,
     get,
     head,
     update,
@@ -69,6 +73,81 @@ describe("social media delivery grants", () => {
     expect(response.headers.get("Content-Length")).toBe("42");
     expect(head).toHaveBeenCalledWith(grantRow.storage_key);
     expect(get).not.toHaveBeenCalled();
+  });
+
+  it.each(["image/png", "image/webp"])(
+    "transcodes Instagram %s delivery to a white-backed JPEG",
+    async (mimeType) => {
+      const transformed = new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          "Content-Length": "3",
+          "Content-Type": "image/jpeg",
+          ETag: '"jpeg-etag"',
+        },
+      });
+      const response = vi.fn(() => transformed);
+      const output = vi.fn(async () => ({ response }));
+      const pipeline = {
+        transform: vi.fn(),
+        output,
+      };
+      pipeline.transform.mockReturnValue(pipeline);
+      const images = {
+        input: vi.fn(() => pipeline),
+      } as unknown as NonNullable<Env["IMAGES"]>;
+      const row = {
+        ...grantRow,
+        storage_key: "drive/owner-1/instagram-image",
+        filename: mimeType === "image/png" ? "post.png" : "post.webp",
+        mime_type: mimeType,
+        size: 10,
+        provider: "instagram",
+      };
+      const { env, get, update } = createEnv(row, images);
+
+      const delivered = await getSocialMediaDeliveryResponse(
+        env,
+        "socmedia_abcdefghijklmnopqrstuvwxyz",
+        { rangeHeader: "bytes=0-4" },
+      );
+
+      expect(delivered.status).toBe(200);
+      expect(delivered.headers.get("Content-Type")).toBe("image/jpeg");
+      expect(delivered.headers.get("Content-Length")).toBe("3");
+      expect(delivered.headers.get("Content-Disposition")).toContain('filename="post.jpg"');
+      expect(delivered.headers.has("Accept-Ranges")).toBe(false);
+      expect((await delivered.arrayBuffer()).byteLength).toBe(3);
+      expect(get).toHaveBeenCalledWith(row.storage_key, undefined);
+      expect(images.input).toHaveBeenCalledTimes(1);
+      expect(pipeline.transform).toHaveBeenCalledWith({
+        width: 1_440,
+        fit: "scale-down",
+        background: "#FFFFFF",
+      });
+      expect(output).toHaveBeenCalledWith({
+        format: "image/jpeg",
+        quality: 90,
+      });
+      expect(response).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("reports when Instagram conversion is not configured", async () => {
+    const { env } = createEnv({
+      ...grantRow,
+      filename: "post.png",
+      mime_type: "image/png",
+      provider: "instagram",
+    });
+
+    await expect(getSocialMediaDeliveryResponse(
+      env,
+      "socmedia_abcdefghijklmnopqrstuvwxyz",
+    )).rejects.toEqual(expect.objectContaining<Partial<SocialMediaDeliveryError>>({
+      status: 503,
+      message: "Instagram image conversion is unavailable.",
+    }));
   });
 
   it("does not reveal whether an expired or unknown grant ever existed", async () => {

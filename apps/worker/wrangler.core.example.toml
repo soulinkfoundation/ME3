@@ -21,6 +21,9 @@ new_sqlite_classes = ["Me3UserAgent"]
 binding = "AI"
 remote = true
 
+[images]
+binding = "IMAGES"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "me3-core-db"

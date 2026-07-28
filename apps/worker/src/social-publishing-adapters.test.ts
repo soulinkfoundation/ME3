@@ -843,7 +843,7 @@ describe("Instagram publishing adapter", () => {
     ]);
     expect(markProviderWriteStarted).toHaveBeenCalledTimes(1);
     expect(fetcher).toHaveBeenCalledWith(
-      expect.stringContaining("https://graph.instagram.com/v21.0/ig-owner/media"),
+      expect.stringContaining("https://graph.instagram.com/v25.0/ig-owner/media"),
       expect.any(Object),
     );
   });

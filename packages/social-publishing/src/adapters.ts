@@ -66,7 +66,7 @@ const INSTAGRAM_VIDEO_MIME_TYPES = new Set([
   "video/mp4",
   "video/quicktime",
 ]);
-const INSTAGRAM_GRAPH_VERSION = "v21.0";
+const INSTAGRAM_GRAPH_VERSION = "v25.0";
 const TIKTOK_UPLOAD_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/";
 const TIKTOK_STATUS_URL = "https://open.tiktokapis.com/v2/post/publish/status/fetch/";
 const TIKTOK_SINGLE_CHUNK_MAX_BYTES = 64 * 1024 * 1024;

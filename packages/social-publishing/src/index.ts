@@ -663,6 +663,7 @@ type SocialPublishingEnv = {
 };
 
 const ME3_CLOUD_SOCIAL_OAUTH_ORIGIN = "https://api.me3.app";
+const INSTAGRAM_GRAPH_VERSION = "v25.0";
 const HOSTED_SOCIAL_OAUTH_LINK_SECRET_NAMES = [
   "ME3_CLOUD_OWNER_ID",
   "ME3_CORE_INSTALL_ID",
@@ -4256,21 +4257,29 @@ async function fetchSocialProfile(
     };
   }
 
-  const response = await fetcher("https://graph.instagram.com/me?fields=id,username,profile_picture_url", {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const response = await fetcher(
+    `https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/me?fields=user_id,username,profile_picture_url`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
   const body = await readJsonResponse<{
-    id?: string;
+    user_id?: string;
     username?: string;
-    name?: string;
     profile_picture_url?: string;
+    data?: Array<{
+      user_id?: string;
+      username?: string;
+      profile_picture_url?: string;
+    }>;
   }>(response);
-  if (!body.id) throw new SocialPublishingInputError("Social profile response was invalid", 502);
+  const profile = body.data?.[0] || body;
+  if (!profile.user_id) {
+    throw new SocialPublishingInputError("Social profile response was invalid", 502);
+  }
   return {
-    id: body.id,
-    handle: body.username || null,
-    displayName: body.name || body.username || null,
-    avatarUrl: normalizeAvatarUrl(body.profile_picture_url),
+    id: profile.user_id,
+    handle: profile.username || null,
+    displayName: profile.username || null,
+    avatarUrl: normalizeAvatarUrl(profile.profile_picture_url),
   };
 }
 
@@ -4991,9 +5000,12 @@ async function resolvePublishingAccessToken(
       expiresAt: string | null;
     } | null;
     if (metadata.credentialSource === "hosted_oauth") {
-      token = row.platform === "instagram"
-        ? null
-        : await refreshHostedProviderToken(env, row.platform, refreshToken, fetcher);
+      token = await refreshHostedProviderToken(
+        env,
+        row.platform,
+        refreshToken,
+        fetcher,
+      );
     } else if (row.platform === "youtube" || row.platform === "tiktok") {
       token = null;
     } else {
@@ -5033,7 +5045,7 @@ async function resolvePublishingAccessToken(
 
 async function refreshHostedProviderToken(
   env: SocialPublishingEnv,
-  platform: "linkedin" | "x" | "youtube" | "tiktok",
+  platform: "linkedin" | "x" | "instagram" | "youtube" | "tiktok",
   refreshToken: string,
   fetcher: typeof fetch,
 ): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: string | null } | null> {
