@@ -364,7 +364,8 @@ export const CORE_CHAT_CAPABILITIES = [
     owner: "core",
     pluginId: null,
     ownerFacingLabel: "Look up bookings",
-    summary: "Read upcoming confirmed booking records for the owner.",
+    summary:
+      "Read the owner's upcoming confirmed bookings, including guests, times, duration, site, and notes.",
     category: "calendar",
     handler: {
       surface: "chat",
@@ -373,6 +374,16 @@ export const CORE_CHAT_CAPABILITIES = [
     sideEffect: "read_private",
     approvalMode: "none",
     requiresSetup: ["booking"],
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "integer",
+          description: "Maximum upcoming bookings to return, from 1 to 20.",
+        },
+      },
+      additionalProperties: false,
+    },
     auditEventKind: "core_bookings_lookup",
     examples: {
       positive: ["Can you check my upcoming bookings this week?"],
@@ -568,35 +579,12 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
-    id: "core.sites.blog_post.list",
-    owner: "core",
-    pluginId: "me3.landing-pages",
-    ownerFacingLabel: "List site blog posts",
-    summary: "Read profile-site blog post metadata and body previews.",
-    category: "sites",
-    handler: {
-      surface: "chat",
-      route: "core.sites.blog_post.list",
-    },
-    sideEffect: "read_private",
-    approvalMode: "none",
-    requiresSetup: ["site_files"],
-    auditEventKind: "site_blog_posts_listed",
-    examples: {
-      positive: ["Show my blog posts."],
-      negative: ["Write a social post for LinkedIn."],
-    },
-    chat: {
-      intentKind: "read_action",
-      sideEffectLevel: "read",
-    },
-  }),
-  defineCoreChatCapability({
     id: "core.sites.blog_post.read",
     owner: "core",
     pluginId: "me3.landing-pages",
-    ownerFacingLabel: "Read site blog post",
-    summary: "Read one profile-site blog post with full markdown body.",
+    ownerFacingLabel: "Read site blog posts",
+    summary:
+      "List the owner's profile-site blog posts with previews, or read one named post with its full markdown body.",
     category: "sites",
     handler: {
       surface: "chat",
@@ -607,146 +595,33 @@ export const CORE_CHAT_CAPABILITIES = [
     requiresSetup: ["site_files"],
     inputSchema: {
       type: "object",
-      required: ["post"],
       properties: {
         site: {
           type: "string",
           description: "Optional site username, domain, or profile name.",
         },
-        post: { type: "string", description: "Blog post title, slug, file path, or alias." },
+        post: {
+          type: "string",
+          description: "Optional blog post title, slug, or file path. Omit to list posts.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum post previews to return when listing, from 1 to 30.",
+        },
       },
       additionalProperties: false,
     },
     auditEventKind: "site_blog_post_read",
     examples: {
-      positive: ["Read the blog post about agent context."],
-      negative: ["Show all blog posts."],
+      positive: [
+        "Show my blog posts.",
+        "Read the blog post about agent context.",
+      ],
+      negative: ["Create a draft blog post about agent context."],
     },
     chat: {
       intentKind: "read_action",
       sideEffectLevel: "read",
-    },
-  }),
-  defineCoreChatCapability({
-    id: "core.sites.blog_post.create",
-    owner: "core",
-    pluginId: "me3.landing-pages",
-    ownerFacingLabel: "Create site blog post",
-    summary: "Create a profile-site blog post draft or published post.",
-    category: "sites",
-    handler: {
-      surface: "chat",
-      route: "core.sites.blog_post.create",
-    },
-    sideEffect: "write_internal_active",
-    approvalMode: "none",
-    requiresSetup: ["site_files"],
-    inputSchema: {
-      type: "object",
-      required: ["title"],
-      properties: {
-        site: {
-          type: "string",
-          description: "Optional site username, domain, or profile name.",
-        },
-        title: { type: "string", description: "Blog post title." },
-        slug: { type: "string", description: "Optional slug." },
-        excerpt: { type: "string", description: "Optional excerpt." },
-        bodyMarkdown: { type: "string", description: "Optional markdown body." },
-        draft: { type: "boolean", description: "Whether the post should remain a draft." },
-      },
-      additionalProperties: false,
-    },
-    auditEventKind: "site_blog_post_created",
-    examples: {
-      positive: ["Create a draft blog post about why regex intent routing fails."],
-      negative: ["Brainstorm blog ideas with me."],
-    },
-    chat: {
-      intentKind: "write_action",
-      sideEffectLevel: "write",
-    },
-  }),
-  defineCoreChatCapability({
-    id: "core.sites.blog_post.update",
-    owner: "core",
-    pluginId: "me3.landing-pages",
-    ownerFacingLabel: "Update site blog post",
-    summary: "Update profile-site blog post metadata, publish state, slug, excerpt, or body.",
-    category: "sites",
-    handler: {
-      surface: "chat",
-      route: "core.sites.blog_post.update",
-    },
-    sideEffect: "write_internal_active",
-    approvalMode: "none",
-    requiresSetup: ["site_files"],
-    inputSchema: {
-      type: "object",
-      required: ["post"],
-      properties: {
-        site: {
-          type: "string",
-          description: "Optional site username, domain, or profile name.",
-        },
-        post: { type: "string", description: "Blog post title, slug, file path, or alias." },
-        title: { type: "string", description: "Optional replacement title." },
-        slug: { type: "string", description: "Optional replacement slug." },
-        excerpt: { type: "string", description: "Optional replacement excerpt." },
-        bodyMarkdown: { type: "string", description: "Optional replacement markdown body." },
-        draft: { type: "boolean", description: "Optional draft/published state." },
-        publishedAt: {
-          type: "string",
-          description: "Optional YYYY-MM-DD publish date.",
-          format: "date",
-        },
-      },
-      additionalProperties: false,
-    },
-    auditEventKind: "site_blog_post_updated",
-    examples: {
-      positive: ["Rename the post ME3 assistant notes to ME3 agent notes."],
-      negative: ["Help me improve my writing style."],
-    },
-    chat: {
-      intentKind: "write_action",
-      sideEffectLevel: "write",
-    },
-  }),
-  defineCoreChatCapability({
-    id: "core.sites.blog_post.archive",
-    owner: "core",
-    pluginId: "me3.landing-pages",
-    ownerFacingLabel: "Archive site blog post",
-    summary: "Remove a profile-site blog post from active metadata and archive its markdown file.",
-    category: "sites",
-    handler: {
-      surface: "chat",
-      route: "core.sites.blog_post.archive",
-    },
-    sideEffect: "write_internal_active",
-    approvalMode: "none",
-    requiresSetup: ["site_files"],
-    inputSchema: {
-      type: "object",
-      required: ["post"],
-      properties: {
-        site: {
-          type: "string",
-          description: "Optional site username, domain, or profile name.",
-        },
-        post: { type: "string", description: "Blog post title, slug, file path, or alias." },
-      },
-      additionalProperties: false,
-    },
-    auditEventKind: "site_blog_post_archived",
-    examples: {
-      positive: ["Delete the old launch notes post."],
-      negative: ["Can you explain deleted site posts?"],
-    },
-    chat: {
-      intentKind: "write_action",
-      sideEffectLevel: "write",
     },
   }),
   defineCoreChatCapability({
@@ -1362,38 +1237,6 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
-    id: "core.mission.context.read",
-    owner: "core",
-    pluginId: "me3.mission-control",
-    ownerFacingLabel: "Read Mission Control context",
-    summary: "Read Mission Control project context with tasks, mission statement, and public audience context.",
-    category: "mission_control",
-    handler: {
-      surface: "chat",
-      route: "core.mission.context.read",
-    },
-    sideEffect: "read_private",
-    approvalMode: "none",
-    requiresSetup: ["mission-control"],
-    inputSchema: {
-      type: "object",
-      properties: {
-        projectId: { type: "string", description: "Optional Mission Control project ID." },
-        includeTasks: { type: "boolean", description: "Whether to include linked tasks." },
-      },
-      additionalProperties: false,
-    },
-    auditEventKind: "mission_context_read",
-    examples: {
-      positive: ["Read the mission context for project ME3 Launch."],
-      negative: ["Show backlog tasks for project ME3 Launch."],
-    },
-    chat: {
-      intentKind: "read_action",
-      sideEffectLevel: "read",
-    },
-  }),
-  defineCoreChatCapability({
     id: "core.mission.task.update",
     owner: "core",
     pluginId: "me3.mission-control",
@@ -1489,6 +1332,19 @@ export const CORE_CHAT_CAPABILITIES = [
 ] as const;
 
 export type CoreChatCapabilityId = (typeof CORE_CHAT_CAPABILITIES)[number]["id"];
+
+export type CoreChatToolPlannerDecision = {
+  kind: CoreChatPlannerIntentKind;
+  confidence: number;
+  capabilityId: CoreChatCapabilityId;
+  ownerFacingLabel: string;
+  handlerRoute: string;
+  requiredSetupChecks: string[];
+  sideEffectLevel: CoreChatSideEffectLevel;
+  approvalRequired: boolean;
+  auditEventKind: string;
+  reason: string;
+};
 
 export const CORE_CHAT_CAPABILITY_IDS = CORE_CHAT_CAPABILITIES.map(
   (capability) => capability.id,

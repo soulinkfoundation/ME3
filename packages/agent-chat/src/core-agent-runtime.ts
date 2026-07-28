@@ -4,6 +4,10 @@ import {
   type CalendarAgentEvent,
 } from "@me3-core/plugin-calendar";
 import {
+  readUpcomingBookingsForAgent,
+  type AgentBooking,
+} from "./bookings";
+import {
   confirmPostingPlan,
   createPostingPlan,
   searchPostLibrary,
@@ -79,6 +83,10 @@ import {
   type AgentLandingPageDraftInput,
   type AgentLandingPageSummary,
 } from "./landing-pages";
+import {
+  formatAgentSiteBlogReadReply,
+  readAgentSiteBlogPosts,
+} from "./site-blog";
 
 type CoreAgentDb = {
   prepare(sql: string): {
@@ -118,10 +126,12 @@ export type CoreMailboxToolServices = {
 const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
   (tool) =>
     tool.capabilityId === "core.calendar.events.list" ||
+    tool.capabilityId === "core.bookings.lookup" ||
     tool.capabilityId.startsWith("core.reminders.") ||
     tool.capabilityId === "core.journal.read" ||
     tool.capabilityId === "core.owner_content.search" ||
     tool.capabilityId.startsWith("core.sites.landing_page.") ||
+    tool.capabilityId === "core.sites.blog_post.read" ||
     tool.capabilityId.startsWith("core.mission.task.") ||
     tool.capabilityId.startsWith("core.mailbox.") ||
     tool.capabilityId.startsWith("core.social."),
@@ -353,6 +363,9 @@ function executeCoreToolCall(input: {
   if (input.tool.capabilityId === "core.calendar.events.list") {
     return executeCalendarEventsListToolCall(input);
   }
+  if (input.tool.capabilityId === "core.bookings.lookup") {
+    return executeBookingLookupToolCall(input);
+  }
   if (input.tool.capabilityId.startsWith("core.reminders.")) {
     return executeReminderToolCall(input);
   }
@@ -368,10 +381,37 @@ function executeCoreToolCall(input: {
   if (input.tool.capabilityId.startsWith("core.sites.landing_page.")) {
     return executeLandingPageToolCall(input);
   }
+  if (input.tool.capabilityId === "core.sites.blog_post.read") {
+    return executeSiteBlogReadToolCall(input);
+  }
   if (input.tool.capabilityId.startsWith("core.social.")) {
     return executeSocialToolCall(input);
   }
   return executeMailboxToolCall(input);
+}
+
+async function executeBookingLookupToolCall(input: {
+  db: CoreAgentDb;
+  userId: string;
+  ownerTimezone: string | null | undefined;
+  call: AgentToolCall;
+  tool: CoreChatToolDefinition;
+}): Promise<CoreToolOutcome> {
+  enforceBookingLookupToolPolicy(input.tool);
+  assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+  const result = await readUpcomingBookingsForAgent(input.db, input.userId, {
+    limit: optionalToolNumber(input.call.arguments.limit),
+  });
+  return {
+    capabilityId: "core.bookings.lookup",
+    result: { ok: true, ...result },
+    fallbackReply: formatBookingLookupReply(
+      result.bookings,
+      input.ownerTimezone,
+    ),
+    reminderAction: null,
+    actionCards: [],
+  };
 }
 
 async function executeCalendarEventsListToolCall(input: {
@@ -590,6 +630,32 @@ async function executeOwnerContentSearchToolCall(input: {
     capabilityId: "core.owner_content.search",
     result: { ok: true, ...found },
     fallbackReply: formatOwnerContentSearch(found.results, found.ambiguous),
+    reminderAction: null,
+    actionCards: [],
+  };
+}
+
+async function executeSiteBlogReadToolCall(input: {
+  db: CoreAgentDb;
+  userId: string;
+  call: AgentToolCall;
+  tool: CoreChatToolDefinition;
+}): Promise<CoreToolOutcome> {
+  enforceSiteBlogReadToolPolicy(input.tool);
+  assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+  const result = await readAgentSiteBlogPosts(
+    { DB: input.db },
+    input.userId,
+    {
+      site: optionalToolString(input.call.arguments.site),
+      post: optionalToolString(input.call.arguments.post),
+      limit: optionalToolNumber(input.call.arguments.limit),
+    },
+  );
+  return {
+    capabilityId: "core.sites.blog_post.read",
+    result,
+    fallbackReply: formatAgentSiteBlogReadReply(result),
     reminderAction: null,
     actionCards: [],
   };
@@ -1519,6 +1585,12 @@ function withCoreToolInstructions(
     "Calendar event tool rules:",
     "- Use core_calendar_events_list to read personal and imported calendar events. Use reminder tools for reminders and booking lookup for bookings.",
     "- Resolve relative dates in the owner's timezone. Calendar reads require an inclusive dateFrom and dateTo and are limited to 31 days.",
+    "Booking tool rules:",
+    "- Use core_bookings_lookup whenever the owner asks about upcoming confirmed bookings, appointments, client sessions, or booked calls. Do not answer from calendar events or email.",
+    "- Booking lookup is read-only and returns the next confirmed bookings in chronological order. It does not include reminders, ordinary calendar events, or cancelled bookings.",
+    "Site blog read tool rules:",
+    "- Use core_sites_blog_post_read to list profile-site blog posts or read one named post. Omit post to list; provide the title, slug, or file path to read the full markdown body.",
+    "- Site blog access is read-only. No tool can create, draft, edit, publish, unpublish, archive, or delete a blog post.",
     "Mission Control task tool rules:",
     "- Use task tools only when the owner clearly asks to list, read, create, update, move, complete, or archive Mission Control tasks.",
     "- When the owner remembers a task or Journal entry by title or content, use core_owner_content_search. Search returns lightweight candidates with stable source IDs; read the selected source before using its full body.",
@@ -1597,6 +1669,32 @@ function enforceCalendarEventsListToolPolicy(tool: CoreChatToolDefinition): void
   ) {
     throw new Error(
       `Tool "${tool.name}" is not allowed by the Calendar read runtime policy.`,
+    );
+  }
+}
+
+function enforceBookingLookupToolPolicy(tool: CoreChatToolDefinition): void {
+  if (
+    tool.capabilityId !== "core.bookings.lookup" ||
+    tool.handlerRoute !== tool.capabilityId ||
+    tool.approvalMode !== "none" ||
+    tool.requiredSetupChecks.some((check) => check !== "booking")
+  ) {
+    throw new Error(
+      `Tool "${tool.name}" is not allowed by the booking read runtime policy.`,
+    );
+  }
+}
+
+function enforceSiteBlogReadToolPolicy(tool: CoreChatToolDefinition): void {
+  if (
+    tool.capabilityId !== "core.sites.blog_post.read" ||
+    tool.handlerRoute !== tool.capabilityId ||
+    tool.approvalMode !== "none" ||
+    tool.requiredSetupChecks.some((check) => check !== "site_files")
+  ) {
+    throw new Error(
+      `Tool "${tool.name}" is not allowed by the site blog read runtime policy.`,
     );
   }
 }
@@ -1984,6 +2082,23 @@ function formatCalendarEventsReply(
       ? `Calendar events for ${dateFrom}:`
       : `Calendar events from ${dateFrom} through ${dateTo}:`,
     ...lines,
+  ].join("\n");
+}
+
+function formatBookingLookupReply(
+  bookings: AgentBooking[],
+  timezone: string | null | undefined,
+): string {
+  if (!bookings.length) {
+    return "I could not find any upcoming confirmed bookings.";
+  }
+  return [
+    `You have ${bookings.length} upcoming confirmed booking${bookings.length === 1 ? "" : "s"}:`,
+    ...bookings.map((booking) => {
+      const site = booking.siteUsername ? ` via @${booking.siteUsername}` : "";
+      const notes = booking.notes ? ` — ${booking.notes}` : "";
+      return `- ${booking.guestName} — ${formatAgentDateTime(booking.startsAt, timezone)} — ${booking.durationMinutes} min${site}${notes}`;
+    }),
   ].join("\n");
 }
 

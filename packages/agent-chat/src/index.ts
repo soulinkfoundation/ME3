@@ -1,10 +1,7 @@
 import { normalizeTimeZone } from "@me3-core/plugin-calendar";
 import {
-  planLegacyNativeToolTurn,
   type CoreChatCapabilityId,
   type CoreChatToolPlannerDecision,
-} from "./legacy-native-router";
-import {
   getCoreChatCapability,
   isCoreChatCapabilityApprovalRequired,
 } from "./capabilities";
@@ -76,16 +73,9 @@ export {
   type CreateAgentMissionTaskInput,
   type UpdateAgentMissionTaskInput,
 } from "@me3-core/plugin-mission-control";
-import { maybeHandleSiteBlogPostToolTurn } from "./site-blog";
 import { runCoreAgentToolTurn } from "./core-agent-runtime";
 import { loadOwnerSnapshotContext } from "./owner-snapshot";
 import type { AgentModelUsage } from "./tool-runtime";
-import {
-  listAgentMissionProjects as loadAgentMissionProjects,
-  listAgentMissionTasks as loadAgentMissionTasks,
-  type AgentMissionProject,
-  type AgentMissionTask,
-} from "@me3-core/plugin-mission-control";
 
 export {
   buildReminderActionCard,
@@ -117,17 +107,6 @@ import {
 } from "./turn-idempotency";
 
 export {
-  isCoreChatBookingLookupRequest,
-  isCoreChatCapabilityExplorationRequest,
-  planLegacyNativeToolTurn,
-  type CoreChatCapabilityId,
-  type CoreChatPlannerIntentKind,
-  type CoreChatSideEffectLevel,
-  type CoreChatToolPlannerDecision,
-  type CoreChatToolPlannerInput,
-} from "./legacy-native-router";
-
-export {
   CORE_CHAT_CAPABILITIES,
   CORE_CHAT_CAPABILITY_IDS,
   getCoreChatCapability,
@@ -136,6 +115,10 @@ export {
   type CoreChatApprovalMode,
   type CoreChatCapabilityContract,
   type CoreChatCapabilitySideEffect,
+  type CoreChatCapabilityId,
+  type CoreChatPlannerIntentKind,
+  type CoreChatSideEffectLevel,
+  type CoreChatToolPlannerDecision,
 } from "./capabilities";
 
 export {
@@ -762,10 +745,6 @@ type DbCoreSetupProfileSiteRow = {
   published_at: string | null;
 };
 
-type DbSiteMeJsonRow = {
-  content: unknown;
-};
-
 type CoreSetupPluginReadiness = {
   total: number;
   enabled: number;
@@ -779,24 +758,6 @@ type CoreSetupJobsReadiness = {
   needsSetup: number;
   paused: number;
   draft: number;
-};
-
-type DbBookingRow = {
-  id: string;
-  site_id: string;
-  site_username: string | null;
-  offer_id: string | null;
-  booking_type: "one_to_one" | "class" | "retreat" | null;
-  guest_name: string;
-  guest_email: string;
-  starts_at: string;
-  ends_at: string;
-  duration_minutes: number;
-  status: "confirmed" | "cancelled";
-  notes: string | null;
-  payment_status?: string | null;
-  is_free_booking?: number | null;
-  created_at: string;
 };
 
 type DbContactRow = {
@@ -921,17 +882,6 @@ type DbMissionTaskRow = {
   scheduled_for: string | null;
   source_ref: string | null;
   updated_at: string;
-};
-
-const AGENT_MISSION_TASK_LIST_DESCRIPTION_LIMIT = 1000;
-
-type AgentPublicBusinessContext = {
-  positioningStatement: string | null;
-  audience: string | null;
-  primaryProblem: string | null;
-  solution: string | null;
-  targetMarket: string | null;
-  primaryOutcome: string | null;
 };
 
 type DbAssistantSkillRow = {
@@ -2141,13 +2091,7 @@ export async function dispatchAgentSandboxTurn(
       (attachment) =>
         attachment.kind === "image" || attachment.mimeType?.startsWith("image/"),
     );
-  const toolResponse = await maybeHandleCoreToolTurn(
-    env,
-    input,
-    owner,
-    toolPlan,
-    route,
-  );
+  const toolResponse = maybeHandleCoreDirectTurn(input, route);
   if (toolResponse) {
     await persistAssistantMessage(
       env,
@@ -3058,21 +3002,15 @@ async function loadCoreChatToolTurnPlan(
   return {
     recent: recent.messages,
     sourceReference: recent.sourceReference,
-    decision: planLegacyNativeToolTurn({
-      messageText: input.messageText.trim(),
-    }),
+    decision: buildCoreConversationDecision(input.messageText),
   };
 }
 
-async function maybeHandleCoreToolTurn(
-  env: CoreAgentChatEnv,
+function maybeHandleCoreDirectTurn(
   input: AgentSandboxDispatchInput,
-  owner: OwnerProfileRow | null,
-  toolPlan: CoreChatToolTurnPlan,
   route: AiRoute,
-): Promise<AgentSandboxDispatchResponse | null> {
+): AgentSandboxDispatchResponse | null {
   const messageText = input.messageText.trim();
-  const plannerDecision = toolPlan.decision;
 
   if (isConfiguredModelIdentityRequest(messageText)) {
     const backup = route.backupModel && route.backupModel !== route.model
@@ -3088,62 +3026,53 @@ async function maybeHandleCoreToolTurn(
     );
   }
 
-  if (
-    plannerDecision.kind === "conversation" ||
-    plannerDecision.capabilityId === "core.agent-chat.conversation"
-  ) {
-    return null;
-  }
-
-  const siteBlogResponse = await maybeHandleSiteBlogPostToolTurn(env, {
-    userId: input.userId,
-    turnId: input.turnId,
-    messageText,
-    capabilityId: plannerDecision.capabilityId,
-  });
-  if (siteBlogResponse) {
-    return recoverNativeToolParserErrorResponse(
-      siteBlogResponse,
-      plannerDecision,
-      messageText,
-    );
-  }
-
-  if (plannerDecision.capabilityId === "core.mission.context.read") {
-    const contextPlan = await parseMissionContextReadChatRequest(env, input.userId, messageText);
-    if ("error" in contextPlan) {
-      return recoverNativeToolParserErrorResponse(
-        toolResponse(input.turnId, "core.mission.context.read", contextPlan.error, {
-          fallbackReason: "Mission context details required",
-        }),
-        plannerDecision,
-        messageText,
-      );
-    }
-
-    return toolResponse(
-      input.turnId,
-      "core.mission.context.read",
-      formatMissionContextReadReply(contextPlan.context),
-    );
-  }
-
-  if (plannerDecision.capabilityId === "core.bookings.lookup") {
-    const bookings = await listUpcomingBookings(env, input.userId);
-    const replyText = bookings.length
-      ? [
-          `You have ${bookings.length} upcoming booking${bookings.length === 1 ? "" : "s"}:`,
-          ...bookings.map(
-            (booking) =>
-              `- ${booking.guest_name} at ${formatAgentDateTime(booking.starts_at, owner?.timezone)} (${booking.duration_minutes} min)`,
-          ),
-        ].join("\n")
-      : "I could not find any upcoming confirmed bookings.";
-
-    return toolResponse(input.turnId, "core.bookings.lookup", replyText);
-  }
-
   return null;
+}
+
+function buildCoreConversationDecision(
+  messageText: string,
+): CoreChatToolPlannerDecision {
+  const capability = getCoreChatCapability("core.agent-chat.conversation");
+  const orientation = isCoreChatCapabilityExplorationRequest(messageText);
+  return {
+    kind: "conversation",
+    confidence: orientation ? 0.95 : 0.55,
+    capabilityId: "core.agent-chat.conversation",
+    ownerFacingLabel: capability.ownerFacingLabel,
+    handlerRoute: capability.handler.route,
+    requiredSetupChecks: [...capability.requiresSetup],
+    sideEffectLevel: capability.chat.sideEffectLevel,
+    approvalRequired: isCoreChatCapabilityApprovalRequired(capability),
+    auditEventKind: capability.auditEventKind,
+    reason: orientation
+      ? "The owner is exploring setup or agent capabilities."
+      : "The configured model can answer directly or select a Runtime v2 tool.",
+  };
+}
+
+function isCoreChatCapabilityExplorationRequest(messageText: string): boolean {
+  if (
+    /\b(?:(?:can|could|would)\s+you\s+)?(?:use|using|call|run)\s+(?:the\s+)?(?:[\w-]+\s+){0,3}tools?\b/i.test(
+      messageText,
+    )
+  ) {
+    return false;
+  }
+  const normalized = messageText.toLowerCase();
+  const mentionsAssistantScope =
+    /\b(?:what|which)\s+(?:you|me3|the\s+agent|the\s+assistant)\s+can\s+(?:do|access|use|help\s+with)\b/i.test(messageText) ||
+    /\b(?:tools?|capabilit(?:y|ies)|context|available|access|test\s+run|setting\s+up|setup|first\s+time|make\s+sense)\b/i.test(messageText) ||
+    /\b(?:want|need|trying|try)\s+to\s+(?:test|explore)\b/i.test(messageText);
+  if (!mentionsAssistantScope) return false;
+  return (
+    /\b(?:tools?|capabilit(?:y|ies)|what\s+you\s+can\s+do|what\s+context|context\s+you\s+have|access\s+here)\b/i.test(messageText) ||
+    /\b(?:setting\s+up|setup|first\s+time|make\s+sense)\b/i.test(messageText) ||
+    /\b(?:want|need|trying|try)\s+to\s+(?:test|explore)\b/i.test(messageText) ||
+    normalized.includes("for example") ||
+    normalized.includes("such as") ||
+    normalized.includes("ie ") ||
+    normalized.includes("i.e.")
+  );
 }
 
 function isConfiguredModelIdentityRequest(messageText: string): boolean {
@@ -3154,50 +3083,6 @@ function isConfiguredModelIdentityRequest(messageText: string): boolean {
     /\bwhich\s+(?:ai\s+)?model\s+(?:are|is)\s+(?:we|you|me3)\s+(?:using|running|on)\b/i.test(text) ||
     /\bwhat(?:'s| is)\s+(?:your|the)\s+(?:underlying\s+|current\s+)?model\b/i.test(text)
   );
-}
-
-const RECOVERABLE_NATIVE_TOOL_PARSER_REASONS = new Set([
-  "Mission context details required",
-  "Site blog posts could not be listed",
-  "Site blog post could not be read",
-  "Site blog post details required",
-  "Site blog post update details required",
-  "Site blog post archive details required",
-]);
-
-function recoverNativeToolParserErrorResponse(
-  response: AgentSandboxDispatchResponse,
-  plannerDecision: CoreChatToolPlannerDecision,
-  messageText: string,
-): AgentSandboxDispatchResponse | null {
-  if (!response.fallbackReason) return response;
-  if (!RECOVERABLE_NATIVE_TOOL_PARSER_REASONS.has(response.fallbackReason)) {
-    return response;
-  }
-  if (messageExplicitlyNamesNativeToolDomain(messageText, plannerDecision.capabilityId)) {
-    return response;
-  }
-  return null;
-}
-
-function messageExplicitlyNamesNativeToolDomain(
-  messageText: string,
-  capabilityId: CoreChatCapabilityId,
-): boolean {
-  if (capabilityId.startsWith("core.mission.")) {
-    return /\b(?:mission\s+control|mission|tasks?|todos?|project|backlog|to\s+do|doing|in\s+progress|review|done|completed|me\.json)\b/i.test(
-      messageText,
-    );
-  }
-  if (capabilityId.startsWith("core.sites.")) {
-    return /\b(?:profile\s+site|public\s+site|site\s+(?:posts?|drafts?|blog)|blog(?:\s+posts?)?|blog\s+post|site\s+post|site\s+draft)\b/i.test(
-      messageText,
-    );
-  }
-  if (capabilityId === "core.bookings.lookup") {
-    return /\b(?:bookings?|appointments?|sessions?|calls?)\b/i.test(messageText);
-  }
-  return true;
 }
 
 function toolResponse(
@@ -3233,446 +3118,6 @@ function toolResponse(
   };
 }
 
-async function parseMissionContextReadChatRequest(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  messageText: string,
-): Promise<
-  | {
-      context: {
-        project: AgentMissionProject | null;
-        projects: AgentMissionProject[];
-        tasks: AgentMissionTask[];
-        missionStatement: string | null;
-        business: AgentPublicBusinessContext | null;
-      };
-    }
-  | { error: string }
-> {
-  const [projects, tasks, missionStatement, business] = await Promise.all([
-    loadAgentMissionProjects(env, userId),
-    loadAgentMissionTasks(env, userId),
-    loadAgentMissionStatementText(env, userId),
-    loadAgentPublicBusinessContext(env, userId),
-  ]);
-  const projectName =
-    extractMissionTaskProjectName(messageText) ||
-    extractMissionTaskListProjectName(messageText);
-  const projectResult = resolveAgentMissionProject(projects, projectName || messageText, {
-    allowDescriptionMatch: true,
-  });
-  if ("error" in projectResult) {
-    if (projectName) return projectResult;
-    return {
-      context: {
-        project: null,
-        projects,
-        tasks,
-        missionStatement,
-        business,
-      },
-    };
-  }
-
-  return {
-    context: {
-      project: projectResult,
-      projects: [projectResult],
-      tasks: tasks.filter((task) => task.projectId === projectResult.id),
-      missionStatement,
-      business,
-    },
-  };
-}
-
-async function loadAgentMissionStatementText(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-): Promise<string | null> {
-  const statement = await loadCoreContextMissionStatement(env, userId);
-  return statement?.statement || null;
-}
-
-async function loadAgentPublicBusinessContext(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-): Promise<AgentPublicBusinessContext | null> {
-  try {
-    const row = await env.DB.prepare(
-      `SELECT sf.content
-       FROM sites s
-       JOIN site_files sf ON sf.site_id = s.id
-       WHERE s.user_id = ?
-         AND COALESCE(s.site_type, 'profile') = 'profile'
-         AND sf.path IN ('src/me.json', 'public/me.json', 'me.json')
-       ORDER BY s.updated_at DESC,
-                CASE WHEN sf.path = 'public/me.json' THEN 0 WHEN sf.path = 'src/me.json' THEN 1 ELSE 2 END
-       LIMIT 1`,
-    )
-      .bind(userId)
-      .first<DbSiteMeJsonRow>();
-    const text = decodeSiteFileText(row?.content);
-    if (!text) return null;
-    const profile = JSON.parse(text) as { business?: Record<string, unknown> | null };
-    const business = profile.business;
-    if (!business || typeof business !== "object") return null;
-    const context: AgentPublicBusinessContext = {
-      positioningStatement: normalizeNullableText(business.positioningStatement),
-      audience: normalizeNullableText(business.audience),
-      primaryProblem: normalizeNullableText(business.primaryProblem),
-      solution: normalizeNullableText(business.solution),
-      targetMarket: normalizeNullableText(business.targetMarket),
-      primaryOutcome: normalizeNullableText(business.primaryOutcome),
-    };
-    return Object.values(context).some(Boolean) ? context : null;
-  } catch {
-    return null;
-  }
-}
-
-function resolveAgentMissionProject(
-  projects: AgentMissionProject[],
-  query: string,
-  options: { allowDescriptionMatch?: boolean } = {},
-): AgentMissionProject | { error: string } {
-  const result = resolveAgentEntity(projects, query, {
-    labels: (project) => [
-      { value: project.name, weight: 1 },
-      { value: project.slug, weight: 1 },
-      ...(options.allowDescriptionMatch && project.description
-        ? [{ value: project.description, weight: 0.75 }]
-        : []),
-    ],
-    format: (project) => project.name,
-  });
-  if (result.kind === "resolved") return result.item;
-  if (result.kind === "ambiguous") {
-    return {
-      error: `I found multiple Mission Control projects that might match "${query}": ${result.candidates
-        .map((project) => project.name)
-        .join(", ")}. Which one should I use?`,
-    };
-  }
-  return { error: `I could not find a Mission Control project matching "${query}".` };
-}
-
-function resolveAgentEntity<T>(
-  items: T[],
-  query: string,
-  options: {
-    labels: (item: T) => Array<{ value: string | null | undefined; weight?: number }>;
-    format: (item: T) => string;
-  },
-):
-  | { kind: "resolved"; item: T }
-  | { kind: "ambiguous"; candidates: T[] }
-  | { kind: "missing" } {
-  const normalizedQuery = normalizeAgentEntityText(query);
-  const queryTokens = importantAgentEntityTokens(normalizedQuery);
-  if (!normalizedQuery || queryTokens.size === 0) return { kind: "missing" };
-
-  const scored = items
-    .map((item) => {
-      const bestScore = Math.max(
-        0,
-        ...options.labels(item).map((label) =>
-          scoreAgentEntityLabel(normalizedQuery, queryTokens, label.value, label.weight ?? 1),
-        ),
-      );
-      return { item, score: bestScore };
-    })
-    .filter((match) => match.score >= 55)
-    .sort(
-      (left, right) =>
-        right.score - left.score || options.format(left.item).localeCompare(options.format(right.item)),
-    );
-
-  const best = scored[0];
-  if (!best) return { kind: "missing" };
-  if (best.score >= 95) return { kind: "resolved", item: best.item };
-  const close = scored.filter((match) => best.score - match.score < 12);
-  if (close.length > 1) return { kind: "ambiguous", candidates: close.slice(0, 5).map((match) => match.item) };
-  return best.score >= 70 ? { kind: "resolved", item: best.item } : { kind: "missing" };
-}
-
-function scoreAgentEntityLabel(
-  normalizedQuery: string,
-  queryTokens: ReadonlySet<string>,
-  label: string | null | undefined,
-  weight: number,
-): number {
-  const normalizedLabel = normalizeAgentEntityText(label || "");
-  const labelTokens = importantAgentEntityTokens(normalizedLabel);
-  if (!normalizedLabel || labelTokens.size === 0) return 0;
-  if (normalizedQuery === normalizedLabel) return 100 * weight;
-  if (normalizedQuery.includes(normalizedLabel)) return 92 * weight;
-  const overlap = [...labelTokens].filter((token) => queryTokens.has(token)).length;
-  if (overlap === 0) return 0;
-  const coverage = overlap / labelTokens.size;
-  if (coverage === 1) return (labelTokens.size === 1 ? 82 : 88) * weight;
-  return (45 + coverage * 35) * weight;
-}
-
-function formatMissionContextReadReply(input: {
-  project: AgentMissionProject | null;
-  projects: AgentMissionProject[];
-  tasks: AgentMissionTask[];
-  missionStatement: string | null;
-  business: AgentPublicBusinessContext | null;
-}): string {
-  const lines = [
-    input.project
-      ? `Mission Control context for ${input.project.name}:`
-      : "Mission Control context:",
-  ];
-  if (input.project) {
-    lines.push(`- Purpose: ${input.project.description || "Not set yet."}`);
-  } else if (input.projects.length) {
-    lines.push(`- Projects: ${input.projects.slice(0, 8).map((project) => project.name).join(", ")}`);
-  }
-  lines.push(
-    `- Mission statement: ${input.missionStatement || "Not set yet."}`,
-    `- Audience: ${input.business?.audience || input.business?.targetMarket || "Not set yet."}`,
-  );
-  if (input.business?.positioningStatement) {
-    lines.push(`- Positioning: ${input.business.positioningStatement}`);
-  }
-  if (input.tasks.length) {
-    lines.push(
-      "",
-      "Tasks:",
-      ...input.tasks.slice(0, 20).map((task, index) => {
-        return formatMissionTaskListItem(task, index);
-      }),
-    );
-  } else {
-    lines.push("", "Tasks: none found.");
-  }
-  return [
-    ...lines,
-    ...(input.tasks.length > 20 ? [`...and ${input.tasks.length - 20} more tasks.`] : []),
-  ].join("\n");
-}
-
-function formatMissionTaskListItem(task: AgentMissionTask, index: number): string {
-  const due = task.dueAt ? `, due ${task.dueAt}` : "";
-  const summary = `${index + 1}. ${task.title} (${task.projectName}, ${missionTaskStatusLabel(task.status)}${due})`;
-  const description = formatMissionTaskDescription(
-    task.description,
-    AGENT_MISSION_TASK_LIST_DESCRIPTION_LIMIT,
-    { compact: true },
-  );
-  return description ? `${summary}\n   Description: ${description}` : summary;
-}
-
-function formatMissionTaskDescription(
-  description: string | null,
-  limit: number,
-  options: { compact?: boolean } = {},
-): string | null {
-  const normalized = normalizeNullableText(description);
-  if (!normalized) return null;
-  const text = options.compact ? normalized.replace(/\s+/g, " ") : normalized;
-  if (text.length <= limit) return text;
-  return `${text.slice(0, limit).trimEnd()}... [truncated to ${limit} characters]`;
-}
-
-function extractMissionTaskProjectName(messageText: string): string | null {
-  return extractMissionProjectName(messageText, [
-    "to the mission control project ",
-    "in the mission control project ",
-    "under the mission control project ",
-    "for the mission control project ",
-    "to mission control project ",
-    "in mission control project ",
-    "under mission control project ",
-    "for mission control project ",
-    "to the project ",
-    "in the project ",
-    "under the project ",
-    "for the project ",
-    "to project ",
-    "in project ",
-    "under project ",
-    "for project ",
-  ], [" to ", " due ", " by ", " today", " tomorrow"]);
-}
-
-function extractMissionTaskListProjectName(messageText: string): string | null {
-  const value = extractMissionProjectName(messageText, ["for ", "in "], [
-    " task",
-    " todo",
-  ]);
-  return value && !isMissionTaskStatusName(value) ? value : null;
-}
-
-function extractMissionProjectName(
-  messageText: string,
-  prefixes: string[],
-  terminators: string[],
-): string | null {
-  const lowerCaseText = messageText.toLowerCase();
-  let candidateStart = -1;
-  for (const prefix of prefixes) {
-    const prefixIndex = findMissionProjectPhrase(lowerCaseText, prefix);
-    if (prefixIndex === -1) continue;
-    const start = prefixIndex + prefix.length;
-    if (candidateStart === -1 || start < candidateStart) candidateStart = start;
-  }
-  if (candidateStart === -1) return null;
-
-  const candidateEnd = findMissionProjectEnd(
-    lowerCaseText,
-    candidateStart,
-    terminators,
-  );
-  return normalizeNullableText(
-    trimMissionProjectPunctuation(messageText.slice(candidateStart, candidateEnd)),
-  );
-}
-
-function findMissionProjectPhrase(value: string, phrase: string): number {
-  let index = value.indexOf(phrase);
-  while (index !== -1) {
-    if (index === 0 || !isMissionProjectWordCharacter(value[index - 1])) {
-      return index;
-    }
-    index = value.indexOf(phrase, index + 1);
-  }
-  return -1;
-}
-
-function findMissionProjectEnd(
-  value: string,
-  start: number,
-  terminators: string[],
-): number {
-  let end = value.length;
-  for (const terminator of terminators) {
-    let index = value.indexOf(terminator, start);
-    while (index !== -1) {
-      const afterTerminator = index + terminator.length;
-      if (
-        terminator.endsWith(" ") ||
-        afterTerminator === value.length ||
-        !isMissionProjectWordCharacter(value[afterTerminator])
-      ) {
-        end = Math.min(end, index);
-        break;
-      }
-      index = value.indexOf(terminator, index + 1);
-    }
-  }
-  for (let index = start; index < end; index += 1) {
-    if (value[index] === "." || value[index] === "?" || value[index] === "!") {
-      return index;
-    }
-  }
-  return end;
-}
-
-function trimMissionProjectPunctuation(value: string): string {
-  let start = 0;
-  let end = value.length;
-  while (start < end && isMissionProjectTrimCharacter(value[start])) start += 1;
-  while (end > start && isMissionProjectTrimCharacter(value[end - 1])) end -= 1;
-  return value.slice(start, end);
-}
-
-function isMissionProjectTrimCharacter(value: string): boolean {
-  return (
-    value === " " ||
-    value === "\n" ||
-    value === "\r" ||
-    value === "\t" ||
-    value === '"' ||
-    value === "“" ||
-    value === "”"
-  );
-}
-
-function isMissionProjectWordCharacter(value: string): boolean {
-  const code = value.charCodeAt(0);
-  return (
-    (code >= 48 && code <= 57) ||
-    (code >= 65 && code <= 90) ||
-    (code >= 97 && code <= 122) ||
-    value === "_"
-  );
-}
-
-function isMissionTaskStatusName(value: string): boolean {
-  return [
-    "backlog",
-    "todo",
-    "to do",
-    "doing",
-    "in progress",
-    "review",
-    "done",
-    "complete",
-    "completed",
-  ].includes(value.toLowerCase());
-}
-
-function missionTaskStatusLabel(status: string): string {
-  if (status === "in_progress") return "Doing";
-  if (status === "review") return "Review";
-  if (status === "done") return "Done";
-  return "Backlog";
-}
-
-function normalizeAgentEntityText(value: string): string {
-  return value
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function importantAgentEntityTokens(value: string): ReadonlySet<string> {
-  const stop = new Set([
-    "a",
-    "about",
-    "and",
-    "any",
-    "can",
-    "check",
-    "context",
-    "for",
-    "goals",
-    "in",
-    "list",
-    "me",
-    "mission",
-    "my",
-    "of",
-    "please",
-    "project",
-    "projects",
-    "pull",
-    "read",
-    "show",
-    "tasks",
-    "the",
-    "to",
-    "up",
-    "you",
-  ]);
-  return new Set(
-    normalizeAgentEntityText(value)
-      .split(" ")
-      .filter((token) => token.length > 1 && !stop.has(token)),
-  );
-}
-
-function decodeSiteFileText(value: unknown): string | null {
-  if (typeof value === "string") return value;
-  if (value instanceof ArrayBuffer) return new TextDecoder().decode(value);
-  if (ArrayBuffer.isView(value)) return new TextDecoder().decode(value);
-  return null;
-}
 
 function stripAgentDraftWrapperText(text: string): string {
   let body = text.replace(/\r\n/g, "\n").trim();
@@ -3699,29 +3144,6 @@ function draftWrapperParagraphIncludesEmailBody(paragraph: string): boolean {
   );
 }
 
-async function listUpcomingBookings(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-): Promise<DbBookingRow[]> {
-  try {
-    const rows = await env.DB.prepare(
-      `SELECT b.id, b.site_id, s.username AS site_username, b.offer_id,
-              b.booking_type, b.guest_name, b.guest_email, b.starts_at, b.ends_at,
-              b.duration_minutes, b.status, b.notes, b.payment_status,
-              b.is_free_booking, b.created_at
-       FROM bookings b
-       JOIN sites s ON s.id = b.site_id
-       WHERE s.user_id = ? AND b.status = 'confirmed' AND b.starts_at >= ?
-       ORDER BY b.starts_at ASC
-       LIMIT 8`,
-    )
-      .bind(userId, new Date().toISOString())
-      .all<DbBookingRow>();
-    return rows.results || [];
-  } catch {
-    return [];
-  }
-}
 
 function formatAgentDateTime(iso: string, timezone: string | null | undefined): string {
   const normalizedTimezone = normalizeTimeZone(timezone) || "UTC";
@@ -5814,6 +5236,8 @@ function toolResultTraceStatus(
 function isCoreRuntimeToolSpecialist(specialist: string | null): boolean {
   return Boolean(
     specialist === "core.calendar.events.list" ||
+      specialist === "core.bookings.lookup" ||
+      specialist === "core.sites.blog_post.read" ||
       specialist?.startsWith("core.reminders.") ||
       specialist?.startsWith("core.mission.task.") ||
       specialist?.startsWith("core.mailbox.") ||
@@ -6346,21 +5770,6 @@ function mapOwnerProfileToContext(owner: OwnerProfileRow) {
       reason: "Always include a small owner profile.",
     }),
   };
-}
-
-function summarizeAgentPublicIdentity(
-  ownerBio: string | null | undefined,
-  business: AgentPublicBusinessContext | null,
-): string | null {
-  return [
-    ownerBio,
-    business?.positioningStatement ? `Positioning: ${business.positioningStatement}` : null,
-    business?.audience ? `Audience: ${business.audience}` : null,
-    business?.targetMarket ? `Target market: ${business.targetMarket}` : null,
-    business?.primaryOutcome ? `Primary outcome: ${business.primaryOutcome}` : null,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join(" | ") || null;
 }
 
 function mapRecentMessagesToContext(

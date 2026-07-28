@@ -15,7 +15,6 @@ import {
   allowsAgentChatRawModelSelection,
   createAgentSandboxTurnRecord,
   getAgentSandboxTurnResult,
-  planLegacyNativeToolTurn,
   type AgentChatMode,
   type AgentChatActionCard,
   type AgentChatImageAction,
@@ -203,10 +202,6 @@ function serializeAssistantSettings(row: AssistantSettingsRow | null) {
 function assistantSiteToolsEnabled(env: Env): boolean {
   // ponytail: launch kill switch; delete site tool routing after the assistant stabilizes.
   return /^(1|true|yes)$/i.test(String(env.ME3_ASSISTANT_SITE_TOOLS_ENABLED || "").trim());
-}
-
-function isNativeSiteBlogPostToolIntent(messageText: string): boolean {
-  return planLegacyNativeToolTurn({ messageText }).capabilityId.startsWith("core.sites.blog_post.");
 }
 
 async function getAssistantSettings(env: Env, ownerId: string) {
@@ -1048,8 +1043,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     messageText: string,
   ): Promise<string | null> {
     const siteWriteIntent = isAssistantSiteUpdateIntent(messageText);
-    const siteReadIntent =
-      isAssistantSiteBlogListIntent(messageText) || isAssistantSiteStatusIntent(messageText);
+    const siteReadIntent = isAssistantSiteStatusIntent(messageText);
     if (siteWriteIntent || siteReadIntent) {
       return "I can help draft that here. Add @site when you want me to edit or inspect your ME3 site draft.";
     }
@@ -3205,11 +3199,8 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     }
 
     if (siteToolsEnabled) {
-      const nativeBlogPostIntent = !siteScopeAllowed && isNativeSiteBlogPostToolIntent(messageText);
       const scopeRequiredReply = siteScopeAllowed
         ? null
-        : nativeBlogPostIntent
-          ? null
         : await assistantSiteScopeRequiredReply(c.env, ownerId, thread.id, messageText);
       const scopeDecision = assistantScopeDecision(
         scopeParse?.scopes || [],
@@ -3483,11 +3474,8 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           }
 
           if (siteToolsEnabled) {
-            const nativeBlogPostIntent = !siteScopeAllowed && isNativeSiteBlogPostToolIntent(messageText);
             const scopeRequiredReply = siteScopeAllowed
               ? null
-              : nativeBlogPostIntent
-                ? null
               : await assistantSiteScopeRequiredReply(c.env, ownerId, thread.id, messageText);
             const scopeDecision = assistantScopeDecision(
               scopeParse?.scopes || [],

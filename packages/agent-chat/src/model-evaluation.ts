@@ -14,7 +14,7 @@ import {
 } from "./tool-runtime";
 import { CORE_CHAT_TOOLS } from "./tools";
 
-export const FIXED_MODEL_EVALUATION_SUITE_VERSION = "me3-fixed-37-v3";
+export const FIXED_MODEL_EVALUATION_SUITE_VERSION = "me3-fixed-39-v4";
 
 export type ModelEvaluationMode = "everyday" | "advanced";
 export type ModelEvaluationProvider = "workers-ai" | "openai" | "anthropic";
@@ -388,6 +388,30 @@ export const FIXED_MODEL_EVALUATION_TASKS: readonly FixedModelEvaluationTask[] =
       {
         name: "core_calendar_events_list",
         arguments: { dateFrom: "2026-07-15", dateTo: "2026-07-21" },
+      },
+    ],
+  },
+  {
+    id: "tool-bookings-lookup",
+    category: "tool_selection",
+    turns: ["Use the appropriate tool to read my next eight confirmed bookings."],
+    checkText: nonEmpty,
+    expectedCalls: [
+      {
+        name: "core_bookings_lookup",
+        arguments: { limit: 8 },
+      },
+    ],
+  },
+  {
+    id: "tool-site-blog-read",
+    category: "tool_selection",
+    turns: ["Read my blog post titled Agent Context using the appropriate tool."],
+    checkText: nonEmpty,
+    expectedCalls: [
+      {
+        name: "core_sites_blog_post_read",
+        arguments: { post: "Agent Context" },
       },
     ],
   },
@@ -871,6 +895,29 @@ function executeSyntheticTool(
           title: "Synthetic planning session",
           startsAt: "2026-07-16T09:00:00.000Z",
           endsAt: "2026-07-16T10:00:00.000Z",
+        },
+      ],
+      hasMore: false,
+    },
+    core_bookings_lookup: {
+      ok: true,
+      bookings: [
+        {
+          guestName: "Synthetic guest",
+          startsAt: "2026-07-16T11:00:00.000Z",
+          durationMinutes: 30,
+        },
+      ],
+    },
+    core_sites_blog_post_read: {
+      ok: true,
+      mode: "post",
+      site: { username: "synthetic-owner" },
+      posts: [
+        {
+          title: "Agent Context",
+          slug: "agent-context",
+          bodyMarkdown: "Synthetic post body.",
         },
       ],
       hasMore: false,
