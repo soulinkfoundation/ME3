@@ -136,6 +136,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-07-25-social-publication-formats-v1",
     apply: applySocialPublicationFormatsMigration,
   },
+  {
+    id: "0032_social_version_publishing_settings",
+    checksum: "2026-07-29-social-version-publishing-settings-v1",
+    apply: applySocialVersionPublishingSettingsMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -2039,6 +2044,17 @@ async function applySocialPublicationFormatsMigration(db: D1Database): Promise<v
   } else {
     for (const statement of statements) await statement.run();
   }
+}
+
+async function applySocialVersionPublishingSettingsMigration(
+  db: D1Database,
+): Promise<void> {
+  await addColumnIfMissing(
+    db,
+    "social_variants",
+    "publishing_settings_json",
+    "TEXT NOT NULL DEFAULT '{}'",
+  );
 }
 
 async function tableExists(db: D1Database, tableName: string): Promise<boolean> {

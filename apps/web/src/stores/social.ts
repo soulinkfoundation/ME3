@@ -69,6 +69,21 @@ export type TikTokCreatorInfo = {
   maxVideoPostDurationSeconds: number;
 };
 
+export type TikTokPublishingSettings =
+  | { deliveryMode: "provider_draft" }
+  | {
+    deliveryMode: "direct_publish";
+    privacyLevel: TikTokPrivacyLevel;
+    allowComment: boolean;
+    allowDuet: boolean;
+    allowStitch: boolean;
+    brandContent: boolean;
+    brandOrganic: boolean;
+    isAiGenerated: boolean;
+    consent: true;
+    videoDurationSeconds: number;
+  };
+
 export type DriveFolder = {
   id: string;
   parentId: string | null;
@@ -147,6 +162,9 @@ export type PostVersion = {
   title?: string | null;
   bodyText: string;
   assetManifest: SocialMediaAsset[];
+  publishingSettings?: {
+    tiktok?: TikTokPublishingSettings;
+  };
   sourceExcerpt: string | null;
   approvalStatus: "draft" | "approved" | "rejected";
   approvedAt: string | null;
@@ -401,6 +419,7 @@ export type PostVersionUpdate = {
   title?: string | null;
   bodyText?: string;
   assetManifest?: SocialMediaAsset[];
+  publishingSettings?: PostVersion["publishingSettings"];
   approvalStatus?: PostVersion["approvalStatus"];
 };
 

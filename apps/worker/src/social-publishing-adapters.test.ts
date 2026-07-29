@@ -1149,6 +1149,65 @@ describe("TikTok draft upload adapter", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the TikTok account connected when an unaudited app must use Only me", async () => {
+    const markProviderWriteStarted = vi.fn(async () => undefined);
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v2/post/publish/creator_info/query/")) {
+        return Response.json({
+          data: {
+            creator_username: "owner",
+            creator_nickname: "Owner TikTok",
+            privacy_level_options: ["PUBLIC_TO_EVERYONE", "SELF_ONLY"],
+            comment_disabled: false,
+            duet_disabled: false,
+            stitch_disabled: false,
+            max_video_post_duration_sec: 60,
+          },
+          error: { code: "ok" },
+        });
+      }
+      if (url.endsWith("/v2/post/publish/video/init/")) {
+        return Response.json({
+          data: {},
+          error: {
+            code: "unaudited_client_can_only_post_to_private_accounts",
+            message: "Please review our integration guidelines.",
+          },
+        }, { status: 403 });
+      }
+      throw new Error(`Unexpected TikTok request: ${url}`);
+    });
+
+    await expect(adapterFor("tiktok").publish({
+      accessToken: "unaudited-token",
+      accountId: "creator-open-id",
+      bodyText: "Direct caption",
+      assets: [{
+        url: "https://media.example/direct.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: 4,
+      }],
+      providerOptions: {
+        deliveryMode: "direct_publish",
+        privacyLevel: "PUBLIC_TO_EVERYONE",
+        consent: true,
+        videoDurationSeconds: 12,
+      },
+      fetcher: fetcher as typeof fetch,
+      markProviderWriteStarted,
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: "unaudited_client_can_only_post_to_private_accounts",
+      errorMessage:
+        "Until app review is approved, set this TikTok account to private and choose Only me visibility.",
+      failureClass: "rejected",
+    });
+    expect(markProviderWriteStarted).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("resumes a pending upload by polling its existing publish id", async () => {
     const markProviderWriteStarted = vi.fn(async () => undefined);
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

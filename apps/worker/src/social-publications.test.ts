@@ -665,7 +665,11 @@ describe("reusable social Publications", () => {
     );
     fixture.env.SITE_ASSETS = {};
 
-    const publication = await createPublication(fixture, "version-tiktok");
+    const publication = await createPublication(fixture, "version-tiktok", {
+      requestContext: {
+        tiktok: { deliveryMode: "provider_draft" },
+      },
+    });
     fixture.db.run(
       `UPDATE social_publications
        SET error_code = 'retryable:tiktok_processing_pending',
@@ -711,6 +715,169 @@ describe("reusable social Publications", () => {
       status: "published",
       platform_post_id: "pending-tiktok-draft",
     });
+  });
+
+  it("uses the saved YouTube Version title when the queued upload runs", async () => {
+    fixture.db.run(
+      `INSERT INTO social_accounts (
+         id, user_id, site_id, platform, platform_account_id, display_name, status,
+         scopes_json, metadata_json, access_token_ciphertext, created_at, updated_at
+       ) VALUES (?, 'owner', 'site-1', 'youtube', 'channel-1', 'YouTube channel', 'active',
+                 '["youtube.upload"]', '{}', ?, datetime('now'), datetime('now'))`,
+      "account-youtube",
+      await encryptTestSecret("youtube-access-token", TEST_TOKEN_ENCRYPTION_KEY),
+    );
+    seedApprovedVersion(fixture.db, {
+      postId: "post-youtube",
+      versionId: "version-youtube",
+      bodyText: "A concise YouTube description.",
+      platform: "youtube",
+      accountId: "account-youtube",
+    });
+    fixture.db.run(
+      `UPDATE social_variants
+       SET format = 'short_video',
+           title = 'Saved YouTube title',
+           asset_manifest_json = ?
+       WHERE id = 'version-youtube'`,
+      JSON.stringify([{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: 4,
+      }]),
+    );
+
+    const publication = { id: "publication-youtube" };
+    fixture.db.run(
+      `INSERT INTO social_publications (
+         id, variant_id, site_id, platform, status, target_account_id_snapshot,
+         format_snapshot, body_text_snapshot, asset_manifest_json_snapshot,
+         approval_status_snapshot, approved_at_snapshot, approved_by_user_id_snapshot,
+         requested_by_type, requested_by_user_id, request_context_json, queued_at,
+         created_at, updated_at
+       ) VALUES (
+         ?, 'version-youtube', 'site-1', 'youtube', 'queued', 'account-youtube',
+         'short_video', 'A concise YouTube description.', ?, 'approved',
+         '2026-07-18T09:00:00.000Z', 'owner', 'owner', 'owner', '{}',
+         datetime('now'), datetime('now'), datetime('now')
+       )`,
+      publication.id,
+      JSON.stringify([{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: 4,
+      }]),
+    );
+    const uploadUrl = "https://www.googleapis.com/upload/youtube/v3/videos?upload_id=title";
+    const videoBytes = new Uint8Array([1, 2, 3, 4]);
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("uploadType=resumable")) {
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          snippet: {
+            title: "Saved YouTube title",
+            description: "A concise YouTube description.",
+          },
+          status: { privacyStatus: "private" },
+        });
+        return new Response(null, {
+          status: 200,
+          headers: { Location: uploadUrl },
+        });
+      }
+      if (url === "https://media.example/short.mp4") {
+        expect(new Headers(init?.headers).get("Range")).toBe("bytes=0-3");
+        return new Response(videoBytes, { status: 206 });
+      }
+      if (url === uploadUrl) {
+        return Response.json({ id: "youtube-video-title" }, { status: 201 });
+      }
+      if (url.startsWith("https://www.googleapis.com/youtube/v3/videos?part=status")) {
+        return Response.json({
+          items: [{
+            id: "youtube-video-title",
+            status: { uploadStatus: "uploaded", privacyStatus: "private" },
+          }],
+        });
+      }
+      throw new Error(`Unexpected YouTube request: ${url}`);
+    });
+
+    await publishQueuedPublication(
+      fixture.env as never,
+      publication.id,
+      fetcher as unknown as typeof fetch,
+    );
+
+    expect(fixture.db.first<{ status: string; platform_post_id: string }>(
+      "SELECT status, platform_post_id FROM social_publications WHERE id = ?",
+      publication.id,
+    )).toEqual({
+      status: "published",
+      platform_post_id: "youtube-video-title",
+    });
+  });
+
+  it("queues TikTok with its saved Version review and consumes that review", async () => {
+    fixture.db.run(
+      `INSERT INTO social_accounts (
+         id, user_id, site_id, platform, platform_account_id, display_name, status,
+         scopes_json, metadata_json, access_token_ciphertext, created_at, updated_at
+       ) VALUES (?, 'owner', 'site-1', 'tiktok', 'tiktok-owner', 'TikTok account', 'active',
+                 '["video.publish"]', '{}', ?, datetime('now'), datetime('now'))`,
+      "account-tiktok-reviewed",
+      await encryptTestSecret("tiktok-access-token", TEST_TOKEN_ENCRYPTION_KEY),
+    );
+    seedApprovedVersion(fixture.db, {
+      postId: "post-tiktok-reviewed",
+      versionId: "version-tiktok-reviewed",
+      bodyText: "The reviewed caption #ME3",
+      platform: "tiktok",
+      accountId: "account-tiktok-reviewed",
+    });
+    const settings = {
+      deliveryMode: "direct_publish",
+      privacyLevel: "SELF_ONLY",
+      allowComment: false,
+      allowDuet: false,
+      allowStitch: false,
+      brandContent: false,
+      brandOrganic: false,
+      isAiGenerated: false,
+      consent: true,
+      videoDurationSeconds: 12,
+    };
+    fixture.db.run(
+      `UPDATE social_variants
+       SET format = 'short_video',
+           asset_manifest_json = ?,
+           publishing_settings_json = ?
+       WHERE id = 'version-tiktok-reviewed'`,
+      JSON.stringify([{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: 4,
+      }]),
+      JSON.stringify({ tiktok: settings }),
+    );
+    fixture.env.SITE_ASSETS = {};
+
+    const publication = await createPublication(
+      fixture,
+      "version-tiktok-reviewed",
+    );
+
+    expect(JSON.parse(fixture.db.first<{ request_context_json: string }>(
+      "SELECT request_context_json FROM social_publications WHERE id = ?",
+      publication.id,
+    )!.request_context_json)).toMatchObject({ tiktok: settings });
+    expect(fixture.db.first<{ publishing_settings_json: string }>(
+      "SELECT publishing_settings_json FROM social_variants WHERE id = ?",
+      "version-tiktok-reviewed",
+    )).toEqual({ publishing_settings_json: "{}" });
   });
 
   it("preserves the Worker global fetch context for provider requests", async () => {
@@ -2268,7 +2435,7 @@ function seedApprovedVersion(
     postId: string;
     versionId: string;
     bodyText: string;
-    platform?: "linkedin" | "x" | "tiktok";
+    platform?: "linkedin" | "x" | "tiktok" | "youtube";
     approvalStatus?: "approved" | "draft";
     siteId?: string;
     accountId?: string;
@@ -2526,6 +2693,7 @@ const schemaSql = `
     title TEXT,
     body_text TEXT NOT NULL,
     asset_manifest_json TEXT NOT NULL DEFAULT '[]',
+    publishing_settings_json TEXT NOT NULL DEFAULT '{}',
     carousel_render_set_id TEXT,
     source_excerpt TEXT,
     approval_status TEXT NOT NULL,

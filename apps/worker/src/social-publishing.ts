@@ -83,6 +83,7 @@ export {
   type ChooseSocialSuggestionInput,
   type DiscardSocialSuggestionInput,
   type PostVersion,
+  type PostVersionPublishingSettings,
   type PostLibraryItem,
   type PostLibrarySearchInput,
   type Publication,

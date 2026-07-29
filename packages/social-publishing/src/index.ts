@@ -1,5 +1,6 @@
 import {
   adapterFor,
+  normalizeTikTokDeliveryOptions,
   queryTikTokCreatorInfo,
   type TikTokCreatorInfo,
 } from "./adapters";
@@ -23,6 +24,7 @@ import {
 
 export {
   adapterFor,
+  normalizeTikTokDeliveryOptions,
   type SocialPublishAdapter,
   type SocialPublishAdapterResult,
   type SocialPublishFailureClass,
@@ -46,6 +48,7 @@ export {
   type CreatePostVersionInput,
   type CreateSocialPostInput,
   type PostVersion,
+  type PostVersionPublishingSettings,
   type SocialPost,
   type SocialPostApprovalStatus,
   type SocialPostDetail,
@@ -645,6 +648,7 @@ type PostVersionPublicationCandidate = {
   body_text: string;
   post_title: string;
   asset_manifest_json: string;
+  publishing_settings_json: string;
   approval_status: string;
   approved_at: string | null;
   approved_by_user_id: string | null;
@@ -2175,7 +2179,8 @@ async function getOwnedPostVersionPublicationCandidate(
   return env.DB.prepare(
     `SELECT v.id, v.platform, v.target_account_id, v.format, v.body_text,
             COALESCE(NULLIF(TRIM(v.title), ''), p.post_title_snapshot) AS post_title,
-            v.asset_manifest_json, v.approval_status, v.approved_at,
+            v.asset_manifest_json, v.publishing_settings_json,
+            v.approval_status, v.approved_at,
             v.approved_by_user_id, p.site_id, p.source_type AS post_source_type
      FROM social_variants v
      JOIN social_packages p ON p.id = v.package_id
@@ -2352,7 +2357,7 @@ export async function createPostVersionPublication(
   }
 
   const requestedByType = input.requestedByType === "agent" ? "agent" : "owner";
-  const requestContextJson = publicationRequestContextJson(input.requestContext);
+  const requestContextJson = publicationRequestContextForVersion(version, input.requestContext);
   const publicationId = internal.publicationId || randomToken("socpub");
   const now = new Date().toISOString();
   const managedXReservation = await reserveManagedXUsageForVersion(
@@ -2543,7 +2548,7 @@ export async function createPostVersionPublication(
     }
   } else {
     try {
-      await env.DB.prepare(
+      const insertPublication = env.DB.prepare(
         `INSERT INTO social_publications (
            id, variant_id, site_id, platform, status, scheduled_for, timezone,
            target_account_id_snapshot, format_snapshot, body_text_snapshot,
@@ -2573,8 +2578,18 @@ export async function createPostVersionPublication(
           null,
           now,
           now,
-        )
-        .run();
+        );
+      const statements = [insertPublication];
+      if (version.platform === "tiktok") {
+        statements.push(
+          env.DB.prepare(
+            `UPDATE social_variants
+             SET publishing_settings_json = '{}', updated_at = ?
+             WHERE id = ?`,
+          ).bind(now, version.id),
+        );
+      }
+      await env.DB.batch(statements);
     } catch (error) {
       if (managedXReservation.managed) {
         await settleManagedXUsage(env, publicationId, "release", fetcher).catch(
@@ -3657,7 +3672,11 @@ export async function publishQueuedPublication(
     normalizeMediaManifest(parseJsonArray(row.media_manifest_json)),
   );
   const adapter = adapterFor(row.platform);
-  const validation = adapter.validateDraft({ bodyText: row.body, assets: manifestAssets });
+  const validation = adapter.validateDraft({
+    title: row.title,
+    bodyText: row.body,
+    assets: manifestAssets,
+  });
   if (!validation.ok) {
     const failureClass = validation.error.includes("currently supports")
       ? "unsupported"
@@ -4444,7 +4463,7 @@ async function getQueuedPublicationRow(
             pub.error_code AS pub_error_code,
             pub.provider_response_json AS pub_provider_response_json,
             pub.request_context_json AS pub_request_context_json,
-            p.post_title_snapshot AS title,
+            COALESCE(NULLIF(TRIM(v.title), ''), p.post_title_snapshot) AS title,
             pub.body_text_snapshot AS body,
             COALESCE(pub.asset_manifest_json_snapshot, '[]') AS media_manifest_json,
             '[]' AS platforms_json,
@@ -5561,6 +5580,51 @@ function publicationRequestContextJson(value: unknown): string {
     throw new SocialPublishingInputError("Publication request context is too large");
   }
   return json;
+}
+
+function publicationRequestContextForVersion(
+  version: PostVersionPublicationCandidate,
+  input: unknown,
+): string {
+  const requestContext = isRecord(input) ? { ...input } : {};
+  if (version.platform === "tiktok") {
+    const savedSettings = parseJsonObject(version.publishing_settings_json);
+    const savedTikTok = isRecord(savedSettings.tiktok) ? savedSettings.tiktok : null;
+    const requestedTikTok = isRecord(requestContext.tiktok) ? requestContext.tiktok : null;
+    const rawTikTok = requestedTikTok || savedTikTok;
+    if (!rawTikTok) {
+      throw new SocialPublishingInputError(
+        "Review TikTok delivery settings before publishing this Post",
+        409,
+      );
+    }
+    const tiktok = normalizeTikTokDeliveryOptions(rawTikTok);
+    if (tiktok.deliveryMode === "direct_publish") {
+      if (!tiktok.privacyLevel) {
+        throw new SocialPublishingInputError(
+          "Choose who can view this TikTok before publishing",
+          409,
+        );
+      }
+      if (!tiktok.consent) {
+        throw new SocialPublishingInputError(
+          "Confirm TikTok's music usage terms before publishing",
+          409,
+        );
+      }
+      if (
+        !Number.isFinite(tiktok.videoDurationSeconds) ||
+        tiktok.videoDurationSeconds <= 0
+      ) {
+        throw new SocialPublishingInputError(
+          "ME3 needs the TikTok video duration before publishing",
+          409,
+        );
+      }
+    }
+    requestContext.tiktok = tiktok;
+  }
+  return publicationRequestContextJson(requestContext);
 }
 
 function isStalePublishingTimestamp(value: string | null | undefined): boolean {

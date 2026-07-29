@@ -31,6 +31,7 @@ import {
   type SocialPlatformContentRule,
   type SocialPostDetail,
   type TikTokCreatorInfo,
+  type TikTokPublishingSettings,
   type TikTokPrivacyLevel,
 } from "../stores/social";
 
@@ -123,7 +124,10 @@ const scheduleTimezone = computed(
 );
 const scheduleError = ref("");
 const scheduling = ref(false);
-const tiktokDeliveryMode = ref<TikTokDeliveryMode>("provider_draft");
+const showTikTokSettings = ref(false);
+const tiktokSettingsSaving = ref(false);
+const tiktokSettingsVersionId = ref<string | null>(null);
+const tiktokDeliveryMode = ref<TikTokDeliveryMode>("direct_publish");
 const tiktokCreatorInfo = ref<TikTokCreatorInfo | null>(null);
 const tiktokCreatorInfoLoading = ref(false);
 const tiktokCreatorInfoError = ref("");
@@ -317,10 +321,48 @@ const actionableValidations = computed(() => {
 });
 
 const publicationTikTokVersion = computed(
-  () => actionableValidations.value.find(
-    (validation) => validation.version.platform === "tiktok",
-  )?.version || null,
+  () => selectedVisibleVersions.value.find(
+    (version) => version.platform === "tiktok",
+  ) || null,
 );
+
+const publicationIsYouTubeOnly = computed(
+  () => actionableValidations.value.length === 1 &&
+    actionableValidations.value[0]?.version.platform === "youtube",
+);
+
+const tiktokSettingsVersion = computed(
+  () => tiktokSettingsVersionId.value
+    ? versionById(tiktokSettingsVersionId.value)
+    : publicationTikTokVersion.value,
+);
+
+function savedTikTokSettings(
+  version: PostVersion | null | undefined,
+): TikTokPublishingSettings | null {
+  return version?.publishingSettings?.tiktok || null;
+}
+
+function hasSavedTikTokSettings(version: PostVersion | null | undefined): boolean {
+  const settings = savedTikTokSettings(version);
+  return settings?.deliveryMode === "provider_draft" ||
+    (
+      settings?.deliveryMode === "direct_publish" &&
+      Boolean(settings.privacyLevel) &&
+      settings.consent === true &&
+      Number.isFinite(settings.videoDurationSeconds) &&
+      settings.videoDurationSeconds > 0
+    );
+}
+
+function tikTokSettingsSummary(version: PostVersion | null | undefined): string {
+  const settings = savedTikTokSettings(version);
+  if (settings?.deliveryMode === "provider_draft") return "Send as creator draft";
+  if (settings?.deliveryMode === "direct_publish") {
+    return `Direct Post · ${tiktokPrivacyLabel(settings.privacyLevel)}`;
+  }
+  return "Direct Post review required";
+}
 
 const tiktokDirectPostSupported = computed(() =>
   capabilityFor("tiktok")?.supportedDeliveryModes?.includes("direct_publish") === true,
@@ -381,8 +423,7 @@ const canSubmitPublishNow = computed(() => Boolean(
   canPublishNow.value &&
   (
     !publicationTikTokVersion.value ||
-    tiktokDeliveryMode.value === "provider_draft" ||
-    tiktokDirectPostReady.value
+    hasSavedTikTokSettings(publicationTikTokVersion.value)
   ),
 ));
 
@@ -649,7 +690,13 @@ function validateVersion(
   }
 
   if (!issue && !accountValid) {
-    issue = `Reconnect the ${platformLabel(version.platform)} account.`;
+    issue =
+      version.platform === "tiktok" &&
+      version.errorCode?.includes(
+        "unaudited_client_can_only_post_to_private_accounts",
+      )
+        ? "Set the TikTok account to private and choose Only me until app review is approved."
+        : `Reconnect the ${platformLabel(version.platform)} account.`;
   }
   return {
     capability,
@@ -695,6 +742,10 @@ function destinationLocked(account: SocialAccountRow): boolean {
 
 function isVideoAsset(asset: PostVersion["assetManifest"][number]): boolean {
   return asset.kind === "video" || asset.mimeType?.startsWith("video/") === true;
+}
+
+function isShortVideoVersion(version: PostVersion): boolean {
+  return version.format === "short_video" || version.assetManifest.some(isVideoAsset);
 }
 
 function previewLinkUrl(bodyText: string): string | null {
@@ -787,6 +838,14 @@ function versionDeliveryError(version: PostVersion): string {
     version.failureClass !== "outcome_unknown"
   ) {
     return "";
+  }
+  if (
+    version.platform === "tiktok" &&
+    version.errorCode?.includes(
+      "unaudited_client_can_only_post_to_private_accounts",
+    )
+  ) {
+    return "Until app review is approved, set this TikTok account to private and choose Only me visibility.";
   }
   return version.errorMessage ||
     (version.publicationStatus === "cancelled"
@@ -1918,6 +1977,7 @@ function resetTikTokDirectPostOptions() {
   tiktokBrandContent.value = false;
   tiktokIsAiGenerated.value = false;
   tiktokConsent.value = false;
+  tiktokVideoDurationSeconds.value = null;
 }
 
 function captureTikTokVideoMetadata(event: Event) {
@@ -1929,7 +1989,7 @@ function captureTikTokVideoMetadata(event: Event) {
 
 async function probeTikTokVideoDuration(): Promise<number | null> {
   if (tiktokVideoDurationSeconds.value) return tiktokVideoDurationSeconds.value;
-  const asset = publicationTikTokVersion.value?.assetManifest.find(isVideoAsset);
+  const asset = tiktokSettingsVersion.value?.assetManifest.find(isVideoAsset);
   if (!asset?.url || typeof document === "undefined") return null;
   return new Promise((resolve) => {
     const video = document.createElement("video");
@@ -1954,7 +2014,7 @@ async function probeTikTokVideoDuration(): Promise<number | null> {
 }
 
 async function loadTikTokCreatorInfo() {
-  const version = publicationTikTokVersion.value;
+  const version = tiktokSettingsVersion.value;
   const accountId = version?.targetAccountId;
   if (!version || !accountId) {
     tiktokCreatorInfoError.value =
@@ -1965,8 +2025,6 @@ async function loadTikTokCreatorInfo() {
   tiktokCreatorInfoLoading.value = true;
   tiktokCreatorInfoError.value = "";
   tiktokCreatorInfo.value = null;
-  tiktokPrivacyLevel.value = "";
-  tiktokConsent.value = false;
   try {
     const [creatorInfo, duration] = await Promise.all([
       social.getTikTokCreatorInfo(accountId),
@@ -1975,6 +2033,16 @@ async function loadTikTokCreatorInfo() {
     if (sequence !== tiktokCreatorInfoSequence) return;
     tiktokCreatorInfo.value = creatorInfo;
     tiktokVideoDurationSeconds.value = duration;
+    if (
+      tiktokPrivacyLevel.value &&
+      !creatorInfo.privacyLevelOptions.includes(tiktokPrivacyLevel.value)
+    ) {
+      tiktokPrivacyLevel.value = "";
+    }
+    if (creatorInfo.commentDisabled) tiktokAllowComment.value = false;
+    if (creatorInfo.duetDisabled) tiktokAllowDuet.value = false;
+    if (creatorInfo.stitchDisabled) tiktokAllowStitch.value = false;
+    accounts.value = await social.fetchSocialAccounts().catch(() => accounts.value);
   } catch (value) {
     if (sequence !== tiktokCreatorInfoSequence) return;
     social.setErrorFromApi(value, "TikTok Direct Post settings could not be loaded.");
@@ -1984,6 +2052,99 @@ async function loadTikTokCreatorInfo() {
     if (sequence === tiktokCreatorInfoSequence) {
       tiktokCreatorInfoLoading.value = false;
     }
+  }
+}
+
+function handleTikTokDeliveryModeChange() {
+  if (tiktokDeliveryMode.value === "direct_publish") {
+    void loadTikTokCreatorInfo();
+  } else {
+    resetTikTokDirectPostOptions();
+  }
+}
+
+async function openTikTokSettings(version = publicationTikTokVersion.value) {
+  if (!version || version.platform !== "tiktok") return;
+  await flushPendingEditorSave();
+  const current = versionById(version.id) || version;
+  const previewDuration =
+    selectedVersion.value?.id === current.id
+      ? tiktokVideoDurationSeconds.value
+      : null;
+  tiktokSettingsVersionId.value = current.id;
+  resetTikTokDirectPostOptions();
+  const saved = savedTikTokSettings(current);
+  tiktokDeliveryMode.value = saved?.deliveryMode || "direct_publish";
+  if (saved?.deliveryMode === "direct_publish") {
+    tiktokPrivacyLevel.value = saved.privacyLevel;
+    tiktokAllowComment.value = saved.allowComment;
+    tiktokAllowDuet.value = saved.allowDuet;
+    tiktokAllowStitch.value = saved.allowStitch;
+    tiktokBrandContent.value = saved.brandContent;
+    tiktokBrandOrganic.value = saved.brandOrganic;
+    tiktokCommercialContent.value = saved.brandContent || saved.brandOrganic;
+    tiktokIsAiGenerated.value = saved.isAiGenerated;
+    tiktokConsent.value = saved.consent;
+    tiktokVideoDurationSeconds.value = saved.videoDurationSeconds;
+  } else if (previewDuration) {
+    tiktokVideoDurationSeconds.value = previewDuration;
+  }
+  showTikTokSettings.value = true;
+  if (tiktokDeliveryMode.value === "direct_publish") {
+    await loadTikTokCreatorInfo();
+  }
+}
+
+function closeTikTokSettings() {
+  showTikTokSettings.value = false;
+  tiktokSettingsVersionId.value = null;
+  resetTikTokDirectPostOptions();
+}
+
+async function saveTikTokSettings() {
+  const version = tiktokSettingsVersion.value;
+  if (
+    !version ||
+    tiktokSettingsSaving.value ||
+    (
+      tiktokDeliveryMode.value === "direct_publish" &&
+      !tiktokDirectPostReady.value
+    )
+  ) return;
+
+  const settings: TikTokPublishingSettings =
+    tiktokDeliveryMode.value === "provider_draft"
+      ? { deliveryMode: "provider_draft" }
+      : {
+        deliveryMode: "direct_publish",
+        privacyLevel: tiktokPrivacyLevel.value as TikTokPrivacyLevel,
+        allowComment: tiktokAllowComment.value,
+        allowDuet: tiktokAllowDuet.value,
+        allowStitch: tiktokAllowStitch.value,
+        brandContent: tiktokCommercialContent.value && tiktokBrandContent.value,
+        brandOrganic: tiktokCommercialContent.value && tiktokBrandOrganic.value,
+        isAiGenerated: tiktokIsAiGenerated.value,
+        consent: true,
+        videoDurationSeconds: tiktokVideoDurationSeconds.value as number,
+      };
+
+  tiktokSettingsSaving.value = true;
+  try {
+    replaceVersion(await social.updatePostVersion(version.id, {
+      publishingSettings: { tiktok: settings },
+    }));
+    toastSuccess(
+      settings.deliveryMode === "direct_publish"
+        ? "TikTok Direct Post settings saved for this Post."
+        : "TikTok will receive this Post as a creator draft.",
+    );
+    closeTikTokSettings();
+  } catch (value) {
+    social.setErrorFromApi(value, "TikTok settings could not be saved.");
+    tiktokCreatorInfoError.value =
+      social.error || "TikTok settings could not be saved.";
+  } finally {
+    tiktokSettingsSaving.value = false;
   }
 }
 
@@ -2005,11 +2166,16 @@ async function copyTikTokCaption() {
 }
 
 async function openSchedule() {
-  if (!canOpenSchedule.value) return;
   await flushPendingEditorSave();
+  const tiktokVersion = publicationTikTokVersion.value;
+  if (tiktokVersion && !hasSavedTikTokSettings(tiktokVersion)) {
+    if (!sharedEditor.value && selectedVersionId.value !== tiktokVersion.id) {
+      selectVersion(tiktokVersion);
+    }
+    await openTikTokSettings(tiktokVersion);
+    return;
+  }
   if (!canOpenSchedule.value) return;
-  tiktokDeliveryMode.value = "provider_draft";
-  resetTikTokDirectPostOptions();
   const start = new Date(Date.now() + 60 * 60 * 1000);
   scheduleDate.value = start.toISOString().slice(0, 10);
   scheduleTime.value = start.toTimeString().slice(0, 5);
@@ -2100,22 +2266,6 @@ async function publishNow() {
   const preparation = capturePublicationPreparation();
   if (!preparation) return;
   const snapshot = captureWorkspaceSnapshot();
-  const tiktokOptions = publicationTikTokVersion.value
-    ? tiktokDeliveryMode.value === "direct_publish"
-      ? {
-        deliveryMode: "direct_publish" as const,
-        privacyLevel: tiktokPrivacyLevel.value,
-        allowComment: tiktokAllowComment.value,
-        allowDuet: tiktokAllowDuet.value,
-        allowStitch: tiktokAllowStitch.value,
-        brandContent: tiktokCommercialContent.value && tiktokBrandContent.value,
-        brandOrganic: tiktokCommercialContent.value && tiktokBrandOrganic.value,
-        isAiGenerated: tiktokIsAiGenerated.value,
-        consent: tiktokConsent.value,
-        videoDurationSeconds: tiktokVideoDurationSeconds.value,
-      }
-      : { deliveryMode: "provider_draft" as const }
-    : null;
 
   scheduling.value = true;
   error.value = "";
@@ -2129,7 +2279,10 @@ async function publishNow() {
   try {
     const versions = await persistPublicationPreparation(preparation);
     const results = await Promise.allSettled(versions.map(async (version) => {
-      const tiktok = version.platform === "tiktok" ? tiktokOptions : null;
+      const tiktok =
+        version.platform === "tiktok"
+          ? savedTikTokSettings(version)
+          : null;
       const publication = await social.publishPostVersion(version.id, tiktok
         ? {
           requestContext: {
@@ -2186,7 +2339,11 @@ async function publishNow() {
     }
     const includesTikTok = versions.some((version) => version.platform === "tiktok");
     const includesTikTokDirectPost =
-      includesTikTok && tiktokDeliveryMode.value === "direct_publish";
+      versions.some(
+        (version) =>
+          version.platform === "tiktok" &&
+          savedTikTokSettings(version)?.deliveryMode === "direct_publish",
+      );
     const inProgress = publications.filter(
       (publication) =>
         publication.status === "queued" ||
@@ -2235,14 +2392,6 @@ watch(destinationContentType, () => {
     const option = destinationAccounts.value.find((item) => item.account.id === accountId);
     return Boolean(option && (option.compatible || destinationLocked(option.account)));
   });
-});
-
-watch(tiktokDeliveryMode, (mode) => {
-  if (mode === "direct_publish") {
-    void loadTikTokCreatorInfo();
-  } else {
-    resetTikTokDirectPostOptions();
-  }
 });
 
 watch(tiktokPrivacyLevel, (privacyLevel) => {
@@ -2509,6 +2658,17 @@ function currentQueryParam(name: string): string | null {
                 </span>
               </span>
               <span class="sr-only">{{ accountLabel(version) }}</span>
+              <span
+                v-if="version.platform === 'tiktok' && !hasSavedTikTokSettings(version)"
+                class="version-tab__setup-dot"
+                aria-hidden="true"
+              />
+              <span
+                v-if="version.platform === 'tiktok' && !hasSavedTikTokSettings(version)"
+                class="sr-only"
+              >
+                TikTok publishing review required
+              </span>
             </button>
             <button
               v-if="!selectedPostReadOnly && activeMode === 'drafts'"
@@ -2611,12 +2771,71 @@ function currentQueryParam(name: string): string | null {
                 </div>
               </div>
 
+              <section
+                v-if="
+                  !selectedPostReadOnly &&
+                  !selectedPostOptimistic &&
+                  publicationTikTokVersion &&
+                  (sharedEditor || selectedVersion?.platform === 'tiktok')
+                "
+                :class="[
+                  'tiktok-publish-readiness',
+                  {
+                    'tiktok-publish-readiness--ready':
+                      hasSavedTikTokSettings(publicationTikTokVersion),
+                  },
+                ]"
+                aria-label="TikTok publishing settings"
+              >
+                <UiIcon
+                  :name="
+                      hasSavedTikTokSettings(publicationTikTokVersion)
+                      ? 'CircleCheck'
+                      : 'Info'
+                  "
+                  :size="20"
+                  aria-hidden="true"
+                />
+                <span>
+                  <strong>
+                    {{
+                      hasSavedTikTokSettings(publicationTikTokVersion)
+                        ? 'TikTok ready'
+                        : 'Review TikTok before publishing'
+                    }}
+                  </strong>
+                  <small>{{ tikTokSettingsSummary(publicationTikTokVersion) }}</small>
+                </span>
+                <Button
+                  :color="
+                    hasSavedTikTokSettings(publicationTikTokVersion)
+                      ? 'ghost'
+                      : 'primary'
+                  "
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="saving || scheduling"
+                  @click="openTikTokSettings(publicationTikTokVersion)"
+                >
+                  {{
+                    hasSavedTikTokSettings(publicationTikTokVersion)
+                      ? 'Edit'
+                      : 'Review settings'
+                  }}
+                </Button>
+              </section>
+
               <div v-if="!selectedPostReadOnly && !selectedPostOptimistic" class="editor-actions">
                 <Button color="neutral" shape="soft" size="compact" type="button" :disabled="saving || scheduling || !canOpenSchedule" @click="openSchedule">
                   <template #icon>
-                    <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
+                    <UiIcon
+                      :name="publicationIsYouTubeOnly ? 'Send' : 'CalendarClock'"
+                      :size="16"
+                      aria-hidden="true"
+                    />
                   </template>
-                  Schedule
+                  {{ publicationIsYouTubeOnly ? 'Upload' : 'Schedule' }}
                 </Button>
                 <Button
                   v-if="publishingCheckIssueCount"
@@ -2650,7 +2869,21 @@ function currentQueryParam(name: string): string | null {
               </div>
             </div>
 
-            <aside v-if="!sharedEditor" :class="['post-preview', `post-preview--${selectedVersion.platform}`]" aria-label="Post preview">
+            <aside
+              v-if="!sharedEditor"
+              :class="[
+                'post-preview',
+                `post-preview--${selectedVersion.platform}`,
+                {
+                  'post-preview--youtube-short': selectedVersion.platform === 'youtube',
+                  'post-preview--instagram-reel':
+                    (selectedVersion.platform === 'instagram' ||
+                      selectedVersion.platform === 'instagram_business') &&
+                    isShortVideoVersion(selectedVersion),
+                },
+              ]"
+              aria-label="Post preview"
+            >
               <template v-if="selectedVersion.platform === 'tiktok'">
                 <div class="tiktok-preview__platform-bar">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="platformIconPath(selectedVersion.platform)" /></svg>
@@ -2728,6 +2961,144 @@ function currentQueryParam(name: string): string | null {
                   <span>First-time boost? More followers await!</span>
                   <UiIcon name="ChevronRight" :size="17" />
                 </div>
+              </template>
+              <template v-else-if="selectedVersion.platform === 'youtube'">
+                <div class="short-video-preview__platform-bar">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="platformIconPath(selectedVersion.platform)" /></svg>
+                  <span>YouTube Short</span>
+                </div>
+                <div class="short-video-preview__stage youtube-short-preview__stage">
+                  <template v-if="selectedVersion.assetManifest[0]">
+                    <video
+                      v-if="isVideoAsset(selectedVersion.assetManifest[0])"
+                      :src="selectedVersion.assetManifest[0].url"
+                      controls
+                      muted
+                      playsinline
+                      preload="metadata"
+                      class="short-video-preview__media"
+                      :aria-label="selectedVersion.assetManifest[0].altText || selectedVersion.assetManifest[0].filename || 'YouTube Short video preview'"
+                    />
+                    <img
+                      v-else
+                      :src="selectedVersion.assetManifest[0].url"
+                      :alt="selectedVersion.assetManifest[0].altText || selectedVersion.assetManifest[0].filename || 'YouTube Short preview'"
+                      class="short-video-preview__media"
+                    />
+                  </template>
+                  <div v-else class="short-video-preview__empty">
+                    <UiIcon name="Play" :size="28" aria-hidden="true" />
+                    <span>Add a video to preview your Short</span>
+                  </div>
+
+                  <div class="youtube-short-preview__controls" aria-hidden="true">
+                    <span class="youtube-short-preview__control-group">
+                      <UiIcon name="Pause" :size="21" />
+                      <span class="youtube-short-preview__speaker" />
+                    </span>
+                    <span class="youtube-short-preview__control-group">
+                      <span class="youtube-short-preview__cc">CC</span>
+                      <UiIcon name="Ellipsis" :size="21" />
+                      <span class="youtube-short-preview__expand">↗</span>
+                    </span>
+                  </div>
+
+                  <div class="short-video-preview__bottom-fade" aria-hidden="true" />
+                  <div class="youtube-short-preview__caption">
+                    <div class="youtube-short-preview__channel">
+                      <span class="short-video-preview__avatar">
+                        <img v-if="accountAvatarUrl(selectedVersion)" :src="accountAvatarUrl(selectedVersion) || undefined" alt="" />
+                        <span v-else>{{ accountInitials(selectedVersion) }}</span>
+                      </span>
+                      <strong>{{ previewAccountHandle(selectedVersion) }}</strong>
+                      <span class="youtube-short-preview__subscribe">Subscribe</span>
+                    </div>
+                    <p>{{ editorTitle || editorBody || 'Your Short title will appear here.' }}</p>
+                  </div>
+                  <div class="youtube-short-preview__progress" aria-hidden="true"><span /></div>
+                </div>
+                <a
+                  v-if="selectedVersion.platformPostUrl"
+                  class="short-video-preview__published-link"
+                  :href="selectedVersion.platformPostUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View published Short
+                </a>
+              </template>
+              <template
+                v-else-if="
+                  (selectedVersion.platform === 'instagram' ||
+                    selectedVersion.platform === 'instagram_business') &&
+                  isShortVideoVersion(selectedVersion)
+                "
+              >
+                <div class="short-video-preview__platform-bar">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="platformIconPath(selectedVersion.platform)" /></svg>
+                  <span>Instagram Reel</span>
+                </div>
+                <div class="short-video-preview__stage instagram-reel-preview__stage">
+                  <template v-if="selectedVersion.assetManifest[0]">
+                    <video
+                      v-if="isVideoAsset(selectedVersion.assetManifest[0])"
+                      :src="selectedVersion.assetManifest[0].url"
+                      controls
+                      muted
+                      playsinline
+                      preload="metadata"
+                      class="short-video-preview__media"
+                      :aria-label="selectedVersion.assetManifest[0].altText || selectedVersion.assetManifest[0].filename || 'Instagram Reel video preview'"
+                    />
+                    <img
+                      v-else
+                      :src="selectedVersion.assetManifest[0].url"
+                      :alt="selectedVersion.assetManifest[0].altText || selectedVersion.assetManifest[0].filename || 'Instagram Reel preview'"
+                      class="short-video-preview__media"
+                    />
+                  </template>
+                  <div v-else class="short-video-preview__empty">
+                    <UiIcon name="Play" :size="28" aria-hidden="true" />
+                    <span>Add a video to preview your Reel</span>
+                  </div>
+
+                  <div class="instagram-reel-preview__topbar" aria-hidden="true">
+                    <strong>Reels</strong>
+                    <span>
+                      <UiIcon name="Plus" :size="22" />
+                      <UiIcon name="SlidersHorizontal" :size="21" />
+                    </span>
+                  </div>
+
+                  <div class="instagram-reel-preview__rail" aria-hidden="true">
+                    <UiIcon name="Heart" :size="25" />
+                    <UiIcon name="MessageCircle" :size="25" />
+                    <UiIcon name="Send" :size="25" />
+                    <UiIcon name="Ellipsis" :size="25" />
+                  </div>
+
+                  <div class="short-video-preview__bottom-fade" aria-hidden="true" />
+                  <div class="instagram-reel-preview__caption">
+                    <div class="instagram-reel-preview__identity">
+                      <span class="short-video-preview__avatar">
+                        <img v-if="accountAvatarUrl(selectedVersion)" :src="accountAvatarUrl(selectedVersion) || undefined" alt="" />
+                        <span v-else>{{ accountInitials(selectedVersion) }}</span>
+                      </span>
+                      <strong>{{ previewAccountHandle(selectedVersion) }}</strong>
+                      <span class="instagram-reel-preview__follow">Follow</span>
+                    </div>
+                    <p>{{ editorBody || 'Your Reel caption will appear here.' }}</p>
+                  </div>
+                </div>
+                <a
+                  v-if="selectedVersion.platformPostUrl"
+                  class="short-video-preview__published-link"
+                  :href="selectedVersion.platformPostUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View published Reel
+                </a>
               </template>
               <template v-else>
                 <div class="preview-platform-bar">
@@ -3114,38 +3485,114 @@ function currentQueryParam(name: string): string | null {
       <form class="social-schedule-dialog" @submit.prevent="schedulePost">
         <header>
           <div>
-            <h2 id="social-schedule-title">Publish post</h2>
-            <p v-if="publicationTikTokVersion">
-              Choose how TikTok should receive this video.
+            <h2 id="social-schedule-title">
+              {{ publicationIsYouTubeOnly ? 'Upload to YouTube' : 'Publish post' }}
+            </h2>
+            <p v-if="canSchedule">
+              Publish immediately or choose a date and time.
             </p>
-            <p v-else>Publish immediately or choose a date and time.</p>
+            <p v-else-if="publicationIsYouTubeOnly">
+              Upload this Short privately for final review in YouTube Studio.
+            </p>
+            <p v-else>Publish the selected platforms immediately.</p>
           </div>
           <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close schedule dialog" @click="showSchedule = false">
             <UiIcon name="X" :size="17" aria-hidden="true" />
           </Button>
         </header>
 
-        <fieldset
+        <div
           v-if="publicationTikTokVersion"
-          class="tiktok-delivery-options"
+          class="tiktok-publish-summary"
         >
-          <legend>TikTok delivery</legend>
-          <label
-            :class="[
-              'tiktok-delivery-option',
-              { 'is-selected': tiktokDeliveryMode === 'provider_draft' },
-            ]"
+          <UiIcon name="CircleCheck" :size="18" aria-hidden="true" />
+          <span>
+            <strong>TikTok ready</strong>
+            <small>{{ tikTokSettingsSummary(publicationTikTokVersion) }}</small>
+          </span>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            type="button"
+            :disabled="scheduling"
+            @click="showSchedule = false; openTikTokSettings(publicationTikTokVersion)"
           >
-            <input
-              v-model="tiktokDeliveryMode"
-              type="radio"
-              value="provider_draft"
-            />
-            <span>
-              <strong>Send as draft</strong>
-              <small>Finish the caption, sound, and post inside TikTok.</small>
-            </span>
-          </label>
+            Edit
+          </Button>
+        </div>
+
+        <div v-if="canSchedule" class="schedule-fields">
+          <label class="field"><span>Date</span><input v-model="scheduleDate" type="date" required /></label>
+          <label class="field"><span>Time</span><input v-model="scheduleTime" type="time" required /></label>
+        </div>
+        <p v-if="scheduleError" class="form-error" role="alert">{{ scheduleError }}</p>
+        <footer>
+          <Button color="outline" shape="soft" size="compact" type="button" :disabled="scheduling" @click="showSchedule = false">Cancel</Button>
+          <Button
+            color="outline"
+            shape="soft"
+            size="compact"
+            type="button"
+            :disabled="scheduling || !canSubmitPublishNow"
+            @click="publishNow"
+          >
+            <template #icon>
+              <UiIcon name="Send" :size="16" aria-hidden="true" />
+            </template>
+            {{
+              publicationIsYouTubeOnly
+                ? (scheduling ? 'Uploading…' : 'Upload now')
+                : (scheduling ? 'Posting…' : 'Post now')
+            }}
+          </Button>
+          <Button
+            v-if="canSchedule"
+            color="primary"
+            shape="soft"
+            size="compact"
+            type="submit"
+            :disabled="scheduling || !canSchedule"
+          >
+            <template #icon>
+              <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
+            </template>
+            {{ scheduling ? 'Scheduling…' : 'Schedule' }}
+          </Button>
+        </footer>
+      </form>
+    </AppDialog>
+
+    <AppDialog
+      :open="showTikTokSettings"
+      labelled-by="tiktok-settings-title"
+      @close="closeTikTokSettings"
+    >
+      <form class="tiktok-settings-dialog" @submit.prevent="saveTikTokSettings">
+        <header>
+          <div>
+            <h2 id="tiktok-settings-title">TikTok publishing</h2>
+            <p>
+              Review once for this Post. ME3 will use the saved choice when publishing
+              with other platforms.
+            </p>
+          </div>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Close TikTok publishing settings"
+            :disabled="tiktokSettingsSaving"
+            @click="closeTikTokSettings"
+          >
+            <UiIcon name="X" :size="17" aria-hidden="true" />
+          </Button>
+        </header>
+
+        <fieldset class="tiktok-delivery-options">
+          <legend>Delivery</legend>
           <label
             :class="[
               'tiktok-delivery-option',
@@ -3160,20 +3607,38 @@ function currentQueryParam(name: string): string | null {
               type="radio"
               value="direct_publish"
               :disabled="!tiktokDirectPostSupported"
+              @change="handleTikTokDeliveryModeChange"
             />
             <span>
               <strong>Post directly</strong>
-              <small>Publish this exact video and caption without opening TikTok.</small>
+              <small>Default · publish this exact video and caption.</small>
+            </span>
+          </label>
+          <label
+            :class="[
+              'tiktok-delivery-option',
+              { 'is-selected': tiktokDeliveryMode === 'provider_draft' },
+            ]"
+          >
+            <input
+              v-model="tiktokDeliveryMode"
+              type="radio"
+              value="provider_draft"
+              @change="handleTikTokDeliveryModeChange"
+            />
+            <span>
+              <strong>Send as draft</strong>
+              <small>Finish the caption, sound, and post inside TikTok.</small>
             </span>
           </label>
         </fieldset>
 
         <section
-          v-if="publicationTikTokVersion && tiktokDeliveryMode === 'direct_publish'"
+          v-if="tiktokDeliveryMode === 'direct_publish'"
           class="tiktok-direct-post"
           aria-labelledby="tiktok-direct-post-title"
         >
-          <h3 id="tiktok-direct-post-title">TikTok Direct Post settings</h3>
+          <h3 id="tiktok-direct-post-title">Direct Post settings</h3>
 
           <p
             v-if="tiktokCreatorInfoLoading"
@@ -3190,7 +3655,7 @@ function currentQueryParam(name: string): string | null {
               shape="soft"
               size="compact"
               type="button"
-              @click="showSchedule = false; showAccounts = true"
+              @click="closeTikTokSettings(); showAccounts = true"
             >
               Reconnect TikTok
             </Button>
@@ -3213,6 +3678,11 @@ function currentQueryParam(name: string): string | null {
                 <small>@{{ tiktokCreatorInfo.username }}</small>
               </p>
             </div>
+
+            <p class="tiktok-direct-post__review-note">
+              During app review testing, the TikTok account must be private and visibility
+              must be <strong>Only me</strong>. Wider visibility unlocks after approval.
+            </p>
 
             <label class="field">
               <span>Who can view this post?</span>
@@ -3337,43 +3807,37 @@ function currentQueryParam(name: string): string | null {
             </label>
 
             <p class="tiktok-direct-post__notice">
-              TikTok may take a few minutes to process and show the post on your profile.
+              TikTok requires these choices for each Post. They remain saved until this
+              publishing attempt starts or the Post changes.
             </p>
           </template>
         </section>
 
-        <div v-if="canSchedule" class="schedule-fields">
-          <label class="field"><span>Date</span><input v-model="scheduleDate" type="date" required /></label>
-          <label class="field"><span>Time</span><input v-model="scheduleTime" type="time" required /></label>
-        </div>
-        <p v-if="scheduleError" class="form-error" role="alert">{{ scheduleError }}</p>
         <footer>
-          <Button color="outline" shape="soft" size="compact" type="button" :disabled="scheduling" @click="showSchedule = false">Cancel</Button>
           <Button
             color="outline"
             shape="soft"
             size="compact"
             type="button"
-            :disabled="scheduling || !canSubmitPublishNow"
-            @click="publishNow"
+            :disabled="tiktokSettingsSaving"
+            @click="closeTikTokSettings"
           >
-            <template #icon>
-              <UiIcon name="Send" :size="16" aria-hidden="true" />
-            </template>
-            {{ scheduling ? 'Posting…' : 'Post now' }}
+            Cancel
           </Button>
           <Button
-            v-if="canSchedule"
             color="primary"
             shape="soft"
             size="compact"
             type="submit"
-            :disabled="scheduling || !canSchedule"
+            :disabled="
+              tiktokSettingsSaving ||
+              (
+                tiktokDeliveryMode === 'direct_publish' &&
+                !tiktokDirectPostReady
+              )
+            "
           >
-            <template #icon>
-              <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
-            </template>
-            {{ scheduling ? 'Scheduling…' : 'Schedule' }}
+            {{ tiktokSettingsSaving ? 'Saving…' : 'Save TikTok settings' }}
           </Button>
         </footer>
       </form>
@@ -3823,6 +4287,7 @@ function currentQueryParam(name: string): string | null {
 }
 
 .version-tab {
+  position: relative;
   display: grid;
   place-items: center;
   width: 44px;
@@ -3835,6 +4300,17 @@ function currentQueryParam(name: string): string | null {
   cursor: pointer;
   filter: grayscale(1);
   opacity: 0.48;
+}
+
+.version-tab__setup-dot {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--ui-surface);
+  border-radius: 50%;
+  background: var(--ui-accent);
 }
 
 .version-tab--shared {
@@ -4676,6 +5152,345 @@ input:focus {
   margin-left: auto;
 }
 
+/* Short-form previews keep the video dominant and borrow only the most
+   recognisable platform chrome. They are intentionally quieter than the apps. */
+.post-preview--youtube-short,
+.post-preview--instagram-reel {
+  width: min(100%, 380px);
+  justify-self: center;
+  border-color: #202124;
+  border-radius: 18px;
+  background: #0f0f0f;
+  color: #fff;
+  box-shadow: 0 18px 38px rgb(15 23 42 / 16%);
+}
+
+.short-video-preview__platform-bar {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 13px;
+  border-bottom: 1px solid #2b2b2b;
+  color: rgb(255 255 255 / 88%);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.short-video-preview__platform-bar svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.post-preview--youtube-short .short-video-preview__platform-bar svg {
+  color: #ff0033;
+}
+
+.short-video-preview__stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  overflow: hidden;
+  background: #171717;
+  color: #fff;
+}
+
+.short-video-preview__media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+  background: #171717;
+}
+
+.short-video-preview__empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 9px;
+  padding: 28px;
+  color: rgb(255 255 255 / 70%);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.short-video-preview__bottom-fade {
+  position: absolute;
+  z-index: 1;
+  inset: 48% 0 0;
+  background: linear-gradient(180deg, transparent 0%, rgb(0 0 0 / 14%) 34%, rgb(0 0 0 / 82%) 100%);
+  pointer-events: none;
+}
+
+.short-video-preview__avatar {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 72%);
+  border-radius: 50%;
+  background: #353535;
+  color: #fff;
+  font-size: 0.64rem;
+  font-weight: 800;
+}
+
+.short-video-preview__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.youtube-short-preview__controls {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  right: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #fff;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 3px rgb(0 0 0 / 56%));
+}
+
+.youtube-short-preview__control-group {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 14px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 35%);
+  backdrop-filter: blur(7px);
+}
+
+.youtube-short-preview__speaker {
+  position: relative;
+  display: inline-block;
+  width: 17px;
+  height: 18px;
+}
+
+.youtube-short-preview__speaker::before {
+  position: absolute;
+  top: 5px;
+  left: 1px;
+  width: 5px;
+  height: 8px;
+  border-radius: 1px;
+  background: currentColor;
+  box-shadow: 4px 0 0 -1px currentColor;
+  content: "";
+}
+
+.youtube-short-preview__speaker::after {
+  position: absolute;
+  top: 3px;
+  right: 0;
+  width: 8px;
+  height: 12px;
+  border-right: 2px solid currentColor;
+  border-radius: 50%;
+  content: "";
+}
+
+.youtube-short-preview__cc {
+  padding: 1px 3px;
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+  font-size: 0.58rem;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+}
+
+.youtube-short-preview__expand {
+  font-size: 1.28rem;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.youtube-short-preview__caption {
+  position: absolute;
+  z-index: 3;
+  right: 15px;
+  bottom: 22px;
+  left: 15px;
+  color: #fff;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 68%);
+}
+
+.youtube-short-preview__channel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.youtube-short-preview__channel strong {
+  overflow: hidden;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.youtube-short-preview__subscribe {
+  margin-left: 2px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: #fff;
+  color: #111;
+  font-size: 0.68rem;
+  font-weight: 750;
+  text-shadow: none;
+}
+
+.post-preview--youtube-short .youtube-short-preview__caption p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 10px 0 0;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 650;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: pre-wrap;
+}
+
+.youtube-short-preview__progress {
+  position: absolute;
+  z-index: 4;
+  right: 8px;
+  bottom: 5px;
+  left: 8px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 35%);
+  pointer-events: none;
+}
+
+.youtube-short-preview__progress span {
+  display: block;
+  width: 24%;
+  height: 100%;
+  border-radius: inherit;
+  background: #ff0033;
+}
+
+.instagram-reel-preview__topbar {
+  position: absolute;
+  z-index: 3;
+  top: 13px;
+  right: 13px;
+  left: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #fff;
+  pointer-events: none;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 62%);
+}
+
+.instagram-reel-preview__topbar strong {
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.instagram-reel-preview__topbar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.instagram-reel-preview__rail {
+  position: absolute;
+  z-index: 3;
+  right: 10px;
+  bottom: 92px;
+  display: grid;
+  justify-items: center;
+  gap: 19px;
+  color: #fff;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 3px rgb(0 0 0 / 62%));
+}
+
+.instagram-reel-preview__caption {
+  position: absolute;
+  z-index: 3;
+  right: 54px;
+  bottom: 22px;
+  left: 13px;
+  color: #fff;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 68%);
+}
+
+.instagram-reel-preview__identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.instagram-reel-preview__identity strong {
+  overflow: hidden;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instagram-reel-preview__follow {
+  padding: 5px 9px;
+  border: 1px solid rgb(255 255 255 / 76%);
+  border-radius: 7px;
+  font-size: 0.66rem;
+  font-weight: 750;
+}
+
+.post-preview--instagram-reel .instagram-reel-preview__caption p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 9px 0 0;
+  color: #fff;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+}
+
+.post-preview > .short-video-preview__published-link {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border-top: 1px solid #2b2b2b;
+  color: rgb(255 255 255 / 86%);
+  font-size: 0.75rem;
+  text-decoration: none;
+}
+
+.post-preview > .short-video-preview__published-link:hover {
+  background: #191919;
+  color: #fff;
+}
+
+.post-preview > .short-video-preview__published-link:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: -3px;
+}
+
 .publication-panel {
   display: flex;
   align-items: center;
@@ -4766,6 +5581,7 @@ input:focus {
 .social-destinations-dialog,
 .social-media-picker,
 .social-schedule-dialog,
+.tiktok-settings-dialog,
 .publishing-checks-dialog {
   position: relative;
   width: min(680px, calc(100vw - 32px));
@@ -4781,6 +5597,7 @@ input:focus {
 
 .social-media-picker,
 .social-schedule-dialog,
+.tiktok-settings-dialog,
 .publishing-checks-dialog {
   display: grid;
   gap: 18px;
@@ -4797,6 +5614,8 @@ input:focus {
 .social-media-picker footer,
 .social-schedule-dialog header,
 .social-schedule-dialog footer,
+.tiktok-settings-dialog header,
+.tiktok-settings-dialog footer,
 .publishing-checks-dialog header,
 .publishing-checks-dialog footer {
   display: flex;
@@ -4814,6 +5633,8 @@ input:focus {
 .social-media-picker p,
 .social-schedule-dialog h2,
 .social-schedule-dialog p,
+.tiktok-settings-dialog h2,
+.tiktok-settings-dialog p,
 .publishing-checks-dialog h2,
 .publishing-checks-dialog p {
   margin: 0;
@@ -4822,6 +5643,7 @@ input:focus {
 .social-destinations-dialog header p,
 .social-media-picker header p,
 .social-schedule-dialog header p,
+.tiktok-settings-dialog header p,
 .publishing-checks-dialog header p {
   margin-top: 4px;
   color: var(--ui-text-muted);
@@ -5065,6 +5887,44 @@ input:focus {
   padding: 0;
 }
 
+.tiktok-publish-readiness,
+.tiktok-publish-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 52px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+}
+
+.tiktok-publish-readiness--ready,
+.tiktok-publish-summary {
+  border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-border));
+  background: var(--ui-accent-soft);
+}
+
+.tiktok-publish-readiness > svg,
+.tiktok-publish-summary > svg {
+  color: var(--ui-accent-strong);
+}
+
+.tiktok-publish-readiness span,
+.tiktok-publish-readiness small,
+.tiktok-publish-summary span,
+.tiktok-publish-summary small {
+  display: block;
+}
+
+.tiktok-publish-readiness small,
+.tiktok-publish-summary small {
+  margin-top: 2px;
+  color: var(--ui-text-muted);
+  font-size: 0.75rem;
+}
+
 .tiktok-delivery-options,
 .tiktok-direct-post__checks {
   display: grid;
@@ -5152,10 +6012,18 @@ input:focus {
 
 .tiktok-direct-post__status,
 .tiktok-direct-post__duration,
-.tiktok-direct-post__notice {
+.tiktok-direct-post__notice,
+.tiktok-direct-post__review-note {
   color: var(--ui-text-muted);
   font-size: 0.78rem;
   line-height: 1.45;
+}
+
+.tiktok-direct-post__review-note {
+  padding: 9px 10px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-accent-soft);
+  color: var(--ui-text);
 }
 
 .tiktok-direct-post__duration.is-invalid {
@@ -5300,6 +6168,17 @@ input:focus {
 }
 
 @media (max-width: 520px) {
+  .tiktok-publish-readiness,
+  .tiktok-publish-summary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .tiktok-publish-readiness :deep(.me3-btn),
+  .tiktok-publish-summary :deep(.me3-btn) {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+
   .media-attachment__order :deep(.media-attachment__move.me3-btn) {
     width: 44px;
     min-width: 44px;

@@ -69,6 +69,7 @@ describe("Core runtime migrations", () => {
     expect(db.columns.get("social_variants")?.has("approved_at")).toBe(true);
     expect(db.columns.get("social_variants")?.has("approved_by_user_id")).toBe(true);
     expect(db.columns.get("social_variants")?.has("carousel_render_set_id")).toBe(true);
+    expect(db.columns.get("social_variants")?.has("publishing_settings_json")).toBe(true);
     expect(db.migrations.get("0002_mission_task_pins")).toBe(
       "2026-06-24-mission-task-pins-v1",
     );
@@ -131,6 +132,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0031_social_publication_formats")).toBe(
       "2026-07-25-social-publication-formats-v1",
+    );
+    expect(db.migrations.get("0032_social_version_publishing_settings")).toBe(
+      "2026-07-29-social-version-publishing-settings-v1",
     );
     expect(
       db.statements.some(

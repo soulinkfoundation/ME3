@@ -1,4 +1,8 @@
 import type { SocialMediaAsset, SocialPlatform } from "./index";
+import {
+  normalizeTikTokDeliveryOptions,
+  type TikTokDeliveryOptions,
+} from "./adapters";
 
 type Statement = {
   bind(...values: unknown[]): Statement;
@@ -26,6 +30,9 @@ export const SOCIAL_POST_SOURCE_TYPES = [
 export type SocialPostSourceType = (typeof SOCIAL_POST_SOURCE_TYPES)[number];
 export type SocialPostFormat = "post" | "image" | "carousel" | "short_video";
 export type SocialPostApprovalStatus = "draft" | "approved" | "rejected";
+export type PostVersionPublishingSettings = {
+  tiktok?: TikTokDeliveryOptions;
+};
 
 export type SocialPost = {
   id: string;
@@ -53,6 +60,7 @@ export type PostVersion = {
   title: string | null;
   bodyText: string;
   assetManifest: SocialMediaAsset[];
+  publishingSettings: PostVersionPublishingSettings;
   carouselRenderSetId: string | null;
   sourceExcerpt: string | null;
   approvalStatus: SocialPostApprovalStatus;
@@ -109,6 +117,7 @@ export type UpdatePostVersionInput = {
   title?: string | null;
   bodyText?: string;
   assetManifest?: SocialMediaAsset[];
+  publishingSettings?: unknown;
   approvalStatus?: SocialPostApprovalStatus;
 };
 
@@ -173,6 +182,7 @@ type VariantRow = {
   title: string | null;
   body_text: string;
   asset_manifest_json: string;
+  publishing_settings_json: string;
   carousel_render_set_id: string | null;
   source_excerpt: string | null;
   approval_status: SocialContentApprovalStatus;
@@ -381,7 +391,8 @@ async function listPackageVariants(
 ): Promise<SocialAccountVariant[]> {
   const variants = await env.DB.prepare(
     `SELECT v.id, v.package_id, v.platform, v.target_account_id, v.format, v.title, v.body_text,
-            v.asset_manifest_json, v.carousel_render_set_id, v.source_excerpt,
+            v.asset_manifest_json, v.publishing_settings_json,
+            v.carousel_render_set_id, v.source_excerpt,
             v.approval_status, v.approved_at,
             v.approved_by_user_id,
             (SELECT pub.scheduled_for FROM social_publications pub
@@ -443,7 +454,8 @@ async function updateSocialAccountVariant(
   const existing = await env.DB.prepare(
     `SELECT v.id, v.package_id, p.site_id, p.source_type AS post_source_type,
             v.platform, v.target_account_id,
-            v.format, v.title, v.body_text, v.asset_manifest_json, v.carousel_render_set_id,
+            v.format, v.title, v.body_text, v.asset_manifest_json,
+            v.publishing_settings_json, v.carousel_render_set_id,
             v.source_excerpt,
             v.approval_status, v.approved_at, v.approved_by_user_id,
             v.scheduled_for, v.timezone, v.created_at, v.updated_at
@@ -481,6 +493,9 @@ async function updateSocialAccountVariant(
     targetAccountId !== existing.target_account_id ||
     format !== existing.format ||
     assetManifestJson !== existing.asset_manifest_json;
+  const publishingSettingsJson = input.publishingSettings === undefined
+    ? contentChanged ? "{}" : existing.publishing_settings_json
+    : JSON.stringify(normalizePublishingSettings(existing.platform, input.publishingSettings));
   const approvalStatus = input.approvalStatus ||
     (contentChanged ? "draft" : existing.approval_status);
 
@@ -512,7 +527,8 @@ async function updateSocialAccountVariant(
     env.DB.prepare(
       `UPDATE social_variants
        SET target_account_id = ?, format = ?, body_text = ?, asset_manifest_json = ?,
-           carousel_render_set_id = ?, approval_status = ?, approved_at = ?,
+           publishing_settings_json = ?, carousel_render_set_id = ?,
+           approval_status = ?, approved_at = ?,
            approved_by_user_id = ?,
            scheduled_for = ?, timezone = ?, updated_at = ?
        WHERE id = ?`,
@@ -521,6 +537,7 @@ async function updateSocialAccountVariant(
       format,
       bodyText,
       assetManifestJson,
+      publishingSettingsJson,
       contentChanged ? null : existing.carousel_render_set_id,
       approvalStatus,
       approvedAt,
@@ -590,8 +607,9 @@ async function updateSocialAccountVariant(
   await env.DB.batch(statements);
 
   const updated = await env.DB.prepare(
-    `SELECT id, package_id, platform, target_account_id, format, body_text,
-            asset_manifest_json, carousel_render_set_id, source_excerpt,
+    `SELECT id, package_id, platform, target_account_id, format, title, body_text,
+            asset_manifest_json, publishing_settings_json,
+            carousel_render_set_id, source_excerpt,
             approval_status, approved_at,
             approved_by_user_id,
             (SELECT scheduled_for FROM social_publications
@@ -1148,6 +1166,7 @@ function serializeVariant(row: VariantRow): SocialAccountVariant {
     title: row.title,
     bodyText: row.body_text,
     assetManifest: parseAssets(row.asset_manifest_json),
+    publishingSettings: parsePublishingSettings(row.publishing_settings_json),
     carouselRenderSetId: row.carousel_render_set_id || null,
     sourceExcerpt: row.source_excerpt,
     approvalStatus: row.approval_status,
@@ -1186,6 +1205,66 @@ function parseAssets(value: string): SocialMediaAsset[] {
   } catch {
     return [];
   }
+}
+
+function parsePublishingSettings(value: unknown): PostVersionPublishingSettings {
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as PostVersionPublishingSettings
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizePublishingSettings(
+  platform: SocialPlatform,
+  value: unknown,
+): PostVersionPublishingSettings {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new SocialPostInputError("Publishing settings must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length === 0) return {};
+  if (platform !== "tiktok") {
+    throw new SocialPostInputError(
+      `${platform} does not support saved publishing settings`,
+    );
+  }
+  const rawTikTok = record.tiktok;
+  if (!rawTikTok || typeof rawTikTok !== "object" || Array.isArray(rawTikTok)) {
+    throw new SocialPostInputError("TikTok publishing settings are required");
+  }
+  const rawDeliveryMode = (rawTikTok as Record<string, unknown>).deliveryMode;
+  if (rawDeliveryMode !== "provider_draft" && rawDeliveryMode !== "direct_publish") {
+    throw new SocialPostInputError("Choose TikTok draft or Direct Post delivery");
+  }
+  const tiktok = normalizeTikTokDeliveryOptions(rawTikTok);
+  if (tiktok.deliveryMode === "provider_draft") return { tiktok };
+  if (!tiktok.privacyLevel) {
+    throw new SocialPostInputError("Choose who can view this TikTok");
+  }
+  if (!tiktok.consent) {
+    throw new SocialPostInputError(
+      "Confirm TikTok's music usage terms before saving Direct Post settings",
+    );
+  }
+  if (
+    !Number.isFinite(tiktok.videoDurationSeconds) ||
+    tiktok.videoDurationSeconds <= 0
+  ) {
+    throw new SocialPostInputError(
+      "ME3 needs the TikTok video duration before saving Direct Post settings",
+    );
+  }
+  if (tiktok.brandContent && tiktok.privacyLevel === "SELF_ONLY") {
+    throw new SocialPostInputError(
+      "Branded TikTok content cannot use Only me visibility",
+    );
+  }
+  return { tiktok };
 }
 
 function normalizeTags(value: unknown): string[] {

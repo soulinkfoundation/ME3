@@ -1197,7 +1197,7 @@ export async function queryTikTokCreatorInfo(
   };
 }
 
-function tikTokDeliveryOptions(value: unknown): TikTokDeliveryOptions {
+export function normalizeTikTokDeliveryOptions(value: unknown): TikTokDeliveryOptions {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { deliveryMode: "provider_draft" };
   }
@@ -1223,6 +1223,29 @@ function tikTokDeliveryOptions(value: unknown): TikTokDeliveryOptions {
   };
 }
 
+function tikTokFailureClass(
+  status: number,
+  errorCode: string | undefined,
+): SocialPublishFailureClass {
+  if (errorCode === "access_token_invalid" || errorCode === "scope_not_authorized") {
+    return "reconnect_required";
+  }
+  if (errorCode === "rate_limit_exceeded" || status === 429 || status >= 500) {
+    return "retryable";
+  }
+  if (
+    errorCode === "unaudited_client_can_only_post_to_private_accounts" ||
+    errorCode === "privacy_level_option_mismatch" ||
+    errorCode?.startsWith("spam_risk_") ||
+    status === 400 ||
+    status === 403 ||
+    status === 422
+  ) {
+    return "rejected";
+  }
+  return failureClassForStatus(status);
+}
+
 function tikTokResumePublishId(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const publishId = (value as Record<string, unknown>).publishId;
@@ -1244,7 +1267,7 @@ const tikTokAdapter: SocialPublishAdapter = {
       return providerError("tiktok_validation_failed", validation.error, undefined, "unsupported");
     }
 
-    const deliveryOptions = tikTokDeliveryOptions(input.providerOptions);
+    const deliveryOptions = normalizeTikTokDeliveryOptions(input.providerOptions);
     let publishId = tikTokResumePublishId(input.resumeProviderResponse);
     let initialized: TikTokApiResponse | null = null;
     let creatorInfoResponse: TikTokCreatorInfoApiResponse | null = null;
@@ -1307,9 +1330,7 @@ const tikTokAdapter: SocialPublishAdapter = {
               ? "Reconnect TikTok to grant Direct Post access."
               : creatorInfo.errorMessage,
             creatorInfo.providerResponse,
-            creatorInfo.status === 401 || creatorInfo.status === 403
-              ? "reconnect_required"
-              : failureClassForStatus(creatorInfo.status),
+            tikTokFailureClass(creatorInfo.status, creatorInfo.errorCode),
           );
         }
         creatorInfoResponse = creatorInfo.providerResponse;
@@ -1382,11 +1403,18 @@ const tikTokAdapter: SocialPublishAdapter = {
       initialized = await readJson<TikTokApiResponse>(initResponse);
       const apiError = initialized.error?.code?.trim();
       if (!initResponse.ok || (apiError && apiError !== "ok")) {
+        const unauditedPrivateOnly =
+          apiError === "unaudited_client_can_only_post_to_private_accounts";
         return providerError(
           apiError || "tiktok_upload_init",
-          initialized.error?.message || `TikTok could not initialize the draft upload (${initResponse.status}).`,
+          unauditedPrivateOnly
+            ? "Until app review is approved, set this TikTok account to private and choose Only me visibility."
+            : initialized.error?.message ||
+              `TikTok could not initialize the ${
+                deliveryOptions.deliveryMode === "direct_publish" ? "Direct Post" : "draft upload"
+              } (${initResponse.status}).`,
           initialized,
-          failureClassForStatus(initResponse.status),
+          tikTokFailureClass(initResponse.status, apiError),
         );
       }
 

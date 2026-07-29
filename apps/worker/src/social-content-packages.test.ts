@@ -211,6 +211,64 @@ describe("Social Posts", () => {
     expect(reloaded?.versions[0]?.title).toBe("Updated YouTube title");
   });
 
+  it("saves TikTok publishing review on the Version and clears it after content changes", async () => {
+    const { env } = createEnv();
+    const created = await createSocialPost(env, "owner", {
+      siteId: "site-1",
+      sourceType: "pasted",
+      sourceSnapshot: "A TikTok video draft.",
+      sourceText: "A TikTok video draft.",
+      ideaText: "A TikTok video draft.",
+      versions: [{
+        platform: "tiktok",
+        bodyText: "Review this exact caption.",
+        assetManifest: [{
+          url: "https://media.example/short.mp4",
+          kind: "video",
+          mimeType: "video/mp4",
+          byteLength: 4,
+        }],
+      }],
+    });
+    const version = created.versions[0]!;
+
+    const reviewed = await updatePostVersion(env, "owner", version.id, {
+      publishingSettings: {
+        tiktok: {
+          deliveryMode: "direct_publish",
+          privacyLevel: "SELF_ONLY",
+          allowComment: false,
+          allowDuet: false,
+          allowStitch: false,
+          brandContent: false,
+          brandOrganic: false,
+          isAiGenerated: false,
+          consent: true,
+          videoDurationSeconds: 12,
+        },
+      },
+    });
+    expect(reviewed?.publishingSettings).toEqual({
+      tiktok: {
+        deliveryMode: "direct_publish",
+        privacyLevel: "SELF_ONLY",
+        allowComment: false,
+        allowDuet: false,
+        allowStitch: false,
+        brandContent: false,
+        brandOrganic: false,
+        isAiGenerated: false,
+        consent: true,
+        videoDurationSeconds: 12,
+      },
+    });
+
+    const edited = await updatePostVersion(env, "owner", version.id, {
+      bodyText: "This caption changed after review.",
+    });
+    expect(edited?.publishingSettings).toEqual({});
+  });
+
   it("creates source-backed platform Versions and invalidates approval after edits", async () => {
     const { env, publishingEnv, events } = createEnv();
 
@@ -1379,6 +1437,7 @@ class Statement {
         title,
         body_text: bodyText,
         asset_manifest_json: assets,
+        publishing_settings_json: "{}",
         carousel_render_set_id: null,
         source_excerpt: sourceExcerpt,
         approval_status: "draft",
@@ -1782,6 +1841,16 @@ class Statement {
       }
     } else if (
       this.sql.includes("UPDATE social_variants") &&
+      this.sql.includes("SET publishing_settings_json = '{}'")
+    ) {
+      const [updatedAt, variantId] = this.values;
+      const variant = this.state.variants.find((row) => row.id === variantId);
+      if (variant) {
+        variant.publishing_settings_json = "{}";
+        variant.updated_at = updatedAt;
+      }
+    } else if (
+      this.sql.includes("UPDATE social_variants") &&
       this.sql.includes("scheduled_for = NULL")
     ) {
       const variantId = this.values.at(-1);
@@ -1803,6 +1872,7 @@ class Statement {
         format,
         bodyText,
         assets,
+        publishingSettings,
         carouselRenderSetId,
         approvalStatus,
         approvedAt,
@@ -1819,6 +1889,7 @@ class Statement {
           format,
           body_text: bodyText,
           asset_manifest_json: assets,
+          publishing_settings_json: publishingSettings,
           carousel_render_set_id: carouselRenderSetId,
           approval_status: approvalStatus,
           approved_at: approvedAt,

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import type { PostVersion } from "../stores/social";
 import SocialPage from "./social.vue";
 
 vi.mock("../api", () => ({
@@ -45,6 +46,7 @@ function platformCapability(
 ) {
   const isTikTok = platform === "tiktok";
   const isInstagram = platform === "instagram";
+  const isYouTube = platform === "youtube";
   return {
     platform,
     draft: true,
@@ -68,17 +70,21 @@ function platformCapability(
           maxBytesPerItem: 4 * 1024 * 1024 * 1024,
           guidance: "Finish in TikTok.",
         }]
-      : isInstagram ? [{
+      : isInstagram || isYouTube ? [{
           contentType: "short_video",
           label: "Short video",
           requiresText: true,
-          maxTextCharacters: 2_200,
+          maxTextCharacters: isYouTube ? 5_000 : 2_200,
           minMediaItems: 1,
           maxMediaItems: 1,
           allowedMediaKinds: ["video"],
-          allowedMimeTypes: ["video/mp4", "video/quicktime"],
-          maxBytesPerItem: 1024 * 1024 * 1024,
-          guidance: "Publishes as a Reel.",
+          allowedMimeTypes: isYouTube
+            ? ["video/mp4", "video/quicktime", "video/webm"]
+            : ["video/mp4", "video/quicktime"],
+          maxBytesPerItem: isYouTube ? 256 * 1024 * 1024 * 1024 : 1024 * 1024 * 1024,
+          guidance: isYouTube
+            ? "Uploads privately for final review in YouTube Studio."
+            : "Publishes as a Reel.",
         }] : [{
           contentType: "text",
           label: "Text post",
@@ -1177,6 +1183,67 @@ describe("SocialPage", () => {
       .toBe("Saved body");
   });
 
+  it("renders a YouTube Short as a simple portrait player preview", async () => {
+    const youtubeAccount = {
+      ...account,
+      id: "account-youtube",
+      platform: "youtube",
+      handle: "kieran-video",
+      displayName: "Kieran Video",
+    };
+    const youtubePost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        id: "version-youtube",
+        platform: "youtube" as const,
+        targetAccountId: youtubeAccount.id,
+        format: "short_video" as const,
+        title: "A quick field note",
+        bodyText: "The full YouTube description.",
+        assetManifest: [{
+          url: "https://example.com/short.mp4",
+          kind: "video" as const,
+          mimeType: "video/mp4",
+        }],
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") return Promise.resolve({ posts: [youtubePost] });
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [youtubeAccount] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: { status: "installed", enabled: true, ready: true, statusLabel: "Installed", platformCapabilities: [
+          platformCapability("youtube", { schedule: false, deliveryMode: "provider_draft" }),
+        ] },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.get(".post-preview--youtube-short").text()).toContain("YouTube Short");
+    expect(wrapper.get(".youtube-short-preview__caption").text()).toContain("@kieran-video");
+    expect(wrapper.get(".youtube-short-preview__caption").text()).toContain("A quick field note");
+    expect(wrapper.get(".youtube-short-preview__stage video").attributes("controls")).toBeDefined();
+    expect(wrapper.find(".preview-profile").exists()).toBe(false);
+
+    const publish = wrapper.get(".editor-actions").findAll("button")
+      .find((button) => button.text().trim() === "Upload");
+    await publish!.trigger("click");
+    await flushPromises();
+
+    const dialog = wrapper.get(".social-schedule-dialog");
+    expect(dialog.get("h2").text()).toBe("Upload to YouTube");
+    expect(dialog.text()).toContain(
+      "Upload this Short privately for final review in YouTube Studio.",
+    );
+    expect(dialog.text()).toContain("Upload now");
+    expect(dialog.text()).not.toContain("choose a date and time");
+    expect(dialog.find(".schedule-fields").exists()).toBe(false);
+  });
+
   it("autosaves text changes after the journal-style debounce", async () => {
     vi.useFakeTimers();
     vi.mocked(api.patch).mockImplementation(async (_endpoint, input) => ({
@@ -1491,6 +1558,54 @@ describe("SocialPage", () => {
       expect.objectContaining({ bodyText: "Revised shared caption." }),
       expect.objectContaining({ bodyText: "Revised shared caption." }),
     ]);
+  });
+
+  it("renders an Instagram short video as a simple Reels preview", async () => {
+    const instagramAccount = {
+      ...account,
+      id: "account-instagram",
+      platform: "instagram",
+      handle: "kieran",
+      displayName: "Kieran on Instagram",
+    };
+    const instagramPost = {
+      ...post,
+      versions: [{
+        ...post.versions[0],
+        id: "version-instagram",
+        platform: "instagram" as const,
+        targetAccountId: instagramAccount.id,
+        format: "short_video" as const,
+        bodyText: "A short Reel caption.",
+        assetManifest: [{
+          url: "https://example.com/reel.mp4",
+          kind: "video" as const,
+          mimeType: "video/mp4",
+        }],
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") return Promise.resolve({ posts: [instagramPost] });
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [instagramAccount] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: { status: "installed", enabled: true, ready: true, statusLabel: "Installed", platformCapabilities: [
+          platformCapability("instagram", { schedule: true, deliveryMode: "direct_publish" }),
+        ] },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.get(".post-preview--instagram-reel").text()).toContain("Instagram Reel");
+    expect(wrapper.get(".instagram-reel-preview__topbar").text()).toContain("Reels");
+    expect(wrapper.get(".instagram-reel-preview__caption").text()).toContain("@kieran");
+    expect(wrapper.get(".instagram-reel-preview__caption").text()).toContain("A short Reel caption.");
+    expect(wrapper.find(".instagram-reel-preview__rail").exists()).toBe(true);
+    expect(wrapper.get(".instagram-reel-preview__stage video").attributes("controls")).toBeDefined();
+    expect(wrapper.find(".preview-profile").exists()).toBe(false);
   });
 
   it("renders TikTok video previews with the caption at the bottom of the stage", async () => {
@@ -1849,8 +1964,14 @@ describe("SocialPage", () => {
       }
       throw new Error(`Unexpected GET ${endpoint}`);
     });
-    vi.mocked(api.patch).mockResolvedValue({
-      version: { ...tiktokVersion, approvalStatus: "approved" },
+    let persistedTikTokVersion = { ...tiktokVersion } as PostVersion;
+    vi.mocked(api.patch).mockImplementation(async (_endpoint, input) => {
+      persistedTikTokVersion = {
+        ...persistedTikTokVersion,
+        ...(input as Partial<PostVersion>),
+        approvalStatus: "approved",
+      } as PostVersion;
+      return { version: persistedTikTokVersion };
     });
     vi.mocked(api.post).mockResolvedValue({
       publication: {
@@ -1892,21 +2013,60 @@ describe("SocialPage", () => {
       (button) => button.text().trim() === "Schedule",
     );
     await schedule!.trigger("click");
-    await wrapper.get("input[value='direct_publish']").setValue();
     await flushPromises();
 
-    expect(wrapper.get(".tiktok-direct-post__creator").text())
+    expect((
+      wrapper.get(".tiktok-settings-dialog input[value='direct_publish']")
+        .element as HTMLInputElement
+    ).checked).toBe(true);
+    expect(wrapper.get(".tiktok-settings-dialog .tiktok-direct-post__creator").text())
       .toContain("Kieran on TikTok");
-    expect(wrapper.get(".tiktok-direct-post__duration").text())
+    expect(wrapper.get(".tiktok-settings-dialog .tiktok-direct-post__duration").text())
       .toContain("Video length: 13 seconds");
-    expect(wrapper.get(".tiktok-direct-post__checks").text())
+    expect(wrapper.get(".tiktok-settings-dialog .tiktok-direct-post__checks").text())
       .toContain("Unavailable in TikTok settings");
 
-    await wrapper.get(".tiktok-direct-post select").setValue("PUBLIC_TO_EVERYONE");
-    await wrapper.get(".tiktok-direct-post__consent input").setValue(true);
-    const allowComments = wrapper.findAll(".tiktok-direct-post__checks label")
+    await wrapper.get(".tiktok-settings-dialog .tiktok-direct-post select")
+      .setValue("PUBLIC_TO_EVERYONE");
+    await wrapper.get(".tiktok-settings-dialog .tiktok-direct-post__consent input")
+      .setValue(true);
+    const allowComments = wrapper
+      .findAll(".tiktok-settings-dialog .tiktok-direct-post__checks label")
       .find((label) => label.text().includes("Comments"));
     await allowComments!.get("input").setValue(true);
+
+    const saveSettings = wrapper.findAll(".tiktok-settings-dialog button").find(
+      (button) => button.text().trim() === "Save TikTok settings",
+    );
+    expect(saveSettings?.attributes("disabled")).toBeUndefined();
+    await saveSettings!.trigger("click");
+    await flushPromises();
+
+    expect(api.patch).toHaveBeenCalledWith(
+      "/social/versions/version-tiktok",
+      {
+        publishingSettings: {
+          tiktok: {
+            deliveryMode: "direct_publish",
+            privacyLevel: "PUBLIC_TO_EVERYONE",
+            allowComment: true,
+            allowDuet: false,
+            allowStitch: false,
+            brandContent: false,
+            brandOrganic: false,
+            isAiGenerated: false,
+            consent: true,
+            videoDurationSeconds: 12.4,
+          },
+        },
+      },
+    );
+
+    const readySchedule = wrapper.findAll(".editor-actions button").find(
+      (button) => button.text().trim() === "Schedule",
+    );
+    await readySchedule!.trigger("click");
+    await flushPromises();
 
     const postNow = wrapper.findAll(".social-schedule-dialog button").find(
       (button) => button.text().trim() === "Post now",
@@ -1952,6 +2112,9 @@ describe("SocialPage", () => {
       platform: "tiktok" as const,
       targetAccountId: "account-tiktok",
       bodyText: "Greetings Earthling 🌍",
+      publishingSettings: {
+        tiktok: { deliveryMode: "provider_draft" as const },
+      },
       assetManifest: [{
         url: "/api/files/file-video-1/content",
         fileId: "file-video-1",
