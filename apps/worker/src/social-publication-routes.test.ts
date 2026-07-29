@@ -194,10 +194,21 @@ describe("social Publication routes", () => {
     const app = createApp();
     const env = {};
     const publication = { id: "publication-1", versionId: "version-1" };
+    const requestContext = {
+      tiktok: {
+        deliveryMode: "direct_publish",
+        privacyLevel: "SELF_ONLY",
+        consent: true,
+      },
+    };
     socialPublishing.createPostVersionPublication.mockResolvedValue(publication);
 
     const response = await app.fetch(
-      new Request("http://localhost/api/social/versions/version-1/publish", { method: "POST" }),
+      new Request("http://localhost/api/social/versions/version-1/publish", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ requestContext }),
+      }),
       env as never,
     );
 
@@ -207,7 +218,7 @@ describe("social Publication routes", () => {
       env,
       "owner",
       "version-1",
-      { requestedByType: "owner" },
+      { requestContext, requestedByType: "owner" },
     );
   });
 

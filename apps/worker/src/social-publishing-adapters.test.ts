@@ -800,7 +800,7 @@ describe("Instagram publishing adapter", () => {
         mediaBodies.push(body);
         return Response.json({ id: `container-${mediaBodies.length}` });
       }
-      if (url.includes("/container-3?fields=status_code")) {
+      if (url.includes("?fields=status_code")) {
         return Response.json({ status_code: "FINISHED" });
       }
       if (url.endsWith("/ig-owner/media_publish")) {
@@ -846,6 +846,47 @@ describe("Instagram publishing adapter", () => {
       expect.stringContaining("https://graph.instagram.com/v25.0/ig-owner/media"),
       expect.any(Object),
     );
+    expect(fetcher.mock.calls.map(([request]) => String(request))).toEqual([
+      "https://graph.instagram.com/v25.0/ig-owner/media",
+      expect.stringContaining("/container-1?fields=status_code"),
+      "https://graph.instagram.com/v25.0/ig-owner/media",
+      expect.stringContaining("/container-2?fields=status_code"),
+      "https://graph.instagram.com/v25.0/ig-owner/media",
+      expect.stringContaining("/container-3?fields=status_code"),
+      "https://graph.instagram.com/v25.0/ig-owner/media_publish",
+    ]);
+  });
+
+  it("waits for a single image container before publishing it", async () => {
+    const requests: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith("/ig-owner/media")) {
+        return Response.json({ id: "single-image-container" });
+      }
+      if (url.includes("/single-image-container?fields=status_code")) {
+        return Response.json({ status_code: "FINISHED" });
+      }
+      if (url.endsWith("/ig-owner/media_publish")) {
+        return Response.json({ id: "instagram-image-1" });
+      }
+      throw new Error(`Unexpected Instagram request: ${url}`);
+    });
+
+    await expect(adapterFor("instagram").publish({
+      accessToken: "ig-token",
+      accountId: "ig-owner",
+      bodyText: "A single image.",
+      assets: [{ url: "https://media.example/image.jpg", kind: "image" }],
+      fetcher: fetcher as typeof fetch,
+    })).resolves.toMatchObject({ ok: true, platformPostId: "instagram-image-1" });
+
+    expect(requests).toEqual([
+      "https://graph.instagram.com/v25.0/ig-owner/media",
+      expect.stringContaining("/single-image-container?fields=status_code"),
+      "https://graph.instagram.com/v25.0/ig-owner/media_publish",
+    ]);
   });
 
   it("waits for Reel processing before publishing", async () => {
@@ -969,6 +1010,145 @@ describe("TikTok draft upload adapter", () => {
     expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
+  it("queries creator settings and sends the exact caption through Direct Post", async () => {
+    const markProviderWriteStarted = vi.fn(async () => undefined);
+    const videoBytes = new Uint8Array([1, 2, 3, 4]);
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v2/post/publish/creator_info/query/")) {
+        expect(init?.method).toBe("POST");
+        return Response.json({
+          data: {
+            creator_avatar_url: "https://media.example/avatar.jpg",
+            creator_username: "owner",
+            creator_nickname: "Owner TikTok",
+            privacy_level_options: ["PUBLIC_TO_EVERYONE", "SELF_ONLY"],
+            comment_disabled: false,
+            duet_disabled: true,
+            stitch_disabled: false,
+            max_video_post_duration_sec: 60,
+          },
+          error: { code: "ok" },
+        });
+      }
+      if (url.endsWith("/v2/post/publish/video/init/")) {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          post_info: {
+            title: "The exact caption #ME3",
+            privacy_level: "PUBLIC_TO_EVERYONE",
+            disable_comment: false,
+            disable_duet: true,
+            disable_stitch: true,
+            brand_content_toggle: false,
+            brand_organic_toggle: true,
+            is_aigc: false,
+          },
+          source_info: {
+            source: "FILE_UPLOAD",
+            video_size: 4,
+            chunk_size: 4,
+            total_chunk_count: 1,
+          },
+        });
+        return Response.json({
+          data: {
+            publish_id: "v_pub_file~direct-1",
+            upload_url: "https://open-upload.tiktokapis.com/video/?upload_id=direct-1",
+          },
+          error: { code: "ok" },
+        });
+      }
+      if (url === "https://media.example/direct.mp4") {
+        return new Response(videoBytes, { status: 206 });
+      }
+      if (url.startsWith("https://open-upload.tiktokapis.com/video/")) {
+        return new Response(null, { status: 201 });
+      }
+      if (url.endsWith("/v2/post/publish/status/fetch/")) {
+        return Response.json({
+          data: { status: "PUBLISH_COMPLETE", uploaded_bytes: 4 },
+          error: { code: "ok" },
+        });
+      }
+      throw new Error(`Unexpected TikTok request: ${url}`);
+    });
+
+    const result = await adapterFor("tiktok").publish({
+      accessToken: "tiktok-token",
+      accountId: "creator-open-id",
+      bodyText: "The exact caption #ME3",
+      assets: [{
+        url: "https://media.example/direct.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: videoBytes.byteLength,
+      }],
+      providerOptions: {
+        deliveryMode: "direct_publish",
+        privacyLevel: "PUBLIC_TO_EVERYONE",
+        allowComment: true,
+        allowDuet: true,
+        allowStitch: false,
+        brandContent: false,
+        brandOrganic: true,
+        isAiGenerated: false,
+        consent: true,
+        videoDurationSeconds: 12,
+      },
+      fetcher: fetcher as typeof fetch,
+      markProviderWriteStarted,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      platformPostId: "v_pub_file~direct-1",
+      providerResponse: {
+        delivery: "direct_publish",
+        creatorActionRequired: false,
+      },
+    });
+    expect(markProviderWriteStarted).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(5);
+  });
+
+  it("requires a reconnect when Direct Post scope is missing", async () => {
+    const markProviderWriteStarted = vi.fn(async () => undefined);
+    const fetcher = vi.fn(async () => Response.json({
+      data: {},
+      error: {
+        code: "scope_not_authorized",
+        message: "The access token does not have video.publish.",
+      },
+    }, { status: 401 }));
+
+    await expect(adapterFor("tiktok").publish({
+      accessToken: "draft-only-token",
+      accountId: "creator-open-id",
+      bodyText: "Direct caption",
+      assets: [{
+        url: "https://media.example/direct.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: 4,
+      }],
+      providerOptions: {
+        deliveryMode: "direct_publish",
+        privacyLevel: "SELF_ONLY",
+        consent: true,
+        videoDurationSeconds: 12,
+      },
+      fetcher: fetcher as typeof fetch,
+      markProviderWriteStarted,
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: "scope_not_authorized",
+      errorMessage: "Reconnect TikTok to grant Direct Post access.",
+      failureClass: "reconnect_required",
+    });
+    expect(markProviderWriteStarted).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("resumes a pending upload by polling its existing publish id", async () => {
     const markProviderWriteStarted = vi.fn(async () => undefined);
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1004,7 +1184,7 @@ describe("TikTok draft upload adapter", () => {
         creatorActionRequired: true,
       },
     });
-    expect(markProviderWriteStarted).toHaveBeenCalledTimes(1);
+    expect(markProviderWriteStarted).not.toHaveBeenCalled();
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 

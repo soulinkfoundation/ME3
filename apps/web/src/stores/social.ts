@@ -32,6 +32,7 @@ export type SocialPlatformCapabilities = {
   schedule: boolean;
   publish: boolean;
   deliveryMode: SocialDeliveryMode;
+  supportedDeliveryModes?: SocialDeliveryMode[];
   deliveryLabel: string;
   contentRules: SocialPlatformContentRule[];
   reason: string | null;
@@ -47,7 +48,25 @@ export type SocialAccountRow = {
   avatarSource?: "provider" | "owner_profile" | null;
   credentialSource: "hosted_oauth" | "byo";
   status: string;
+  scopes?: string[];
   lastVerifiedAt: string | null;
+};
+
+export type TikTokPrivacyLevel =
+  | "PUBLIC_TO_EVERYONE"
+  | "MUTUAL_FOLLOW_FRIENDS"
+  | "FOLLOWER_OF_CREATOR"
+  | "SELF_ONLY";
+
+export type TikTokCreatorInfo = {
+  avatarUrl: string | null;
+  username: string;
+  nickname: string;
+  privacyLevelOptions: TikTokPrivacyLevel[];
+  commentDisabled: boolean;
+  duetDisabled: boolean;
+  stitchDisabled: boolean;
+  maxVideoPostDurationSeconds: number;
 };
 
 export type DriveFolder = {
@@ -874,14 +893,26 @@ export const useSocialStore = defineStore("social", () => {
     return data.version;
   }
 
-  async function publishPostVersion(versionId: string): Promise<Publication> {
+  async function publishPostVersion(
+    versionId: string,
+    input: CreatePublicationInput = {},
+  ): Promise<Publication> {
     error.value = null;
     const data = await api.post<{ publication: Publication }>(
       `/social/versions/${encodeURIComponent(versionId)}/publish`,
-      {},
+      input,
     );
     if (!data.publication) throw new Error("No Publication returned");
     return data.publication;
+  }
+
+  async function getTikTokCreatorInfo(accountId: string): Promise<TikTokCreatorInfo> {
+    error.value = null;
+    const data = await api.get<{ creatorInfo: TikTokCreatorInfo }>(
+      `/social/accounts/${encodeURIComponent(accountId)}/tiktok/creator-info`,
+    );
+    if (!data.creatorInfo) throw new Error("No TikTok creator information returned");
+    return data.creatorInfo;
   }
 
   async function listPostVersionPublications(versionId: string): Promise<Publication[]> {
@@ -1003,6 +1034,7 @@ export const useSocialStore = defineStore("social", () => {
     publishPostVersion,
     listPostVersionPublications,
     createPostVersionPublication,
+    getTikTokCreatorInfo,
     cancelPublication,
     resolvePublicationOutcome,
     updateProviderSetting,

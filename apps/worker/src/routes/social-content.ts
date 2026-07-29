@@ -494,14 +494,16 @@ export function registerSocialContentRoutes(app: AppHono, deps: OwnerRouteDeps) 
   app.post("/api/social/versions/:id/publish", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
 
     try {
       await requireSocialPublishing(c);
+      const input = (body && typeof body === "object" ? body : {}) as CreatePublicationInput;
       const publication = await createPostVersionPublication(
         c.env,
         ownerId,
         c.req.param("id"),
-        { requestedByType: "owner" },
+        { ...input, requestedByType: "owner" },
       );
       if (!publication) return c.json({ ok: false, error: "Post Version not found" }, 404);
       return c.json({ ok: true, publication });

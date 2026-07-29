@@ -2,10 +2,27 @@ import {
   SocialPublishingGateError,
   SocialPublishingInputError,
   disconnectSocialPublishingAccount,
+  getTikTokCreatorInfo,
 } from "../social-publishing";
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
 
 export function registerSocialAccountRoutes(app: AppHono, deps: OwnerRouteDeps) {
+  app.get("/api/social/accounts/:id/tiktok/creator-info", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    try {
+      const creatorInfo = await getTikTokCreatorInfo(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+      );
+      if (!creatorInfo) return c.json({ ok: false, error: "TikTok account not found" }, 404);
+      return c.json({ ok: true, creatorInfo });
+    } catch (error) {
+      return socialAccountErrorResponse(c, error);
+    }
+  });
+
   app.delete("/api/social/accounts/:id", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);

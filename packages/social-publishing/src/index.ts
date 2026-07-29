@@ -1,4 +1,8 @@
-import { adapterFor } from "./adapters";
+import {
+  adapterFor,
+  queryTikTokCreatorInfo,
+  type TikTokCreatorInfo,
+} from "./adapters";
 import {
   canPublishSocialPlatform,
   canScheduleSocialPlatform,
@@ -22,6 +26,9 @@ export {
   type SocialPublishAdapter,
   type SocialPublishAdapterResult,
   type SocialPublishFailureClass,
+  type TikTokCreatorInfo,
+  type TikTokDeliveryOptions,
+  type TikTokPrivacyLevel,
 } from "./adapters";
 
 export {
@@ -505,6 +512,7 @@ type SocialPublicationRow = {
   pub_updated_at: string;
   pub_error_code: string | null;
   pub_provider_response_json: string | null;
+  pub_request_context_json: string;
   title: string;
   body: string;
   media_manifest_json: string;
@@ -519,6 +527,18 @@ type SocialPublicationRow = {
   account_status: string | null;
   account_metadata_json: string | null;
 };
+
+type PublishingAccessTokenRow = Pick<
+  SocialPublicationRow,
+  | "platform"
+  | "user_id"
+  | "account_id"
+  | "access_token_ciphertext"
+  | "refresh_token_ciphertext"
+  | "token_expires_at"
+  | "account_status"
+  | "account_metadata_json"
+>;
 
 export type SocialPublishQueueMessage = {
   publicationId: string;
@@ -1092,6 +1112,59 @@ export async function listSocialPublishingAccounts(
       updatedAt: row.updated_at,
     };
   });
+}
+
+export async function getTikTokCreatorInfo(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  accountIdInput: unknown,
+  fetcher: typeof fetch = fetchWithGlobalContext,
+): Promise<TikTokCreatorInfo | null> {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  if (!gate.ready) throw new SocialPublishingGateError(gate);
+  const accountId = normalizeId(accountIdInput);
+  if (!accountId) throw new SocialPublishingInputError("TikTok account id is required");
+
+  const account = await env.DB.prepare(
+    `SELECT account.platform,
+            account.user_id,
+            account.id AS account_id,
+            account.access_token_ciphertext,
+            account.refresh_token_ciphertext,
+            account.token_expires_at,
+            account.status AS account_status,
+            account.metadata_json AS account_metadata_json
+     FROM social_accounts account
+     WHERE account.id = ? AND account.user_id = ? AND account.platform = 'tiktok'`,
+  )
+    .bind(accountId, ownerId)
+    .first<PublishingAccessTokenRow>();
+  if (!account) return null;
+
+  const accessToken = await resolvePublishingAccessToken(env, account, fetcher);
+  if (!accessToken) {
+    throw new SocialPublishingInputError(
+      "Reconnect TikTok before loading Direct Post settings.",
+      424,
+    );
+  }
+  const result = await queryTikTokCreatorInfo(accessToken, fetcher);
+  if (!result.ok) {
+    if (
+      result.errorCode === "scope_not_authorized" ||
+      result.errorCode === "access_token_invalid"
+    ) {
+      throw new SocialPublishingInputError(
+        "Reconnect TikTok to grant Direct Post access.",
+        424,
+      );
+    }
+    throw new SocialPublishingInputError(
+      result.errorMessage,
+      result.status === 429 ? 429 : 502,
+    );
+  }
+  return result.creatorInfo;
 }
 
 export async function disconnectSocialPublishingAccount(
@@ -3693,6 +3766,7 @@ export async function publishQueuedPublication(
   let managedXCostStarted = false;
   let result: import("./adapters").SocialPublishAdapterResult;
   try {
+    const requestContext = parseJsonObject(row.pub_request_context_json);
     result = await adapter.publish({
       accessToken,
       accountId: row.platform_account_id,
@@ -3700,6 +3774,7 @@ export async function publishQueuedPublication(
       bodyText: row.body,
       assets,
       fetcher,
+      providerOptions: requestContext.tiktok,
       resumeProviderResponse,
       markProviderCostStarted: managedXReservation.managed
         ? async () => {
@@ -4368,6 +4443,7 @@ async function getQueuedPublicationRow(
             pub.updated_at AS pub_updated_at,
             pub.error_code AS pub_error_code,
             pub.provider_response_json AS pub_provider_response_json,
+            pub.request_context_json AS pub_request_context_json,
             p.post_title_snapshot AS title,
             pub.body_text_snapshot AS body,
             COALESCE(pub.asset_manifest_json_snapshot, '[]') AS media_manifest_json,
@@ -4988,7 +5064,7 @@ async function revokeSocialVariantApproval(
 
 async function resolvePublishingAccessToken(
   env: SocialPublishingEnv,
-  row: SocialPublicationRow,
+  row: PublishingAccessTokenRow,
   fetcher: typeof fetch,
 ): Promise<string | null> {
   if (!row.access_token_ciphertext) return null;

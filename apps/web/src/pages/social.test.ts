@@ -8,7 +8,14 @@ import SocialPage from "./social.vue";
 
 vi.mock("../api", () => ({
   API_BASE: "/api",
-  api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), put: vi.fn(), delete: vi.fn() },
+  api: {
+    get: vi.fn(),
+    post: vi.fn(),
+    patch: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
+    upload: vi.fn(),
+  },
   ApiError: class ApiError extends Error {},
 }));
 
@@ -44,7 +51,10 @@ function platformCapability(
     schedule: options.schedule,
     publish: true,
     deliveryMode: options.deliveryMode,
-    deliveryLabel: isTikTok ? "Sends a creator draft" : "Publishes directly",
+    supportedDeliveryModes: isTikTok
+      ? ["provider_draft", "direct_publish"]
+      : undefined,
+    deliveryLabel: isTikTok ? "Draft or Direct Post" : "Publishes directly",
     contentRules: isTikTok
       ? [{
           contentType: "short_video",
@@ -1039,6 +1049,57 @@ describe("SocialPage", () => {
       .toBe("Unsaved body");
   });
 
+  it("uploads media into Files from the picker and selects the uploaded file", async () => {
+    const uploadedFile = {
+      id: "file-uploaded",
+      folderId: null,
+      filename: "uploaded.jpg",
+      mimeType: "image/jpeg",
+      size: 404,
+      sha256: "4".repeat(64),
+      status: "ready" as const,
+      previewKind: "image" as const,
+    };
+    const defaultGet = vi.mocked(api.get).getMockImplementation()!;
+    let uploadComplete = false;
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/files/items" && uploadComplete) {
+        return Promise.resolve({ files: [...mediaFiles, uploadedFile] });
+      }
+      return defaultGet(endpoint);
+    });
+    vi.mocked(api.upload).mockImplementation(async () => {
+      uploadComplete = true;
+      return { ok: true, files: [uploadedFile] };
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    const addMedia = wrapper.findAll("button").find((button) => button.text().includes("Add media"));
+    await addMedia!.trigger("click");
+    await flushPromises();
+
+    const file = new File(["image"], "uploaded.jpg", { type: "image/jpeg" });
+    const input = wrapper.get<HTMLInputElement>(".social-media-picker__upload-input");
+    Object.defineProperty(input.element, "files", {
+      configurable: true,
+      value: [file],
+    });
+    await input.trigger("change");
+    await flushPromises();
+
+    expect(api.upload).toHaveBeenCalledTimes(1);
+    const [endpoint, form] = vi.mocked(api.upload).mock.calls[0]!;
+    expect(endpoint).toBe("/files/upload");
+    expect((form as FormData).get("files")).toBe(file);
+    expect(wrapper.findAll(".social-media-picker__grid button")).toHaveLength(4);
+    expect(wrapper.get('button[aria-label^="uploaded.jpg"]').attributes("aria-selected")).toBe("true");
+    expect(wrapper.text()).toContain("Add 1 image");
+    expect(toastHarness.success).toHaveBeenCalledWith(
+      "uploaded.jpg uploaded to Files and selected.",
+    );
+  });
+
   it("shows and saves a platform title only when YouTube requires it", async () => {
     const youtubeAccount = {
       ...account,
@@ -1722,6 +1783,161 @@ describe("SocialPage", () => {
     );
   });
 
+  it("copies the TikTok caption and submits an explicitly configured Direct Post", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const tiktokAccount = {
+      ...account,
+      id: "account-tiktok",
+      platform: "tiktok",
+      handle: "kieranofearth",
+      displayName: "Kieran on TikTok",
+      scopes: ["user.info.basic", "video.upload", "video.publish"],
+    };
+    const tiktokVersion = {
+      ...post.versions[0],
+      id: "version-tiktok",
+      platform: "tiktok" as const,
+      targetAccountId: "account-tiktok",
+      bodyText: "Greetings Earthling 🌍 #ME3",
+      assetManifest: [{
+        url: "/api/files/file-video-1/content",
+        fileId: "file-video-1",
+        kind: "video" as const,
+        mimeType: "video/mp4",
+        byteLength: 303,
+      }],
+    };
+    const tiktokPost = { ...post, versions: [tiktokVersion] };
+
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") return Promise.resolve({ posts: [tiktokPost] });
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [tiktokAccount] });
+      if (endpoint === "/files/folders") return Promise.resolve({ folders: [] });
+      if (endpoint === "/files/items") return Promise.resolve({ files: mediaFiles });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("tiktok", {
+              schedule: false,
+              deliveryMode: "provider_draft",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: true, platforms: ["tiktok"] },
+      });
+      if (endpoint === "/social/accounts/account-tiktok/tiktok/creator-info") {
+        return Promise.resolve({
+          creatorInfo: {
+            avatarUrl: "https://cdn.test/tiktok.jpg",
+            username: "kieranofearth",
+            nickname: "Kieran on TikTok",
+            privacyLevelOptions: ["PUBLIC_TO_EVERYONE", "SELF_ONLY"],
+            commentDisabled: false,
+            duetDisabled: true,
+            stitchDisabled: false,
+            maxVideoPostDurationSeconds: 60,
+          },
+        });
+      }
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.patch).mockResolvedValue({
+      version: { ...tiktokVersion, approvalStatus: "approved" },
+    });
+    vi.mocked(api.post).mockResolvedValue({
+      publication: {
+        id: "publication-tiktok-direct",
+        versionId: "version-tiktok",
+        platform: "tiktok",
+        status: "queued",
+        scheduledFor: null,
+        timezone: null,
+        queuedAt: null,
+        platformPostId: null,
+        platformPostUrl: null,
+        publishedAt: null,
+        failureClass: null,
+        errorCode: null,
+        errorMessage: null,
+        requestedByType: "owner",
+        requestedByUserId: "owner",
+        requestContext: {},
+        createdAt: "2026-07-25T12:00:00.000Z",
+        updatedAt: "2026-07-25T12:00:00.000Z",
+      },
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const video = wrapper.get("video.tiktok-preview__media").element;
+    Object.defineProperty(video, "duration", { configurable: true, value: 12.4 });
+    await wrapper.get("video.tiktok-preview__media").trigger("loadedmetadata");
+
+    const copyCaption = wrapper.get("[aria-label='Copy TikTok caption']");
+    await copyCaption.trigger("click");
+    await flushPromises();
+    expect(writeText).toHaveBeenCalledWith("Greetings Earthling 🌍 #ME3");
+    expect(wrapper.find("[aria-label='TikTok caption copied']").exists()).toBe(true);
+
+    const schedule = wrapper.findAll(".editor-actions button").find(
+      (button) => button.text().trim() === "Schedule",
+    );
+    await schedule!.trigger("click");
+    await wrapper.get("input[value='direct_publish']").setValue();
+    await flushPromises();
+
+    expect(wrapper.get(".tiktok-direct-post__creator").text())
+      .toContain("Kieran on TikTok");
+    expect(wrapper.get(".tiktok-direct-post__duration").text())
+      .toContain("Video length: 13 seconds");
+    expect(wrapper.get(".tiktok-direct-post__checks").text())
+      .toContain("Unavailable in TikTok settings");
+
+    await wrapper.get(".tiktok-direct-post select").setValue("PUBLIC_TO_EVERYONE");
+    await wrapper.get(".tiktok-direct-post__consent input").setValue(true);
+    const allowComments = wrapper.findAll(".tiktok-direct-post__checks label")
+      .find((label) => label.text().includes("Comments"));
+    await allowComments!.get("input").setValue(true);
+
+    const postNow = wrapper.findAll(".social-schedule-dialog button").find(
+      (button) => button.text().trim() === "Post now",
+    );
+    expect(postNow?.attributes("disabled")).toBeUndefined();
+    await postNow!.trigger("click");
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith(
+      "/social/versions/version-tiktok/publish",
+      {
+        requestContext: {
+          surface: "social-editor",
+          batch: false,
+          tiktok: {
+            deliveryMode: "direct_publish",
+            privacyLevel: "PUBLIC_TO_EVERYONE",
+            allowComment: true,
+            allowDuet: false,
+            allowStitch: false,
+            brandContent: false,
+            brandOrganic: false,
+            isAiGenerated: false,
+            consent: true,
+            videoDurationSeconds: 12.4,
+          },
+        },
+      },
+    );
+  });
+
   it("shows a TikTok delivery failure instead of a success confirmation", async () => {
     const tiktokAccount = {
       ...account,
@@ -1812,6 +2028,15 @@ describe("SocialPage", () => {
     expect(wrapper.findAll("[role='alert']")).toHaveLength(1);
     expect(toastHarness.error).toHaveBeenCalledWith(message);
     expect(toastHarness.success).not.toHaveBeenCalled();
-    expect(api.post).toHaveBeenCalledWith("/social/versions/version-tiktok/publish", {});
+    expect(api.post).toHaveBeenCalledWith(
+      "/social/versions/version-tiktok/publish",
+      {
+        requestContext: {
+          surface: "social-editor",
+          batch: false,
+          tiktok: { deliveryMode: "provider_draft" },
+        },
+      },
+    );
   });
 });

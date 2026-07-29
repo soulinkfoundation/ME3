@@ -103,7 +103,7 @@ const oauthMessage = computed(() => {
     return "YouTube channel connected. Private video delivery is coming next.";
   }
   if (oauthConnected.value === "tiktok") {
-    return "TikTok connected. Short videos can now be sent to your TikTok inbox as drafts.";
+    return "TikTok connected. Short videos can be sent as creator drafts or Direct Posts.";
   }
   return null;
 });
@@ -133,7 +133,7 @@ const oauthErrorMessage = computed(() => {
       return "TikTok rejected the authorization code. Confirm the redirect URI is exactly https://api.me3.app/api/social/tiktok/callback, then try again.";
     case "tiktok_token_invalid_scope":
     case "tiktok_token_unauthorized_client":
-      return "The TikTok app is not allowed to request user.info.basic and video.upload. Check its Login Kit and Content Posting API configuration.";
+      return "The TikTok app is not allowed to request user.info.basic, video.upload, and video.publish. Check its Login Kit and Content Posting API configuration.";
     case "tiktok_token_response":
       return "TikTok returned an incomplete token response. Check the app products and scopes, then reconnect.";
     case "tiktok_token":

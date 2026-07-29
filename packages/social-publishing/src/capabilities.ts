@@ -23,6 +23,7 @@ export type SocialPlatformCapabilities = {
   schedule: boolean;
   publish: boolean;
   deliveryMode: SocialDeliveryMode;
+  supportedDeliveryModes?: SocialDeliveryMode[];
   deliveryLabel: string;
   contentRules: SocialPlatformContentRule[];
   reason: string | null;
@@ -202,13 +203,14 @@ const PLATFORM_CAPABILITIES: Record<SocialPlatform, SocialPlatformCapabilities> 
     schedule: false,
     publish: true,
     deliveryMode: "provider_draft",
-    deliveryLabel: "Sends a creator draft",
+    supportedDeliveryModes: ["provider_draft", "direct_publish"],
+    deliveryLabel: "Draft or Direct Post",
     contentRules: [
       shortVideoRule(
         null,
         ["video/mp4", "video/quicktime", "video/webm"],
         4 * 1024 * 1024 * 1024,
-        "Sends the video to the TikTok creator inbox. Finish the caption and publish in TikTok.",
+        "Choose a TikTok creator draft to finish in the app or a consented Direct Post.",
       ),
     ],
     reason: null,

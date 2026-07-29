@@ -11,6 +11,11 @@ import { API_BASE } from "../api";
 import { useAppToast } from "../composables/useAppToast";
 import { socialPlatformIconPath } from "../utils/social-platform-icons";
 import { resolveLocalDateTimeToUtc } from "../utils/timezone";
+import {
+  uploadDriveFiles,
+  usesMultipartDriveUpload,
+  type DriveUploadProgress,
+} from "../utils/drive-upload";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import {
@@ -25,6 +30,8 @@ import {
   type SocialPlatformCapabilities,
   type SocialPlatformContentRule,
   type SocialPostDetail,
+  type TikTokCreatorInfo,
+  type TikTokPrivacyLevel,
 } from "../stores/social";
 
 definePage({
@@ -38,6 +45,7 @@ definePage({
 });
 
 type WorkspaceMode = "drafts" | "scheduled" | "published";
+type TikTokDeliveryMode = "provider_draft" | "direct_publish";
 
 type WorkspaceSnapshot = {
   posts: SocialPostDetail[];
@@ -104,6 +112,9 @@ const mediaFolderId = ref<string | null>(null);
 const selectedMediaFileIds = ref<string[]>([]);
 const mediaLoading = ref(false);
 const mediaError = ref("");
+const mediaUploadInput = ref<HTMLInputElement | null>(null);
+const mediaUploadBusy = ref(false);
+const mediaUploadProgress = ref<DriveUploadProgress | null>(null);
 const showSchedule = ref(false);
 const scheduleDate = ref("");
 const scheduleTime = ref("09:00");
@@ -112,6 +123,21 @@ const scheduleTimezone = computed(
 );
 const scheduleError = ref("");
 const scheduling = ref(false);
+const tiktokDeliveryMode = ref<TikTokDeliveryMode>("provider_draft");
+const tiktokCreatorInfo = ref<TikTokCreatorInfo | null>(null);
+const tiktokCreatorInfoLoading = ref(false);
+const tiktokCreatorInfoError = ref("");
+const tiktokPrivacyLevel = ref<TikTokPrivacyLevel | "">("");
+const tiktokAllowComment = ref(false);
+const tiktokAllowDuet = ref(false);
+const tiktokAllowStitch = ref(false);
+const tiktokCommercialContent = ref(false);
+const tiktokBrandOrganic = ref(false);
+const tiktokBrandContent = ref(false);
+const tiktokIsAiGenerated = ref(false);
+const tiktokConsent = ref(false);
+const tiktokVideoDurationSeconds = ref<number | null>(null);
+const tiktokCaptionCopied = ref(false);
 const deleteCandidate = ref<DeleteCandidate | null>(null);
 const linkPreview = ref<SocialLinkPreview | null>(null);
 const linkPreviewLoading = ref(false);
@@ -127,6 +153,8 @@ let editorSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let linkPreviewTimer: ReturnType<typeof setTimeout> | null = null;
 let linkPreviewSequence = 0;
 let workspaceLoadSequence = 0;
+let tiktokCreatorInfoSequence = 0;
+let tiktokCaptionCopiedTimer: ReturnType<typeof setTimeout> | null = null;
 const MEDIA_CACHE_TTL_MS = 60_000;
 const mediaFileCache = new Map<string, { files: DriveFile[]; cachedAt: number }>();
 let mediaFolderCache: { folders: DriveFolder[]; cachedAt: number } | null = null;
@@ -288,6 +316,16 @@ const actionableValidations = computed(() => {
   return targetValidations.value.filter((validation) => versionIds.has(validation.version.id));
 });
 
+const publicationTikTokVersion = computed(
+  () => actionableValidations.value.find(
+    (validation) => validation.version.platform === "tiktok",
+  )?.version || null,
+);
+
+const tiktokDirectPostSupported = computed(() =>
+  capabilityFor("tiktok")?.supportedDeliveryModes?.includes("direct_publish") === true,
+);
+
 const canPublish = computed(() => Boolean(
   !selectedPostReadOnly.value &&
   actionableValidations.value.length > 0 &&
@@ -311,6 +349,40 @@ const canPublishNow = computed(() => Boolean(
     (validation) =>
       validation.capability?.publish &&
       !versionHasActivePublication(validation.version),
+  ),
+));
+
+const tiktokCommercialSelectionValid = computed(() =>
+  !tiktokCommercialContent.value ||
+  tiktokBrandOrganic.value ||
+  tiktokBrandContent.value,
+);
+
+const tiktokVideoDurationValid = computed(() => Boolean(
+  tiktokCreatorInfo.value &&
+  tiktokVideoDurationSeconds.value &&
+  tiktokVideoDurationSeconds.value <=
+    tiktokCreatorInfo.value.maxVideoPostDurationSeconds,
+));
+
+const tiktokDirectPostReady = computed(() => Boolean(
+  tiktokDeliveryMode.value === "direct_publish" &&
+  tiktokCreatorInfo.value &&
+  !tiktokCreatorInfoLoading.value &&
+  !tiktokCreatorInfoError.value &&
+  tiktokPrivacyLevel.value &&
+  tiktokCommercialSelectionValid.value &&
+  !(tiktokBrandContent.value && tiktokPrivacyLevel.value === "SELF_ONLY") &&
+  tiktokVideoDurationValid.value &&
+  tiktokConsent.value,
+));
+
+const canSubmitPublishNow = computed(() => Boolean(
+  canPublishNow.value &&
+  (
+    !publicationTikTokVersion.value ||
+    tiktokDeliveryMode.value === "provider_draft" ||
+    tiktokDirectPostReady.value
   ),
 ));
 
@@ -1582,6 +1654,7 @@ async function openMediaPicker() {
   selectedMediaFileIds.value = [];
   mediaFolderId.value = null;
   mediaError.value = "";
+  mediaUploadProgress.value = null;
   const cachedFiles = mediaFileCache.get("");
   if (
     mediaFolderCache &&
@@ -1610,6 +1683,64 @@ async function openMediaPicker() {
     mediaError.value = social.error || "Failed to load media from Files";
   } finally {
     mediaLoading.value = false;
+  }
+}
+
+function triggerMediaUpload() {
+  mediaUploadInput.value?.click();
+}
+
+async function handleMediaUpload(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files || []);
+  input.value = "";
+  if (files.length === 0 || mediaUploadBusy.value) return;
+
+  mediaUploadBusy.value = true;
+  mediaError.value = "";
+  try {
+    const uploaded = await uploadDriveFiles<DriveFile>(files, {
+      folderId: mediaFolderId.value,
+      onProgress: (progress) => {
+        mediaUploadProgress.value = progress;
+      },
+    });
+    const uploadedMedia = uploaded.filter(isMediaFile);
+    mediaFileCache.delete(mediaFolderId.value || "");
+    await loadMediaFiles();
+
+    const uploadedVideo = uploadedMedia.find(isVideoFile);
+    if (uploadedVideo) {
+      selectedMediaFileIds.value = [uploadedVideo.id];
+    } else {
+      const selectedImages = selectedMediaFileIds.value.filter((id) => {
+        const file = mediaFiles.value.find((item) => item.id === id);
+        return Boolean(file && !isVideoFile(file));
+      });
+      selectedMediaFileIds.value = [...new Set([
+        ...selectedImages,
+        ...uploadedMedia.map((file) => file.id),
+      ])];
+    }
+
+    if (uploadedMedia.length === 0) {
+      mediaError.value = "The upload completed, but none of the files were images or videos.";
+    } else {
+      toastSuccess(
+        uploadedMedia.length === 1
+          ? `${uploadedMedia[0]!.filename} uploaded to Files and selected.`
+          : `${uploadedMedia.length} media files uploaded to Files and selected.`,
+      );
+    }
+  } catch (value) {
+    social.setErrorFromApi(value, "Upload failed");
+    const resumable = files.some(usesMultipartDriveUpload);
+    mediaError.value = `${social.error || "Upload failed"}${
+      resumable ? " Choose the same file again to resume." : ""
+    }`;
+  } finally {
+    mediaUploadBusy.value = false;
+    mediaUploadProgress.value = null;
   }
 }
 
@@ -1766,10 +1897,119 @@ async function removeMedia(assetUrl: string) {
   }
 }
 
+function tiktokPrivacyLabel(level: TikTokPrivacyLevel): string {
+  if (level === "PUBLIC_TO_EVERYONE") return "Everyone";
+  if (level === "FOLLOWER_OF_CREATOR") return "Followers";
+  if (level === "MUTUAL_FOLLOW_FRIENDS") return "Friends";
+  return "Only me";
+}
+
+function resetTikTokDirectPostOptions() {
+  tiktokCreatorInfoSequence += 1;
+  tiktokCreatorInfo.value = null;
+  tiktokCreatorInfoLoading.value = false;
+  tiktokCreatorInfoError.value = "";
+  tiktokPrivacyLevel.value = "";
+  tiktokAllowComment.value = false;
+  tiktokAllowDuet.value = false;
+  tiktokAllowStitch.value = false;
+  tiktokCommercialContent.value = false;
+  tiktokBrandOrganic.value = false;
+  tiktokBrandContent.value = false;
+  tiktokIsAiGenerated.value = false;
+  tiktokConsent.value = false;
+}
+
+function captureTikTokVideoMetadata(event: Event) {
+  const video = event.currentTarget as HTMLVideoElement | null;
+  const duration = Number(video?.duration);
+  tiktokVideoDurationSeconds.value =
+    Number.isFinite(duration) && duration > 0 ? duration : null;
+}
+
+async function probeTikTokVideoDuration(): Promise<number | null> {
+  if (tiktokVideoDurationSeconds.value) return tiktokVideoDurationSeconds.value;
+  const asset = publicationTikTokVersion.value?.assetManifest.find(isVideoAsset);
+  if (!asset?.url || typeof document === "undefined") return null;
+  return new Promise((resolve) => {
+    const video = document.createElement("video");
+    let settled = false;
+    const finish = (duration: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      video.onloadedmetadata = null;
+      video.onerror = null;
+      resolve(duration);
+    };
+    const timeout = setTimeout(() => finish(null), 5_000);
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      const duration = Number(video.duration);
+      finish(Number.isFinite(duration) && duration > 0 ? duration : null);
+    };
+    video.onerror = () => finish(null);
+    video.src = asset.url;
+  });
+}
+
+async function loadTikTokCreatorInfo() {
+  const version = publicationTikTokVersion.value;
+  const accountId = version?.targetAccountId;
+  if (!version || !accountId) {
+    tiktokCreatorInfoError.value =
+      "Choose a connected TikTok account before using Direct Post.";
+    return;
+  }
+  const sequence = ++tiktokCreatorInfoSequence;
+  tiktokCreatorInfoLoading.value = true;
+  tiktokCreatorInfoError.value = "";
+  tiktokCreatorInfo.value = null;
+  tiktokPrivacyLevel.value = "";
+  tiktokConsent.value = false;
+  try {
+    const [creatorInfo, duration] = await Promise.all([
+      social.getTikTokCreatorInfo(accountId),
+      probeTikTokVideoDuration(),
+    ]);
+    if (sequence !== tiktokCreatorInfoSequence) return;
+    tiktokCreatorInfo.value = creatorInfo;
+    tiktokVideoDurationSeconds.value = duration;
+  } catch (value) {
+    if (sequence !== tiktokCreatorInfoSequence) return;
+    social.setErrorFromApi(value, "TikTok Direct Post settings could not be loaded.");
+    tiktokCreatorInfoError.value =
+      social.error || "TikTok Direct Post settings could not be loaded.";
+  } finally {
+    if (sequence === tiktokCreatorInfoSequence) {
+      tiktokCreatorInfoLoading.value = false;
+    }
+  }
+}
+
+async function copyTikTokCaption() {
+  const caption = editorBody.value;
+  if (!caption.trim()) return;
+  try {
+    await navigator.clipboard.writeText(caption);
+    tiktokCaptionCopied.value = true;
+    toastSuccess("TikTok caption copied.");
+    if (tiktokCaptionCopiedTimer) clearTimeout(tiktokCaptionCopiedTimer);
+    tiktokCaptionCopiedTimer = setTimeout(() => {
+      tiktokCaptionCopied.value = false;
+      tiktokCaptionCopiedTimer = null;
+    }, 2_000);
+  } catch {
+    toastError("Could not copy the TikTok caption.");
+  }
+}
+
 async function openSchedule() {
   if (!canOpenSchedule.value) return;
   await flushPendingEditorSave();
   if (!canOpenSchedule.value) return;
+  tiktokDeliveryMode.value = "provider_draft";
+  resetTikTokDirectPostOptions();
   const start = new Date(Date.now() + 60 * 60 * 1000);
   scheduleDate.value = start.toISOString().slice(0, 10);
   scheduleTime.value = start.toTimeString().slice(0, 5);
@@ -1856,10 +2096,26 @@ async function schedulePost() {
 }
 
 async function publishNow() {
-  if (!canPublishNow.value) return;
+  if (!canSubmitPublishNow.value) return;
   const preparation = capturePublicationPreparation();
   if (!preparation) return;
   const snapshot = captureWorkspaceSnapshot();
+  const tiktokOptions = publicationTikTokVersion.value
+    ? tiktokDeliveryMode.value === "direct_publish"
+      ? {
+        deliveryMode: "direct_publish" as const,
+        privacyLevel: tiktokPrivacyLevel.value,
+        allowComment: tiktokAllowComment.value,
+        allowDuet: tiktokAllowDuet.value,
+        allowStitch: tiktokAllowStitch.value,
+        brandContent: tiktokCommercialContent.value && tiktokBrandContent.value,
+        brandOrganic: tiktokCommercialContent.value && tiktokBrandOrganic.value,
+        isAiGenerated: tiktokIsAiGenerated.value,
+        consent: tiktokConsent.value,
+        videoDurationSeconds: tiktokVideoDurationSeconds.value,
+      }
+      : { deliveryMode: "provider_draft" as const }
+    : null;
 
   scheduling.value = true;
   error.value = "";
@@ -1873,7 +2129,16 @@ async function publishNow() {
   try {
     const versions = await persistPublicationPreparation(preparation);
     const results = await Promise.allSettled(versions.map(async (version) => {
-      const publication = await social.publishPostVersion(version.id);
+      const tiktok = version.platform === "tiktok" ? tiktokOptions : null;
+      const publication = await social.publishPostVersion(version.id, tiktok
+        ? {
+          requestContext: {
+            surface: "social-editor",
+            batch: versions.length > 1,
+            tiktok,
+          },
+        }
+        : {});
       replaceVersion({
         ...version,
         publicationStatus: publication.status,
@@ -1920,6 +2185,8 @@ async function publishNow() {
       return;
     }
     const includesTikTok = versions.some((version) => version.platform === "tiktok");
+    const includesTikTokDirectPost =
+      includesTikTok && tiktokDeliveryMode.value === "direct_publish";
     const inProgress = publications.filter(
       (publication) =>
         publication.status === "queued" ||
@@ -1929,13 +2196,23 @@ async function publishNow() {
     if (inProgress.length > 0) {
       toast(
         `Sending to ${inProgress.length} platform${inProgress.length === 1 ? "" : "s"}…` +
-        (includesTikTok ? " TikTok will receive a creator draft to finish in the app." : ""),
+        (
+          includesTikTokDirectPost
+            ? " TikTok is processing the Direct Post."
+            : includesTikTok
+              ? " TikTok will receive a creator draft to finish in the app."
+              : ""
+        ),
       );
     } else if (includesTikTok) {
       toastSuccess(
-        succeeded === 1
-          ? "TikTok draft sent to your inbox."
-          : `Published to ${succeeded} platforms. The TikTok draft was sent to your inbox.`,
+        includesTikTokDirectPost
+          ? succeeded === 1
+            ? "TikTok Direct Post submitted."
+            : `Published to ${succeeded} platforms, including TikTok.`
+          : succeeded === 1
+            ? "TikTok draft sent to your inbox."
+            : `Published to ${succeeded} platforms. The TikTok draft was sent to your inbox.`,
       );
     } else {
       toastSuccess(`Published to ${succeeded} platform${succeeded === 1 ? "" : "s"}.`);
@@ -1960,6 +2237,36 @@ watch(destinationContentType, () => {
   });
 });
 
+watch(tiktokDeliveryMode, (mode) => {
+  if (mode === "direct_publish") {
+    void loadTikTokCreatorInfo();
+  } else {
+    resetTikTokDirectPostOptions();
+  }
+});
+
+watch(tiktokPrivacyLevel, (privacyLevel) => {
+  if (privacyLevel === "SELF_ONLY") {
+    tiktokBrandContent.value = false;
+  }
+});
+
+watch(tiktokCommercialContent, (enabled) => {
+  if (enabled) return;
+  tiktokBrandOrganic.value = false;
+  tiktokBrandContent.value = false;
+});
+
+watch(
+  () =>
+    selectedVersion.value?.platform === "tiktok"
+      ? selectedVersion.value.assetManifest.map((asset) => asset.url).join("|")
+      : "",
+  () => {
+    tiktokVideoDurationSeconds.value = null;
+  },
+);
+
 watch(editorLinkUrl, (url) => {
   scheduleLinkPreview(url);
 }, { immediate: true });
@@ -1980,6 +2287,7 @@ onUnmounted(() => {
   if (deliveryPollTimer) clearInterval(deliveryPollTimer);
   clearEditorSaveTimer();
   if (linkPreviewTimer) clearTimeout(linkPreviewTimer);
+  if (tiktokCaptionCopiedTimer) clearTimeout(tiktokCaptionCopiedTimer);
   linkPreviewSequence += 1;
 });
 
@@ -2246,6 +2554,28 @@ function currentQueryParam(name: string): string | null {
               </label>
               <div class="editor-validation-summary" aria-live="polite">
                 <span>{{ Array.from(editorBody).length.toLocaleString() }} characters</span>
+                <Button
+                  v-if="
+                    publicationTikTokVersion &&
+                    (sharedEditor || selectedVersion?.platform === 'tiktok')
+                  "
+                  class="tiktok-caption-copy"
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  icon-only
+                  type="button"
+                  :disabled="!editorBody.trim()"
+                  :aria-label="tiktokCaptionCopied ? 'TikTok caption copied' : 'Copy TikTok caption'"
+                  :title="tiktokCaptionCopied ? 'Copied' : 'Copy TikTok caption'"
+                  @click="copyTikTokCaption"
+                >
+                  <UiIcon
+                    :name="tiktokCaptionCopied ? 'Check' : 'Copy'"
+                    :size="14"
+                    aria-hidden="true"
+                  />
+                </Button>
                 <span v-if="!sharedEditor && targetValidations.find((item) => item.version.id === selectedVersionId)?.issue" class="validation-issue">
                   {{ targetValidations.find((item) => item.version.id === selectedVersionId)?.issue }}
                 </span>
@@ -2337,6 +2667,7 @@ function currentQueryParam(name: string): string | null {
                       preload="metadata"
                       class="tiktok-preview__media"
                       :aria-label="selectedVersion.assetManifest[0]!.altText || selectedVersion.assetManifest[0]!.filename || 'TikTok video preview'"
+                      @loadedmetadata="captureTikTokVideoMetadata"
                     />
                     <img
                       v-else
@@ -2612,22 +2943,59 @@ function currentQueryParam(name: string): string | null {
             <h2 id="social-media-picker-title">Add media</h2>
             <p>Choose multiple images in posting order, or choose one video.</p>
           </div>
-          <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close media picker" @click="showMediaPicker = false">
-            <UiIcon name="X" :size="17" aria-hidden="true" />
-          </Button>
+          <div class="social-media-picker__header-actions">
+            <Button
+              color="outline"
+              shape="soft"
+              size="compact"
+              type="button"
+              :disabled="mediaUploadBusy || mediaLoading"
+              @click="triggerMediaUpload"
+            >
+              <template #icon>
+                <UiIcon name="Upload" :size="16" aria-hidden="true" />
+              </template>
+              {{ mediaUploadBusy ? "Uploading…" : "Upload" }}
+            </Button>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              type="button"
+              aria-label="Close media picker"
+              :disabled="mediaUploadBusy"
+              @click="showMediaPicker = false"
+            >
+              <UiIcon name="X" :size="17" aria-hidden="true" />
+            </Button>
+          </div>
         </header>
+
+        <input
+          ref="mediaUploadInput"
+          class="social-media-picker__upload-input"
+          type="file"
+          accept="image/*,video/*"
+          multiple
+          @change="handleMediaUpload"
+        />
 
         <label class="field">
           <span>Folder</span>
-          <select v-model="mediaFolderId" :disabled="mediaLoading">
+          <select v-model="mediaFolderId" :disabled="mediaLoading || mediaUploadBusy">
             <option :value="null">All files</option>
             <option v-for="folder in mediaFolders" :key="folder.id" :value="folder.id">{{ folder.path || folder.name }}</option>
           </select>
         </label>
 
         <p v-if="mediaError" class="form-error" role="alert">{{ mediaError }}</p>
+        <div v-else-if="mediaUploadProgress" class="social-media-picker__upload-progress" role="status" aria-live="polite">
+          <span>Uploading {{ mediaUploadProgress.filename }} · {{ mediaUploadProgress.percent }}%</span>
+          <progress :value="mediaUploadProgress.percent" max="100">{{ mediaUploadProgress.percent }}%</progress>
+        </div>
         <p v-else-if="mediaLoading" class="form-hint" role="status">Loading media…</p>
-        <p v-else-if="mediaFiles.length === 0" class="form-hint">No images or videos in this folder yet. Add media in Files, then return here.</p>
+        <p v-else-if="mediaFiles.length === 0" class="form-hint">No images or videos in this folder yet. Upload them here or add them in Files.</p>
 
         <div v-else class="social-media-picker__grid" role="listbox" aria-label="Media in Files" aria-multiselectable="true">
           <button
@@ -2651,8 +3019,8 @@ function currentQueryParam(name: string): string | null {
         </div>
 
         <footer>
-          <Button color="outline" shape="soft" size="compact" type="button" @click="showMediaPicker = false">Cancel</Button>
-          <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || selectedMediaFileIds.length === 0" @click="attachSelectedMedia">
+          <Button color="outline" shape="soft" size="compact" type="button" :disabled="mediaUploadBusy" @click="showMediaPicker = false">Cancel</Button>
+          <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || mediaUploadBusy || selectedMediaFileIds.length === 0" @click="attachSelectedMedia">
             Add {{ selectedMediaFileIds.length || "" }} {{ selectedMediaFileIds.some((id) => mediaFiles.find((file) => file.id === id && isVideoFile(file))) ? "video" : `image${selectedMediaFileIds.length === 1 ? "" : "s"}` }}
           </Button>
         </footer>
@@ -2747,14 +3115,234 @@ function currentQueryParam(name: string): string | null {
         <header>
           <div>
             <h2 id="social-schedule-title">Publish post</h2>
-            <p>Publish immediately or choose a date and time.</p>
+            <p v-if="publicationTikTokVersion">
+              Choose how TikTok should receive this video.
+            </p>
+            <p v-else>Publish immediately or choose a date and time.</p>
           </div>
           <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close schedule dialog" @click="showSchedule = false">
             <UiIcon name="X" :size="17" aria-hidden="true" />
           </Button>
         </header>
 
-        <div class="schedule-fields">
+        <fieldset
+          v-if="publicationTikTokVersion"
+          class="tiktok-delivery-options"
+        >
+          <legend>TikTok delivery</legend>
+          <label
+            :class="[
+              'tiktok-delivery-option',
+              { 'is-selected': tiktokDeliveryMode === 'provider_draft' },
+            ]"
+          >
+            <input
+              v-model="tiktokDeliveryMode"
+              type="radio"
+              value="provider_draft"
+            />
+            <span>
+              <strong>Send as draft</strong>
+              <small>Finish the caption, sound, and post inside TikTok.</small>
+            </span>
+          </label>
+          <label
+            :class="[
+              'tiktok-delivery-option',
+              {
+                'is-selected': tiktokDeliveryMode === 'direct_publish',
+                'is-disabled': !tiktokDirectPostSupported,
+              },
+            ]"
+          >
+            <input
+              v-model="tiktokDeliveryMode"
+              type="radio"
+              value="direct_publish"
+              :disabled="!tiktokDirectPostSupported"
+            />
+            <span>
+              <strong>Post directly</strong>
+              <small>Publish this exact video and caption without opening TikTok.</small>
+            </span>
+          </label>
+        </fieldset>
+
+        <section
+          v-if="publicationTikTokVersion && tiktokDeliveryMode === 'direct_publish'"
+          class="tiktok-direct-post"
+          aria-labelledby="tiktok-direct-post-title"
+        >
+          <h3 id="tiktok-direct-post-title">TikTok Direct Post settings</h3>
+
+          <p
+            v-if="tiktokCreatorInfoLoading"
+            class="tiktok-direct-post__status"
+            role="status"
+          >
+            Loading the latest settings from TikTok…
+          </p>
+
+          <div v-else-if="tiktokCreatorInfoError" class="state-banner state-banner--error">
+            <span role="alert">{{ tiktokCreatorInfoError }}</span>
+            <Button
+              color="outline"
+              shape="soft"
+              size="compact"
+              type="button"
+              @click="showSchedule = false; showAccounts = true"
+            >
+              Reconnect TikTok
+            </Button>
+          </div>
+
+          <template v-else-if="tiktokCreatorInfo">
+            <div class="tiktok-direct-post__creator">
+              <img
+                v-if="tiktokCreatorInfo.avatarUrl"
+                :src="tiktokCreatorInfo.avatarUrl"
+                alt=""
+                referrerpolicy="no-referrer"
+              />
+              <span v-else aria-hidden="true">
+                {{ tiktokCreatorInfo.nickname.slice(0, 1).toUpperCase() }}
+              </span>
+              <p>
+                Posting to
+                <strong>{{ tiktokCreatorInfo.nickname }}</strong>
+                <small>@{{ tiktokCreatorInfo.username }}</small>
+              </p>
+            </div>
+
+            <label class="field">
+              <span>Who can view this post?</span>
+              <select v-model="tiktokPrivacyLevel" required>
+                <option disabled value="">Choose visibility</option>
+                <option
+                  v-for="level in tiktokCreatorInfo.privacyLevelOptions"
+                  :key="level"
+                  :value="level"
+                >
+                  {{ tiktokPrivacyLabel(level) }}
+                </option>
+              </select>
+            </label>
+
+            <fieldset class="tiktok-direct-post__checks">
+              <legend>Allow interactions</legend>
+              <label>
+                <input
+                  v-model="tiktokAllowComment"
+                  type="checkbox"
+                  :disabled="tiktokCreatorInfo.commentDisabled"
+                />
+                Comments
+                <small v-if="tiktokCreatorInfo.commentDisabled">Unavailable in TikTok settings</small>
+              </label>
+              <label>
+                <input
+                  v-model="tiktokAllowDuet"
+                  type="checkbox"
+                  :disabled="tiktokCreatorInfo.duetDisabled"
+                />
+                Duet
+                <small v-if="tiktokCreatorInfo.duetDisabled">Unavailable in TikTok settings</small>
+              </label>
+              <label>
+                <input
+                  v-model="tiktokAllowStitch"
+                  type="checkbox"
+                  :disabled="tiktokCreatorInfo.stitchDisabled"
+                />
+                Stitch
+                <small v-if="tiktokCreatorInfo.stitchDisabled">Unavailable in TikTok settings</small>
+              </label>
+            </fieldset>
+
+            <fieldset class="tiktok-direct-post__checks">
+              <legend>Content disclosure</legend>
+              <label>
+                <input v-model="tiktokCommercialContent" type="checkbox" />
+                This content promotes a brand, product, or service
+              </label>
+              <template v-if="tiktokCommercialContent">
+                <label class="tiktok-direct-post__nested-check">
+                  <input v-model="tiktokBrandOrganic" type="checkbox" />
+                  Your brand
+                  <small>The video will be labelled Promotional content.</small>
+                </label>
+                <label class="tiktok-direct-post__nested-check">
+                  <input
+                    v-model="tiktokBrandContent"
+                    type="checkbox"
+                    :disabled="tiktokPrivacyLevel === 'SELF_ONLY'"
+                  />
+                  Branded content
+                  <small>
+                    {{
+                      tiktokPrivacyLevel === 'SELF_ONLY'
+                        ? 'Paid partnerships cannot use Only me visibility.'
+                        : 'The video will be labelled Paid partnership.'
+                    }}
+                  </small>
+                </label>
+                <p
+                  v-if="!tiktokCommercialSelectionValid"
+                  class="form-error"
+                  role="alert"
+                >
+                  Indicate whether this promotes your brand, a third party, or both.
+                </p>
+              </template>
+              <label>
+                <input v-model="tiktokIsAiGenerated" type="checkbox" />
+                Label this as AI-generated content
+              </label>
+            </fieldset>
+
+            <p
+              :class="[
+                'tiktok-direct-post__duration',
+                { 'is-invalid': !tiktokVideoDurationValid },
+              ]"
+            >
+              <template v-if="tiktokVideoDurationSeconds">
+                Video length: {{ Math.ceil(tiktokVideoDurationSeconds) }} seconds.
+                This account allows up to
+                {{ tiktokCreatorInfo.maxVideoPostDurationSeconds }} seconds.
+              </template>
+              <template v-else>
+                ME3 could not read this video’s duration. Reload the video preview before posting.
+              </template>
+            </p>
+
+            <label class="tiktok-direct-post__consent">
+              <input v-model="tiktokConsent" type="checkbox" />
+              <span>
+                By posting, I agree to TikTok’s
+                <a
+                  href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >Music Usage Confirmation</a>
+                <template v-if="tiktokBrandContent">
+                  and
+                  <a
+                    href="https://www.tiktok.com/legal/page/global/bc-policy/en"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >Branded Content Policy</a>
+                </template>.
+              </span>
+            </label>
+
+            <p class="tiktok-direct-post__notice">
+              TikTok may take a few minutes to process and show the post on your profile.
+            </p>
+          </template>
+        </section>
+
+        <div v-if="canSchedule" class="schedule-fields">
           <label class="field"><span>Date</span><input v-model="scheduleDate" type="date" required /></label>
           <label class="field"><span>Time</span><input v-model="scheduleTime" type="time" required /></label>
         </div>
@@ -2766,7 +3354,7 @@ function currentQueryParam(name: string): string | null {
             shape="soft"
             size="compact"
             type="button"
-            :disabled="scheduling || !canPublishNow"
+            :disabled="scheduling || !canSubmitPublishNow"
             @click="publishNow"
           >
             <template #icon>
@@ -2775,6 +3363,7 @@ function currentQueryParam(name: string): string | null {
             {{ scheduling ? 'Posting…' : 'Post now' }}
           </Button>
           <Button
+            v-if="canSchedule"
             color="primary"
             shape="soft"
             size="compact"
@@ -4389,6 +4978,29 @@ input:focus {
   overflow: auto;
 }
 
+.social-media-picker__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.social-media-picker__upload-input {
+  display: none;
+}
+
+.social-media-picker__upload-progress {
+  display: grid;
+  gap: 7px;
+  color: var(--ui-text-muted);
+  font-size: 0.78rem;
+}
+
+.social-media-picker__upload-progress progress {
+  width: 100%;
+  height: 6px;
+  accent-color: var(--ui-accent);
+}
+
 .social-media-picker__grid button {
   display: grid;
   gap: 7px;
@@ -4442,6 +5054,173 @@ input:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tiktok-caption-copy {
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  flex: 0 0 auto;
+  margin: -10px 0 -10px auto;
+  padding: 0;
+}
+
+.tiktok-delivery-options,
+.tiktok-direct-post__checks {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.tiktok-delivery-options legend,
+.tiktok-direct-post__checks legend {
+  margin-bottom: 2px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.tiktok-delivery-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 64px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  cursor: pointer;
+}
+
+.tiktok-delivery-option:hover,
+.tiktok-delivery-option.is-selected {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.tiktok-delivery-option:focus-within {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+.tiktok-delivery-option.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.tiktok-delivery-option input,
+.tiktok-direct-post__checks input,
+.tiktok-direct-post__consent input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--ui-accent-strong);
+}
+
+.tiktok-delivery-option span,
+.tiktok-delivery-option small,
+.tiktok-direct-post__creator p,
+.tiktok-direct-post__creator small {
+  display: block;
+}
+
+.tiktok-delivery-option small,
+.tiktok-direct-post__creator small,
+.tiktok-direct-post__checks small {
+  margin-top: 2px;
+  color: var(--ui-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.tiktok-direct-post {
+  display: grid;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+}
+
+.tiktok-direct-post h3 {
+  margin: 0;
+  font-size: 0.94rem;
+}
+
+.tiktok-direct-post__status,
+.tiktok-direct-post__duration,
+.tiktok-direct-post__notice {
+  color: var(--ui-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.tiktok-direct-post__duration.is-invalid {
+  color: var(--ui-danger, #a54545);
+}
+
+.tiktok-direct-post__creator {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.tiktok-direct-post__creator > img,
+.tiktok-direct-post__creator > span {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--ui-border);
+  border-radius: 50%;
+  background: var(--ui-surface);
+  object-fit: cover;
+}
+
+.tiktok-direct-post__creator p {
+  min-width: 0;
+}
+
+.tiktok-direct-post__checks label,
+.tiktok-direct-post__consent {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.tiktok-direct-post__checks label:has(small) {
+  grid-template-rows: auto auto;
+}
+
+.tiktok-direct-post__checks label:has(small) input {
+  grid-row: 1 / 3;
+}
+
+.tiktok-direct-post__nested-check {
+  margin-left: 28px;
+}
+
+.tiktok-direct-post__consent {
+  align-items: start;
+}
+
+.tiktok-direct-post__consent input {
+  margin-top: 2px;
+}
+
+.tiktok-direct-post__consent a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .schedule-fields {

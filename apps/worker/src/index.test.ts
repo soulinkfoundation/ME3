@@ -10161,6 +10161,7 @@ describe("ME3 Worker auth", () => {
           schedule: boolean;
           publish: boolean;
           deliveryMode: string;
+          supportedDeliveryModes?: string[];
           deliveryLabel: string;
           contentRules: Array<{ contentType: string }>;
           reason: string | null;
@@ -10239,7 +10240,8 @@ describe("ME3 Worker auth", () => {
         schedule: false,
         publish: true,
         deliveryMode: "provider_draft",
-        deliveryLabel: "Sends a creator draft",
+        supportedDeliveryModes: ["provider_draft", "direct_publish"],
+        deliveryLabel: "Draft or Direct Post",
         reason: null,
       }),
     ]);

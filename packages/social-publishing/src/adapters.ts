@@ -32,6 +32,7 @@ export type SocialPublishAdapter = {
     bodyText: string;
     assets: SocialMediaAsset[];
     fetcher: typeof fetch;
+    providerOptions?: unknown;
     resumeProviderResponse?: unknown;
     markProviderCostStarted?: () => Promise<void>;
     markProviderWriteStarted?: () => Promise<void>;
@@ -69,6 +70,9 @@ const INSTAGRAM_VIDEO_MIME_TYPES = new Set([
 ]);
 const INSTAGRAM_GRAPH_VERSION = "v25.0";
 const TIKTOK_UPLOAD_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/";
+const TIKTOK_DIRECT_POST_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/video/init/";
+const TIKTOK_CREATOR_INFO_URL =
+  "https://open.tiktokapis.com/v2/post/publish/creator_info/query/";
 const TIKTOK_STATUS_URL = "https://open.tiktokapis.com/v2/post/publish/status/fetch/";
 const TIKTOK_SINGLE_CHUNK_MAX_BYTES = 64 * 1024 * 1024;
 const TIKTOK_MULTI_CHUNK_BYTES = 32 * 1024 * 1024;
@@ -80,6 +84,7 @@ const TIKTOK_VIDEO_MIME_TYPES = new Set([
   "video/quicktime",
   "video/webm",
 ]);
+const TIKTOK_CAPTION_MAX_CHARS = 2_200;
 const YOUTUBE_TITLE_MAX_CHARS = 100;
 const YOUTUBE_DESCRIPTION_MAX_CHARS = 5_000;
 const YOUTUBE_VIDEO_MAX_BYTES = 256 * 1024 * 1024 * 1024;
@@ -1050,6 +1055,174 @@ type TikTokApiResponse = {
   error?: { code?: string; message?: string; log_id?: string };
 };
 
+export type TikTokPrivacyLevel =
+  | "PUBLIC_TO_EVERYONE"
+  | "MUTUAL_FOLLOW_FRIENDS"
+  | "FOLLOWER_OF_CREATOR"
+  | "SELF_ONLY";
+
+export type TikTokCreatorInfo = {
+  avatarUrl: string | null;
+  username: string;
+  nickname: string;
+  privacyLevelOptions: TikTokPrivacyLevel[];
+  commentDisabled: boolean;
+  duetDisabled: boolean;
+  stitchDisabled: boolean;
+  maxVideoPostDurationSeconds: number;
+};
+
+export type TikTokDeliveryOptions =
+  | { deliveryMode: "provider_draft" }
+  | {
+    deliveryMode: "direct_publish";
+    privacyLevel: TikTokPrivacyLevel | null;
+    allowComment: boolean;
+    allowDuet: boolean;
+    allowStitch: boolean;
+    brandContent: boolean;
+    brandOrganic: boolean;
+    isAiGenerated: boolean;
+    consent: boolean;
+    videoDurationSeconds: number;
+  };
+
+type TikTokCreatorInfoApiResponse = {
+  data?: {
+    creator_avatar_url?: string;
+    creator_username?: string;
+    creator_nickname?: string;
+    privacy_level_options?: string[];
+    comment_disabled?: boolean;
+    duet_disabled?: boolean;
+    stitch_disabled?: boolean;
+    max_video_post_duration_sec?: number;
+  };
+  error?: { code?: string; message?: string; log_id?: string };
+};
+
+export type TikTokCreatorInfoQueryResult =
+  | {
+    ok: true;
+    creatorInfo: TikTokCreatorInfo;
+    providerResponse: TikTokCreatorInfoApiResponse;
+  }
+  | {
+    ok: false;
+    status: number;
+    errorCode: string;
+    errorMessage: string;
+    providerResponse: TikTokCreatorInfoApiResponse;
+  };
+
+const TIKTOK_PRIVACY_LEVELS = new Set<TikTokPrivacyLevel>([
+  "PUBLIC_TO_EVERYONE",
+  "MUTUAL_FOLLOW_FRIENDS",
+  "FOLLOWER_OF_CREATOR",
+  "SELF_ONLY",
+]);
+
+export async function queryTikTokCreatorInfo(
+  accessToken: string,
+  fetcher: typeof fetch,
+): Promise<TikTokCreatorInfoQueryResult> {
+  let response: Response;
+  try {
+    response = await fetcher(TIKTOK_CREATOR_INFO_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json; charset=UTF-8",
+      },
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      status: 503,
+      errorCode: "tiktok_creator_info_unavailable",
+      errorMessage: `TikTok creator settings could not be loaded: ${describeFetchError(error).message}`,
+      providerResponse: {},
+    };
+  }
+
+  const body = await readJson<TikTokCreatorInfoApiResponse>(response);
+  const apiError = body.error?.code?.trim();
+  if (!response.ok || (apiError && apiError !== "ok")) {
+    return {
+      ok: false,
+      status: response.status,
+      errorCode: apiError || "tiktok_creator_info",
+      errorMessage:
+        body.error?.message ||
+        `TikTok creator settings could not be loaded (${response.status}).`,
+      providerResponse: body,
+    };
+  }
+
+  const data = body.data;
+  const privacyLevelOptions = (data?.privacy_level_options || []).filter(
+    (value): value is TikTokPrivacyLevel =>
+      TIKTOK_PRIVACY_LEVELS.has(value as TikTokPrivacyLevel),
+  );
+  const maxVideoPostDurationSeconds = Number(data?.max_video_post_duration_sec);
+  if (
+    !data?.creator_username?.trim() ||
+    !data.creator_nickname?.trim() ||
+    privacyLevelOptions.length === 0 ||
+    !Number.isFinite(maxVideoPostDurationSeconds) ||
+    maxVideoPostDurationSeconds <= 0
+  ) {
+    return {
+      ok: false,
+      status: 502,
+      errorCode: "tiktok_creator_info_incomplete",
+      errorMessage: "TikTok returned incomplete Direct Post settings. Reconnect and try again.",
+      providerResponse: body,
+    };
+  }
+
+  return {
+    ok: true,
+    creatorInfo: {
+      avatarUrl: data.creator_avatar_url?.trim() || null,
+      username: data.creator_username.trim(),
+      nickname: data.creator_nickname.trim(),
+      privacyLevelOptions,
+      commentDisabled: data.comment_disabled === true,
+      duetDisabled: data.duet_disabled === true,
+      stitchDisabled: data.stitch_disabled === true,
+      maxVideoPostDurationSeconds,
+    },
+    providerResponse: body,
+  };
+}
+
+function tikTokDeliveryOptions(value: unknown): TikTokDeliveryOptions {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { deliveryMode: "provider_draft" };
+  }
+  const options = value as Record<string, unknown>;
+  if (options.deliveryMode !== "direct_publish") {
+    return { deliveryMode: "provider_draft" };
+  }
+  const privacyLevel = typeof options.privacyLevel === "string" &&
+      TIKTOK_PRIVACY_LEVELS.has(options.privacyLevel as TikTokPrivacyLevel)
+    ? options.privacyLevel as TikTokPrivacyLevel
+    : null;
+  return {
+    deliveryMode: "direct_publish",
+    privacyLevel,
+    allowComment: options.allowComment === true,
+    allowDuet: options.allowDuet === true,
+    allowStitch: options.allowStitch === true,
+    brandContent: options.brandContent === true,
+    brandOrganic: options.brandOrganic === true,
+    isAiGenerated: options.isAiGenerated === true,
+    consent: options.consent === true,
+    videoDurationSeconds: Number(options.videoDurationSeconds),
+  };
+}
+
 function tikTokResumePublishId(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const publishId = (value as Record<string, unknown>).publishId;
@@ -1071,25 +1244,124 @@ const tikTokAdapter: SocialPublishAdapter = {
       return providerError("tiktok_validation_failed", validation.error, undefined, "unsupported");
     }
 
-    await input.markProviderWriteStarted?.();
+    const deliveryOptions = tikTokDeliveryOptions(input.providerOptions);
     let publishId = tikTokResumePublishId(input.resumeProviderResponse);
     let initialized: TikTokApiResponse | null = null;
+    let creatorInfoResponse: TikTokCreatorInfoApiResponse | null = null;
 
     if (!publishId) {
       const asset = input.assets[0]!;
       const byteLength = asset.byteLength!;
       const mimeType = normalizeMimeType(asset.mimeType)!;
       const plan = tikTokChunkPlan(byteLength);
+      let initUrl = TIKTOK_UPLOAD_INIT_URL;
+      let postInfo: Record<string, unknown> | null = null;
+
+      if (deliveryOptions.deliveryMode === "direct_publish") {
+        const caption = input.bodyText.trim();
+        if (characterLength(caption) > TIKTOK_CAPTION_MAX_CHARS) {
+          return providerError(
+            "tiktok_caption_too_long",
+            `The TikTok caption is too long (max ${TIKTOK_CAPTION_MAX_CHARS} characters).`,
+          );
+        }
+        if (!deliveryOptions.consent) {
+          return providerError(
+            "tiktok_consent_required",
+            "Confirm TikTok's music usage terms before posting directly.",
+          );
+        }
+        if (!deliveryOptions.privacyLevel) {
+          return providerError(
+            "tiktok_privacy_required",
+            "Choose who can view this TikTok before posting directly.",
+          );
+        }
+        if (
+          !Number.isFinite(deliveryOptions.videoDurationSeconds) ||
+          deliveryOptions.videoDurationSeconds <= 0
+        ) {
+          return providerError(
+            "tiktok_video_duration_required",
+            "ME3 needs the TikTok video duration before posting directly.",
+          );
+        }
+        if (
+          deliveryOptions.brandContent &&
+          deliveryOptions.privacyLevel === "SELF_ONLY"
+        ) {
+          return providerError(
+            "tiktok_branded_content_privacy",
+            "Branded TikTok content cannot use Only me visibility.",
+          );
+        }
+
+        const creatorInfo = await queryTikTokCreatorInfo(
+          input.accessToken,
+          input.fetcher,
+        );
+        if (!creatorInfo.ok) {
+          return providerError(
+            creatorInfo.errorCode,
+            creatorInfo.errorCode === "scope_not_authorized"
+              ? "Reconnect TikTok to grant Direct Post access."
+              : creatorInfo.errorMessage,
+            creatorInfo.providerResponse,
+            creatorInfo.status === 401 || creatorInfo.status === 403
+              ? "reconnect_required"
+              : failureClassForStatus(creatorInfo.status),
+          );
+        }
+        creatorInfoResponse = creatorInfo.providerResponse;
+        if (
+          !creatorInfo.creatorInfo.privacyLevelOptions.includes(
+            deliveryOptions.privacyLevel,
+          )
+        ) {
+          return providerError(
+            "privacy_level_option_mismatch",
+            "Choose a TikTok privacy option currently available for this account.",
+            creatorInfo.providerResponse,
+          );
+        }
+        if (
+          deliveryOptions.videoDurationSeconds >
+          creatorInfo.creatorInfo.maxVideoPostDurationSeconds
+        ) {
+          return providerError(
+            "tiktok_video_too_long",
+            `This TikTok account accepts videos up to ${creatorInfo.creatorInfo.maxVideoPostDurationSeconds} seconds.`,
+            creatorInfo.providerResponse,
+          );
+        }
+
+        initUrl = TIKTOK_DIRECT_POST_INIT_URL;
+        postInfo = {
+          title: caption,
+          privacy_level: deliveryOptions.privacyLevel,
+          disable_comment:
+            creatorInfo.creatorInfo.commentDisabled || !deliveryOptions.allowComment,
+          disable_duet:
+            creatorInfo.creatorInfo.duetDisabled || !deliveryOptions.allowDuet,
+          disable_stitch:
+            creatorInfo.creatorInfo.stitchDisabled || !deliveryOptions.allowStitch,
+          brand_content_toggle: deliveryOptions.brandContent,
+          brand_organic_toggle: deliveryOptions.brandOrganic,
+          is_aigc: deliveryOptions.isAiGenerated,
+        };
+      }
 
       let initResponse: Response;
       try {
-        initResponse = await input.fetcher(TIKTOK_UPLOAD_INIT_URL, {
+        await input.markProviderWriteStarted?.();
+        initResponse = await input.fetcher(initUrl, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${input.accessToken}`,
             "Content-Type": "application/json; charset=UTF-8",
           },
           body: JSON.stringify({
+            ...(postInfo ? { post_info: postInfo } : {}),
             source_info: {
               source: "FILE_UPLOAD",
               video_size: byteLength,
@@ -1223,15 +1495,24 @@ const tikTokAdapter: SocialPublishAdapter = {
       }
 
       const status = lastStatus.data?.status?.trim();
-      if (status === "SEND_TO_USER_INBOX" || status === "PUBLISH_COMPLETE") {
+      const deliveryComplete = deliveryOptions.deliveryMode === "direct_publish"
+        ? status === "PUBLISH_COMPLETE"
+        : status === "SEND_TO_USER_INBOX" || status === "PUBLISH_COMPLETE";
+      if (deliveryComplete) {
         return {
           ok: true,
           platformPostId: publishId,
           providerResponse: {
-            delivery: "creator_draft",
-            creatorActionRequired: status !== "PUBLISH_COMPLETE",
+            delivery:
+              deliveryOptions.deliveryMode === "direct_publish"
+                ? "direct_publish"
+                : "creator_draft",
+            creatorActionRequired:
+              deliveryOptions.deliveryMode === "provider_draft" &&
+              status !== "PUBLISH_COMPLETE",
             publishId,
             init: initialized,
+            creatorInfo: creatorInfoResponse,
             status: lastStatus,
           },
         };
@@ -1731,6 +2012,8 @@ async function publishInstagram(
       if (!child.ok) return child.result;
       children.push(child.id);
       created.push(child.response);
+      const childReady = await waitForInstagramContainer(origin, input, child.id);
+      if (!childReady.ok) return childReady.result;
     }
     const carousel = await createInstagramMediaContainer(origin, input, {
       media_type: "CAROUSEL",
@@ -1752,6 +2035,8 @@ async function publishInstagram(
     if (!single.ok) return single.result;
     creationId = single.id;
     created.push(single.response);
+    const ready = await waitForInstagramContainer(origin, input, creationId);
+    if (!ready.ok) return ready.result;
   }
 
   let publishResponse: Response;
