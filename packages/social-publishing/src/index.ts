@@ -699,7 +699,6 @@ type SocialPublishingEnv = {
   ME3_CUSTOM_DOMAIN?: string;
   ME3_DEPLOYMENT_MODE?: string;
   ME3_SOCIAL_OAUTH_ORIGIN?: string;
-  ME3_SOCIAL_OAUTH_TEST_INSTALL?: string;
   TOKEN_ENCRYPTION_KEY?: string;
 };
 
@@ -718,10 +717,7 @@ export async function resolveHostedSocialOAuthOrigin(
   if (configuredOrigin && configuredOrigin !== ME3_CLOUD_SOCIAL_OAUTH_ORIGIN) {
     return configuredOrigin;
   }
-  const officialBridgeAllowed =
-    isManagedDeployment(env) ||
-    env.ME3_SOCIAL_OAUTH_TEST_INSTALL?.trim().toLowerCase() === "true";
-  if (!officialBridgeAllowed) return null;
+  if (!isManagedDeployment(env)) return null;
 
   try {
     const [ownerId, installId, installToken] = await Promise.all(

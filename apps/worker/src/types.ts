@@ -24,7 +24,6 @@ export interface Env {
   ME3_MANAGED_INSTALLATION_ID?: string;
   ME3_MANAGED_EMAIL_GATEWAY_ORIGIN?: string;
   ME3_SOCIAL_OAUTH_ORIGIN?: string;
-  ME3_SOCIAL_OAUTH_TEST_INSTALL?: string;
   ME3_LOCATION_SEARCH_ORIGIN?: string;
 
   JWT_SECRET?: string;
