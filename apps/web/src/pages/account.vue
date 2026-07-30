@@ -896,6 +896,15 @@ const me3ConnectionDescription = computed(() => {
   return "Use ME3.app to claim and sign in to this Core install.";
 });
 
+const me3AccountURL = computed(() => {
+  const origin = me3Connection.value?.origin || "https://me3.app";
+  try {
+    return new URL("/account", origin).toString();
+  } catch {
+    return "https://me3.app/account";
+  }
+});
+
 const localPasswordSaveDisabled = computed(
   () =>
     localPasswordSaving.value ||
@@ -2878,6 +2887,13 @@ onBeforeUnmount(() => {
                       >
                         Core me.json
                       </a>
+                      <a
+                        :href="me3AccountURL"
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        Manage ME3 account
+                      </a>
                     </div>
                   </div>
                   <div class="connection-line__end">
@@ -3771,6 +3787,50 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </section>
+
+        <section class="card account-resources-section">
+          <div class="account-resources">
+            <div>
+              <h2 class="account-section-heading">Account &amp; legal</h2>
+              <p class="hint account-resources__hint">
+                Get help, review ME3 policies, or manage your ME3.app account.
+              </p>
+            </div>
+
+            <nav class="account-resource-links" aria-label="Account resources">
+              <a
+                v-if="me3Connection?.connected"
+                :href="me3AccountURL"
+                target="_blank"
+                rel="noopener"
+              >
+                Review or delete ME3 account
+              </a>
+              <a
+                href="https://me3.app/support"
+                target="_blank"
+                rel="noopener"
+              >
+                Support
+              </a>
+              <a href="https://me3.app/terms" target="_blank" rel="noopener">
+                Terms of Service
+              </a>
+              <a href="https://me3.app/privacy" target="_blank" rel="noopener">
+                Privacy Policy
+              </a>
+            </nav>
+
+            <p
+              v-if="me3Connection?.connected"
+              class="account-resources__billing-note"
+            >
+              Deleting your ME3 account does not cancel Apple billing. If you
+              subscribed through Apple, cancel it separately in App Store
+              subscription settings.
+            </p>
+          </div>
+        </section>
       </template>
     </main>
 
@@ -4426,6 +4486,45 @@ h1 {
 
 .timezone-section {
   order: 8;
+}
+
+.account-resources-section {
+  order: 9;
+}
+
+.account-resources {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.account-resources__hint,
+.account-resources__billing-note {
+  margin: 6px 0 0;
+}
+
+.account-resources__billing-note {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.account-resource-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.account-resource-links a {
+  color: var(--ui-accent-strong, var(--color-text));
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.account-resource-links a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .core-update-callout {
