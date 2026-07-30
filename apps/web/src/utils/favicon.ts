@@ -1,4 +1,5 @@
-import { appFeatureIconForPath } from "./appFeatures";
+import { appFeatureForPath, appFeatureIconForPath } from "./appFeatures";
+import { ASSISTANT_AVATAR_SRC } from "./assistantBranding";
 
 const FEATURE_FAVICON_ID = "me3-feature-favicon";
 
@@ -24,12 +25,13 @@ export function emojiFaviconHref(emoji: string) {
 export function updateFeatureFavicon(path: string) {
   if (typeof document === "undefined") return;
 
+  const feature = appFeatureForPath(path);
   const emoji = appFeatureIconForPath(path);
   const existing = document.getElementById(
     FEATURE_FAVICON_ID,
   ) as HTMLLinkElement | null;
 
-  if (!emoji) {
+  if (!feature || !emoji) {
     existing?.remove();
     return;
   }
@@ -37,9 +39,13 @@ export function updateFeatureFavicon(path: string) {
   const element = existing ?? document.createElement("link");
   element.id = FEATURE_FAVICON_ID;
   element.setAttribute("rel", "icon");
-  element.setAttribute("type", "image/svg+xml");
+  element.setAttribute(
+    "type",
+    feature === "assistant" ? "image/png" : "image/svg+xml",
+  );
   element.setAttribute("sizes", "any");
-  element.href = emojiFaviconHref(emoji);
+  element.href =
+    feature === "assistant" ? ASSISTANT_AVATAR_SRC : emojiFaviconHref(emoji);
 
   if (!existing) {
     document.head.appendChild(element);

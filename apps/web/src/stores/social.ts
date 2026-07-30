@@ -84,6 +84,14 @@ export type TikTokPublishingSettings =
     videoDurationSeconds: number;
   };
 
+export type YouTubePrivacyStatus = "private" | "unlisted" | "public";
+
+export type YouTubePublishingSettings = {
+  privacyStatus: YouTubePrivacyStatus;
+  madeForKids: boolean;
+  containsSyntheticMedia: boolean;
+};
+
 export type DriveFolder = {
   id: string;
   parentId: string | null;
@@ -164,6 +172,7 @@ export type PostVersion = {
   assetManifest: SocialMediaAsset[];
   publishingSettings?: {
     tiktok?: TikTokPublishingSettings;
+    youtube?: YouTubePublishingSettings;
   };
   sourceExcerpt: string | null;
   approvalStatus: "draft" | "approved" | "rejected";

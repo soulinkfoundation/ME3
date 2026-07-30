@@ -734,11 +734,17 @@ describe("reusable social Publications", () => {
       platform: "youtube",
       accountId: "account-youtube",
     });
+    const youtubeSettings = {
+      privacyStatus: "unlisted",
+      madeForKids: false,
+      containsSyntheticMedia: true,
+    };
     fixture.db.run(
       `UPDATE social_variants
        SET format = 'short_video',
            title = 'Saved YouTube title',
-           asset_manifest_json = ?
+           asset_manifest_json = ?,
+           publishing_settings_json = ?
        WHERE id = 'version-youtube'`,
       JSON.stringify([{
         url: "https://media.example/short.mp4",
@@ -746,30 +752,19 @@ describe("reusable social Publications", () => {
         mimeType: "video/mp4",
         byteLength: 4,
       }]),
+      JSON.stringify({ youtube: youtubeSettings }),
     );
 
-    const publication = { id: "publication-youtube" };
-    fixture.db.run(
-      `INSERT INTO social_publications (
-         id, variant_id, site_id, platform, status, target_account_id_snapshot,
-         format_snapshot, body_text_snapshot, asset_manifest_json_snapshot,
-         approval_status_snapshot, approved_at_snapshot, approved_by_user_id_snapshot,
-         requested_by_type, requested_by_user_id, request_context_json, queued_at,
-         created_at, updated_at
-       ) VALUES (
-         ?, 'version-youtube', 'site-1', 'youtube', 'queued', 'account-youtube',
-         'short_video', 'A concise YouTube description.', ?, 'approved',
-         '2026-07-18T09:00:00.000Z', 'owner', 'owner', 'owner', '{}',
-         datetime('now'), datetime('now'), datetime('now')
-       )`,
+    const publication = await createPublication(fixture, "version-youtube");
+    expect(JSON.parse(fixture.db.first<{ request_context_json: string }>(
+      "SELECT request_context_json FROM social_publications WHERE id = ?",
       publication.id,
-      JSON.stringify([{
-        url: "https://media.example/short.mp4",
-        kind: "video",
-        mimeType: "video/mp4",
-        byteLength: 4,
-      }]),
-    );
+    )!.request_context_json)).toMatchObject({ youtube: youtubeSettings });
+    expect(fixture.db.first<{ publishing_settings_json: string }>(
+      "SELECT publishing_settings_json FROM social_variants WHERE id = ?",
+      "version-youtube",
+    )).toEqual({ publishing_settings_json: "{}" });
+
     const uploadUrl = "https://www.googleapis.com/upload/youtube/v3/videos?upload_id=title";
     const videoBytes = new Uint8Array([1, 2, 3, 4]);
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -780,7 +775,11 @@ describe("reusable social Publications", () => {
             title: "Saved YouTube title",
             description: "A concise YouTube description.",
           },
-          status: { privacyStatus: "private" },
+          status: {
+            privacyStatus: "unlisted",
+            selfDeclaredMadeForKids: false,
+            containsSyntheticMedia: true,
+          },
         });
         return new Response(null, {
           status: 200,
@@ -798,7 +797,7 @@ describe("reusable social Publications", () => {
         return Response.json({
           items: [{
             id: "youtube-video-title",
-            status: { uploadStatus: "uploaded", privacyStatus: "private" },
+            status: { uploadStatus: "uploaded", privacyStatus: "unlisted" },
           }],
         });
       }

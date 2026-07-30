@@ -83,7 +83,7 @@ function platformCapability(
             : ["video/mp4", "video/quicktime"],
           maxBytesPerItem: isYouTube ? 256 * 1024 * 1024 * 1024 : 1024 * 1024 * 1024,
           guidance: isYouTube
-            ? "Uploads privately for final review in YouTube Studio."
+            ? "Choose visibility and disclosures before uploading."
             : "Publishes as a Reel.",
         }] : [{
           contentType: "text",
@@ -345,6 +345,9 @@ describe("SocialPage", () => {
 
     expect(wrapper.text()).not.toContain("Add one video.");
     expect(wrapper.find(".validation-issue").exists()).toBe(false);
+    expect(wrapper.get(".post-preview--x .preview-avatar img").attributes("src"))
+      .toBe(xAccount.avatarUrl);
+    expect(wrapper.findAll(".post-preview--x .preview-actions svg")).toHaveLength(6);
   });
 
   it("keeps the editor actions minimal and moves Post now into the publish dialog", async () => {
@@ -902,6 +905,8 @@ describe("SocialPage", () => {
 
     expect(wrapper.findAll(".version-editor select")).toHaveLength(0);
     expect(wrapper.get(".post-preview--linkedin").text()).toContain("Kieran");
+    expect(wrapper.get(".post-preview--linkedin .preview-avatar img").attributes("src"))
+      .toBe(account.avatarUrl);
     expect(wrapper.findAll(".preview-media--gallery img")).toHaveLength(2);
     expect(wrapper.get(".preview-link-card").text()).toContain("example.com");
     vi.mocked(api.post).mockResolvedValue({
@@ -950,6 +955,77 @@ describe("SocialPage", () => {
     expect(wrapper.find("#social-post-title").exists()).toBe(false);
     expect(wrapper.find(".version-editor input[type='text']").exists()).toBe(false);
     expect(wrapper.findAll(".platform-target")).toHaveLength(0);
+  });
+
+  it("keeps the empty state concise and gives a fresh YouTube draft a working title", async () => {
+    const youtubeAccount = {
+      ...account,
+      id: "account-youtube",
+      platform: "youtube",
+      handle: "kieran-video",
+      displayName: "Kieran Video",
+    };
+    const youtubePost = {
+      post: {
+        ...post.post,
+        id: "post-youtube-draft",
+        ideaText: "Untitled draft",
+      },
+      versions: [{
+        ...post.versions[0],
+        id: "version-youtube-draft",
+        postId: "post-youtube-draft",
+        platform: "youtube" as const,
+        targetAccountId: youtubeAccount.id,
+        format: "short_video" as const,
+        title: "Untitled draft",
+        bodyText: "Untitled draft",
+        assetManifest: [],
+      }],
+    };
+    vi.mocked(api.get).mockImplementation((endpoint: string) => {
+      if (endpoint === "/social/posts?siteId=site-1") return Promise.resolve({ posts: [] });
+      if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [youtubeAccount] });
+      if (endpoint === "/social/status") return Promise.resolve({
+        plugin: {
+          status: "installed",
+          enabled: true,
+          ready: true,
+          statusLabel: "Installed",
+          platformCapabilities: [
+            platformCapability("youtube", {
+              schedule: false,
+              deliveryMode: "direct_publish",
+            }),
+          ],
+        },
+        hostedOAuth: { configured: false, platforms: [] },
+      });
+      throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.post).mockResolvedValue({ post: youtubePost });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.get(".post-list .empty-state").text()).toBe("No drafts yet. Create a Post");
+    expect(wrapper.text()).not.toContain("ask the agent to repurpose");
+    await wrapper.get(".post-list .empty-state button").trigger("click");
+    await wrapper.get(".content-type-picker input[value='short_video']").setValue();
+    await wrapper.get(".destination-option").trigger("click");
+    const createDraft = wrapper.findAll("button")
+      .find((button) => button.text().includes("Create draft"));
+    await createDraft!.trigger("click");
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith("/social/posts", expect.objectContaining({
+      versions: [expect.objectContaining({
+        platform: "youtube",
+        title: "Untitled draft",
+      })],
+    }));
+    expect((wrapper.get(".version-editor input[type='text']").element as HTMLInputElement).value)
+      .toBe("Untitled draft");
   });
 
   it("shows a new draft immediately while account verification finishes", async () => {
@@ -1213,11 +1289,24 @@ describe("SocialPage", () => {
       if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [youtubeAccount] });
       if (endpoint === "/social/status") return Promise.resolve({
         plugin: { status: "installed", enabled: true, ready: true, statusLabel: "Installed", platformCapabilities: [
-          platformCapability("youtube", { schedule: false, deliveryMode: "provider_draft" }),
+          platformCapability("youtube", { schedule: false, deliveryMode: "direct_publish" }),
         ] },
         hostedOAuth: { configured: false, platforms: [] },
       });
       throw new Error(`Unexpected GET ${endpoint}`);
+    });
+    vi.mocked(api.patch).mockImplementation(async (endpoint, input) => {
+      if (endpoint === "/social/versions/version-youtube") {
+        return {
+          version: {
+            ...youtubePost.versions[0],
+            publishingSettings: (
+              input as { publishingSettings: PostVersion["publishingSettings"] }
+            ).publishingSettings,
+          },
+        };
+      }
+      throw new Error(`Unexpected PATCH ${endpoint}`);
     });
 
     const wrapper = mountPage();
@@ -1226,7 +1315,10 @@ describe("SocialPage", () => {
     expect(wrapper.get(".post-preview--youtube-short").text()).toContain("YouTube Short");
     expect(wrapper.get(".youtube-short-preview__caption").text()).toContain("@kieran-video");
     expect(wrapper.get(".youtube-short-preview__caption").text()).toContain("A quick field note");
+    expect(wrapper.get(".youtube-short-preview__caption img").attributes("src"))
+      .toBe(youtubeAccount.avatarUrl);
     expect(wrapper.get(".youtube-short-preview__stage video").attributes("controls")).toBeDefined();
+    expect(wrapper.find(".youtube-short-preview__controls").exists()).toBe(false);
     expect(wrapper.find(".preview-profile").exists()).toBe(false);
 
     const publish = wrapper.get(".editor-actions").findAll("button")
@@ -1234,11 +1326,46 @@ describe("SocialPage", () => {
     await publish!.trigger("click");
     await flushPromises();
 
+    const settingsDialog = wrapper.get(".youtube-settings-dialog");
+    expect(settingsDialog.get("h2").text()).toBe("YouTube publishing");
+    expect(settingsDialog.text()).toContain("Uploading to");
+    expect(settingsDialog.text()).toContain("Kieran Video");
+    expect(settingsDialog.findAll("select option").map((option) => option.text())).toEqual([
+      "Choose visibility",
+      "Private",
+      "Unlisted",
+      "Public",
+    ]);
+    await settingsDialog.get("select").setValue("unlisted");
+    await settingsDialog.get("input[type='radio'][value='no']").setValue();
+    await settingsDialog.get("input[type='checkbox']").setValue(true);
+    await settingsDialog.trigger("submit");
+    await flushPromises();
+
+    expect(api.patch).toHaveBeenCalledWith("/social/versions/version-youtube", {
+      publishingSettings: {
+        youtube: {
+          privacyStatus: "unlisted",
+          madeForKids: false,
+          containsSyntheticMedia: true,
+        },
+      },
+    });
+    expect(wrapper.get(".platform-publish-readiness").text()).toContain(
+      "Unlisted · Not made for kids · Altered or synthetic",
+    );
+
+    const upload = wrapper.get(".editor-actions").findAll("button")
+      .find((button) => button.text().trim() === "Upload");
+    await upload!.trigger("click");
+    await flushPromises();
+
     const dialog = wrapper.get(".social-schedule-dialog");
     expect(dialog.get("h2").text()).toBe("Upload to YouTube");
     expect(dialog.text()).toContain(
-      "Upload this Short privately for final review in YouTube Studio.",
+      "Review the saved YouTube settings, then upload this Short.",
     );
+    expect(dialog.text()).toContain("Unlisted · Not made for kids · Altered or synthetic");
     expect(dialog.text()).toContain("Upload now");
     expect(dialog.text()).not.toContain("choose a date and time");
     expect(dialog.find(".schedule-fields").exists()).toBe(false);
@@ -1603,6 +1730,8 @@ describe("SocialPage", () => {
     expect(wrapper.get(".instagram-reel-preview__topbar").text()).toContain("Reels");
     expect(wrapper.get(".instagram-reel-preview__caption").text()).toContain("@kieran");
     expect(wrapper.get(".instagram-reel-preview__caption").text()).toContain("A short Reel caption.");
+    expect(wrapper.get(".instagram-reel-preview__caption img").attributes("src"))
+      .toBe(instagramAccount.avatarUrl);
     expect(wrapper.find(".instagram-reel-preview__rail").exists()).toBe(true);
     expect(wrapper.get(".instagram-reel-preview__stage video").attributes("controls")).toBeDefined();
     expect(wrapper.find(".preview-profile").exists()).toBe(false);
@@ -1649,6 +1778,11 @@ describe("SocialPage", () => {
     expect(wrapper.find(".post-preview--tiktok > p").exists()).toBe(false);
     expect(wrapper.get(".tiktok-preview__caption").text()).toContain("Greetings Earthling");
     expect(wrapper.find(".tiktok-preview__rail").exists()).toBe(true);
+    expect(wrapper.get(".tiktok-preview__profile-avatar img").attributes("src"))
+      .toBe(tiktokAccount.avatarUrl);
+    expect(wrapper.find(".tiktok-preview__topbar").exists()).toBe(false);
+    expect(wrapper.find(".tiktok-preview__draft-toast").exists()).toBe(false);
+    expect(wrapper.find(".tiktok-preview__footer").exists()).toBe(false);
     expect(wrapper.get(".tiktok-preview__stage video").attributes("controls")).toBeDefined();
   });
 

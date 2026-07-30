@@ -185,14 +185,14 @@ const PLATFORM_CAPABILITIES: Record<SocialPlatform, SocialPlatformCapabilities> 
     draft: true,
     schedule: false,
     publish: true,
-    deliveryMode: "provider_draft",
-    deliveryLabel: "Uploads privately",
+    deliveryMode: "direct_publish",
+    deliveryLabel: "Uploads directly",
     contentRules: [
       shortVideoRule(
         5_000,
         ["video/*", "application/octet-stream"],
         256 * 1024 * 1024 * 1024,
-        "Uploads privately for final review in YouTube Studio. YouTube derives Shorts eligibility from the video.",
+        "Choose the audience, visibility, and content disclosures before uploading. YouTube derives Shorts eligibility from the video.",
       ),
     ],
     reason: null,

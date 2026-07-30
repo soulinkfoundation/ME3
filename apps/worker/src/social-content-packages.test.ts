@@ -269,6 +269,51 @@ describe("Social Posts", () => {
     expect(edited?.publishingSettings).toEqual({});
   });
 
+  it("saves YouTube publishing review on the Version and clears it after content changes", async () => {
+    const { env } = createEnv();
+    const created = await createSocialPost(env, "owner", {
+      siteId: "site-1",
+      sourceType: "pasted",
+      sourceSnapshot: "A YouTube Short draft.",
+      sourceText: "A YouTube Short draft.",
+      ideaText: "A YouTube Short draft.",
+      versions: [{
+        platform: "youtube",
+        title: "A reviewed Short",
+        bodyText: "Review this exact description.",
+        assetManifest: [{
+          url: "https://media.example/short.mp4",
+          kind: "video",
+          mimeType: "video/mp4",
+          byteLength: 4,
+        }],
+      }],
+    });
+    const version = created.versions[0]!;
+
+    const reviewed = await updatePostVersion(env, "owner", version.id, {
+      publishingSettings: {
+        youtube: {
+          privacyStatus: "unlisted",
+          madeForKids: false,
+          containsSyntheticMedia: true,
+        },
+      },
+    });
+    expect(reviewed?.publishingSettings).toEqual({
+      youtube: {
+        privacyStatus: "unlisted",
+        madeForKids: false,
+        containsSyntheticMedia: true,
+      },
+    });
+
+    const edited = await updatePostVersion(env, "owner", version.id, {
+      title: "The title changed after review.",
+    });
+    expect(edited?.publishingSettings).toEqual({});
+  });
+
   it("creates source-backed platform Versions and invalidates approval after edits", async () => {
     const { env, publishingEnv, events } = createEnv();
 

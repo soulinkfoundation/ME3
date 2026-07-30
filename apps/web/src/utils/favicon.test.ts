@@ -28,6 +28,18 @@ describe("favicon utilities", () => {
     );
   });
 
+  it("uses the assistant avatar for assistant routes", () => {
+    updateFeatureFavicon("/assistant");
+
+    const element = document.querySelector<HTMLLinkElement>(
+      "#me3-feature-favicon",
+    );
+    expect(element?.type).toBe("image/png");
+    expect(element?.href).toBe(
+      `${window.location.origin}/me3-dog-head-emoji-smooth.png`,
+    );
+  });
+
   it("removes only the dynamic favicon when a path has no feature icon", () => {
     const staticIcon = document.createElement("link");
     staticIcon.rel = "icon";

@@ -626,8 +626,8 @@ describe("X publishing adapter", () => {
   });
 });
 
-describe("YouTube private upload adapter", () => {
-  it("uploads a video privately through a resumable session and returns YouTube Studio", async () => {
+describe("YouTube upload adapter", () => {
+  it("uploads a video with the reviewed settings and returns YouTube Studio", async () => {
     const videoBytes = new Uint8Array([1, 2, 3, 4]);
     const markProviderWriteStarted = vi.fn(async () => undefined);
     const uploadUrl = "https://www.googleapis.com/upload/youtube/v3/videos?upload_id=one";
@@ -643,8 +643,9 @@ describe("YouTube private upload adapter", () => {
             categoryId: "22",
           },
           status: {
-            privacyStatus: "private",
-            selfDeclaredMadeForKids: false,
+            privacyStatus: "unlisted",
+            selfDeclaredMadeForKids: true,
+            containsSyntheticMedia: true,
           },
         });
         return new Response(null, {
@@ -666,7 +667,7 @@ describe("YouTube private upload adapter", () => {
         return Response.json({
           items: [{
             id: "youtube-video-1",
-            status: { uploadStatus: "uploaded", privacyStatus: "private" },
+            status: { uploadStatus: "uploaded", privacyStatus: "unlisted" },
             processingDetails: { processingStatus: "processing" },
           }],
         });
@@ -686,6 +687,11 @@ describe("YouTube private upload adapter", () => {
         byteLength: videoBytes.byteLength,
       }],
       fetcher: fetcher as typeof fetch,
+      providerOptions: {
+        privacyStatus: "unlisted",
+        madeForKids: true,
+        containsSyntheticMedia: true,
+      },
       markProviderWriteStarted,
     });
 
@@ -694,7 +700,9 @@ describe("YouTube private upload adapter", () => {
       platformPostId: "youtube-video-1",
       platformPostUrl: "https://studio.youtube.com/video/youtube-video-1/edit",
       providerResponse: {
-        privacyStatus: "private",
+        privacyStatus: "unlisted",
+        madeForKids: true,
+        containsSyntheticMedia: true,
         processing: {
           items: [{
             processingDetails: { processingStatus: "processing" },
@@ -756,6 +764,11 @@ describe("YouTube private upload adapter", () => {
         byteLength: videoBytes.byteLength,
       }],
       fetcher: fetcher as typeof fetch,
+      providerOptions: {
+        privacyStatus: "private",
+        madeForKids: false,
+        containsSyntheticMedia: false,
+      },
     })).resolves.toMatchObject({
       ok: true,
       platformPostId: "youtube-video-resumed",
@@ -765,7 +778,48 @@ describe("YouTube private upload adapter", () => {
     expect(uploadRanges).toEqual(["bytes 0-3/4", "bytes */4", "bytes 2-3/4"]);
   });
 
-  it("requires complete private-upload metadata before contacting YouTube", () => {
+  it("requires reviewed publishing settings before contacting YouTube", async () => {
+    const fetcher = vi.fn();
+    await expect(adapterFor("youtube").publish({
+      accessToken: "youtube-token",
+      accountId: "channel-1",
+      title: "Valid title",
+      bodyText: "Description",
+      assets: [{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: 4,
+      }],
+      fetcher: fetcher as typeof fetch,
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: "youtube_privacy_required",
+    });
+    await expect(adapterFor("youtube").publish({
+      accessToken: "youtube-token",
+      accountId: "channel-1",
+      title: "Valid title",
+      bodyText: "Description",
+      assets: [{
+        url: "https://media.example/short.mp4",
+        kind: "video",
+        mimeType: "video/mp4",
+        byteLength: 4,
+      }],
+      fetcher: fetcher as typeof fetch,
+      providerOptions: {
+        privacyStatus: "public",
+        containsSyntheticMedia: false,
+      },
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: "youtube_audience_required",
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("requires complete video metadata before contacting YouTube", () => {
     expect(adapterFor("youtube").validateDraft({
       title: "",
       bodyText: "Description",

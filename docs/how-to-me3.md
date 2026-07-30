@@ -484,8 +484,10 @@ Social Publishing uses five owner-facing domain terms:
 
 LinkedIn, X, Instagram, and Instagram Business support the complete approval, scheduling, direct
 publishing, and recovery workflow when an active account and the Social Publishing queue are ready.
-YouTube uploads privately for final review in YouTube Studio, while TikTok sends a creator draft for
-completion in TikTok; neither short-video path supports ME3 scheduling.
+YouTube requires a reviewed visibility, audience, and altered-or-synthetic-content choice before
+uploading. YouTube may keep API uploads private until the owning API project passes its compliance
+audit. TikTok supports either a creator draft for completion in TikTok or a reviewed Direct Post;
+neither short-video path supports ME3 scheduling.
 
 Production installations offer the ME3 Cloud LinkedIn, Instagram, YouTube, and TikTok OAuth bridge
 as the default connection path. The installation must first be linked to ME3 Cloud; provider app

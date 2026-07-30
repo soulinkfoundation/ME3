@@ -1,7 +1,9 @@
 import type { SocialMediaAsset, SocialPlatform } from "./index";
 import {
   normalizeTikTokDeliveryOptions,
+  normalizeYouTubePublishingSettings,
   type TikTokDeliveryOptions,
+  type YouTubePublishingSettings,
 } from "./adapters";
 
 type Statement = {
@@ -32,6 +34,7 @@ export type SocialPostFormat = "post" | "image" | "carousel" | "short_video";
 export type SocialPostApprovalStatus = "draft" | "approved" | "rejected";
 export type PostVersionPublishingSettings = {
   tiktok?: TikTokDeliveryOptions;
+  youtube?: YouTubePublishingSettings;
 };
 
 export type SocialPost = {
@@ -1228,6 +1231,22 @@ function normalizePublishingSettings(
   }
   const record = value as Record<string, unknown>;
   if (Object.keys(record).length === 0) return {};
+  if (platform === "youtube") {
+    const rawYouTube = record.youtube;
+    if (!rawYouTube || typeof rawYouTube !== "object" || Array.isArray(rawYouTube)) {
+      throw new SocialPostInputError("YouTube publishing settings are required");
+    }
+    const youtube = normalizeYouTubePublishingSettings(rawYouTube);
+    if (!youtube.privacyStatus) {
+      throw new SocialPostInputError("Choose who can view this YouTube video");
+    }
+    if (youtube.madeForKids === null) {
+      throw new SocialPostInputError(
+        "Choose whether this YouTube video is made for kids",
+      );
+    }
+    return { youtube };
+  }
   if (platform !== "tiktok") {
     throw new SocialPostInputError(
       `${platform} does not support saved publishing settings`,

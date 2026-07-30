@@ -33,6 +33,8 @@ import {
   type TikTokCreatorInfo,
   type TikTokPublishingSettings,
   type TikTokPrivacyLevel,
+  type YouTubePrivacyStatus,
+  type YouTubePublishingSettings,
 } from "../stores/social";
 
 definePage({
@@ -142,6 +144,13 @@ const tiktokIsAiGenerated = ref(false);
 const tiktokConsent = ref(false);
 const tiktokVideoDurationSeconds = ref<number | null>(null);
 const tiktokCaptionCopied = ref(false);
+const showYouTubeSettings = ref(false);
+const youtubeSettingsSaving = ref(false);
+const youtubeSettingsVersionId = ref<string | null>(null);
+const youtubeSettingsError = ref("");
+const youtubePrivacyStatus = ref<YouTubePrivacyStatus | "">("");
+const youtubeMadeForKids = ref<"yes" | "no" | "">("");
+const youtubeContainsSyntheticMedia = ref(false);
 const deleteCandidate = ref<DeleteCandidate | null>(null);
 const linkPreview = ref<SocialLinkPreview | null>(null);
 const linkPreviewLoading = ref(false);
@@ -326,6 +335,12 @@ const publicationTikTokVersion = computed(
   ) || null,
 );
 
+const publicationYouTubeVersion = computed(
+  () => selectedVisibleVersions.value.find(
+    (version) => version.platform === "youtube",
+  ) || null,
+);
+
 const publicationIsYouTubeOnly = computed(
   () => actionableValidations.value.length === 1 &&
     actionableValidations.value[0]?.version.platform === "youtube",
@@ -335,6 +350,18 @@ const tiktokSettingsVersion = computed(
   () => tiktokSettingsVersionId.value
     ? versionById(tiktokSettingsVersionId.value)
     : publicationTikTokVersion.value,
+);
+
+const youtubeSettingsVersion = computed(
+  () => youtubeSettingsVersionId.value
+    ? versionById(youtubeSettingsVersionId.value)
+    : publicationYouTubeVersion.value,
+);
+
+const youtubeSettingsAccount = computed(() =>
+  youtubeSettingsVersion.value
+    ? accountForVersion(youtubeSettingsVersion.value)
+    : null,
 );
 
 function savedTikTokSettings(
@@ -362,6 +389,36 @@ function tikTokSettingsSummary(version: PostVersion | null | undefined): string 
     return `Direct Post · ${tiktokPrivacyLabel(settings.privacyLevel)}`;
   }
   return "Direct Post review required";
+}
+
+function savedYouTubeSettings(
+  version: PostVersion | null | undefined,
+): YouTubePublishingSettings | null {
+  return version?.publishingSettings?.youtube || null;
+}
+
+function hasSavedYouTubeSettings(version: PostVersion | null | undefined): boolean {
+  const settings = savedYouTubeSettings(version);
+  return Boolean(
+    settings?.privacyStatus &&
+    typeof settings.madeForKids === "boolean",
+  );
+}
+
+function youtubePrivacyLabel(status: YouTubePrivacyStatus): string {
+  if (status === "public") return "Public";
+  if (status === "unlisted") return "Unlisted";
+  return "Private";
+}
+
+function youtubeSettingsSummary(version: PostVersion | null | undefined): string {
+  const settings = savedYouTubeSettings(version);
+  if (!settings) return "Visibility and audience review required";
+  const audience = settings.madeForKids ? "Made for kids" : "Not made for kids";
+  const disclosure = settings.containsSyntheticMedia
+    ? " · Altered or synthetic"
+    : "";
+  return `${youtubePrivacyLabel(settings.privacyStatus)} · ${audience}${disclosure}`;
 }
 
 const tiktokDirectPostSupported = computed(() =>
@@ -424,6 +481,10 @@ const canSubmitPublishNow = computed(() => Boolean(
   (
     !publicationTikTokVersion.value ||
     hasSavedTikTokSettings(publicationTikTokVersion.value)
+  ) &&
+  (
+    !publicationYouTubeVersion.value ||
+    hasSavedYouTubeSettings(publicationYouTubeVersion.value)
   ),
 ));
 
@@ -1450,7 +1511,7 @@ async function createDraft() {
       platform: account.platform as SocialPlatform,
       targetAccountId: account.id,
       format: draftFormat,
-      title: null,
+      title: account.platform === "youtube" ? draftText : null,
       bodyText: draftText,
       assetManifest: [],
       sourceExcerpt: draftText,
@@ -1488,6 +1549,7 @@ async function createDraft() {
         return {
           platform: account.platform as SocialPlatform,
           format: draftFormat,
+          ...(account.platform === "youtube" ? { title: draftText } : {}),
           bodyText: draftText,
           targetAccountId: account.id,
         };
@@ -2165,6 +2227,67 @@ async function copyTikTokCaption() {
   }
 }
 
+function resetYouTubeSettings() {
+  youtubeSettingsError.value = "";
+  youtubePrivacyStatus.value = "";
+  youtubeMadeForKids.value = "";
+  youtubeContainsSyntheticMedia.value = false;
+}
+
+async function openYouTubeSettings(
+  version = publicationYouTubeVersion.value,
+) {
+  if (!version || version.platform !== "youtube") return;
+  await flushPendingEditorSave();
+  const current = versionById(version.id) || version;
+  youtubeSettingsVersionId.value = current.id;
+  resetYouTubeSettings();
+  const saved = savedYouTubeSettings(current);
+  if (saved) {
+    youtubePrivacyStatus.value = saved.privacyStatus;
+    youtubeMadeForKids.value = saved.madeForKids ? "yes" : "no";
+    youtubeContainsSyntheticMedia.value = saved.containsSyntheticMedia;
+  }
+  showYouTubeSettings.value = true;
+}
+
+function closeYouTubeSettings() {
+  showYouTubeSettings.value = false;
+  youtubeSettingsVersionId.value = null;
+  resetYouTubeSettings();
+}
+
+async function saveYouTubeSettings() {
+  const version = youtubeSettingsVersion.value;
+  if (
+    !version ||
+    youtubeSettingsSaving.value ||
+    !youtubePrivacyStatus.value ||
+    !youtubeMadeForKids.value
+  ) return;
+
+  const settings: YouTubePublishingSettings = {
+    privacyStatus: youtubePrivacyStatus.value,
+    madeForKids: youtubeMadeForKids.value === "yes",
+    containsSyntheticMedia: youtubeContainsSyntheticMedia.value,
+  };
+
+  youtubeSettingsSaving.value = true;
+  try {
+    replaceVersion(await social.updatePostVersion(version.id, {
+      publishingSettings: { youtube: settings },
+    }));
+    toastSuccess("YouTube publishing settings saved for this video.");
+    closeYouTubeSettings();
+  } catch (value) {
+    social.setErrorFromApi(value, "YouTube settings could not be saved.");
+    youtubeSettingsError.value =
+      social.error || "YouTube settings could not be saved.";
+  } finally {
+    youtubeSettingsSaving.value = false;
+  }
+}
+
 async function openSchedule() {
   await flushPendingEditorSave();
   const tiktokVersion = publicationTikTokVersion.value;
@@ -2173,6 +2296,14 @@ async function openSchedule() {
       selectVersion(tiktokVersion);
     }
     await openTikTokSettings(tiktokVersion);
+    return;
+  }
+  const youtubeVersion = publicationYouTubeVersion.value;
+  if (youtubeVersion && !hasSavedYouTubeSettings(youtubeVersion)) {
+    if (!sharedEditor.value && selectedVersionId.value !== youtubeVersion.id) {
+      selectVersion(youtubeVersion);
+    }
+    await openYouTubeSettings(youtubeVersion);
     return;
   }
   if (!canOpenSchedule.value) return;
@@ -2283,15 +2414,23 @@ async function publishNow() {
         version.platform === "tiktok"
           ? savedTikTokSettings(version)
           : null;
-      const publication = await social.publishPostVersion(version.id, tiktok
-        ? {
+      const youtube =
+        version.platform === "youtube"
+          ? savedYouTubeSettings(version)
+          : null;
+      const publication = await social.publishPostVersion(
+        version.id,
+        tiktok || youtube
+          ? {
           requestContext: {
             surface: "social-editor",
             batch: versions.length > 1,
-            tiktok,
+            ...(tiktok ? { tiktok } : {}),
+            ...(youtube ? { youtube } : {}),
           },
         }
-        : {});
+          : {},
+      );
       replaceVersion({
         ...version,
         publicationStatus: publication.status,
@@ -2521,7 +2660,6 @@ function currentQueryParam(name: string): string | null {
           <div v-if="loading" class="empty-state">Loading social posts…</div>
           <div v-else-if="visiblePosts.length === 0" class="empty-state">
             <strong>No {{ activeMode }} yet.</strong>
-            <span v-if="activeMode === 'drafts'">Write a Post or ask the agent to repurpose a journal entry, blog post, or project task.</span>
             <Button
               v-if="activeMode === 'drafts'"
               color="outline"
@@ -2531,7 +2669,7 @@ function currentQueryParam(name: string): string | null {
               :disabled="draftAccounts.length === 0 || saving"
               @click="openCreateDraft"
             >
-              Write a Post
+              Create a Post
             </Button>
           </div>
           <template v-else>
@@ -2566,7 +2704,13 @@ function currentQueryParam(name: string): string | null {
                   <span class="platform-list">
                     <span v-for="version in visibleVersionsFor(detail)" :key="version.id" class="platform-chip" :title="accountLabel(version)">
                       <span :class="['social-account-avatar', 'social-account-avatar--compact', `social-account-avatar--${version.platform}`]" aria-hidden="true">
-                        <img v-if="accountAvatarUrl(version)" class="social-account-avatar__image" :src="accountAvatarUrl(version)!" alt="" />
+                        <img
+                          v-if="accountAvatarUrl(version)"
+                          class="social-account-avatar__image"
+                          :src="accountAvatarUrl(version)!"
+                          alt=""
+                          referrerpolicy="no-referrer"
+                        />
                         <template v-else>{{ accountInitials(version) }}</template>
                         <span class="social-account-avatar__platform">
                           <svg viewBox="0 0 24 24"><path :d="platformIconPath(version.platform)" /></svg>
@@ -2651,7 +2795,13 @@ function currentQueryParam(name: string): string | null {
               @click="selectVersion(version)"
             >
               <span :class="['social-account-avatar', `social-account-avatar--${version.platform}`]" aria-hidden="true">
-                <img v-if="accountAvatarUrl(version)" class="social-account-avatar__image" :src="accountAvatarUrl(version)!" alt="" />
+                <img
+                  v-if="accountAvatarUrl(version)"
+                  class="social-account-avatar__image"
+                  :src="accountAvatarUrl(version)!"
+                  alt=""
+                  referrerpolicy="no-referrer"
+                />
                 <template v-else>{{ accountInitials(version) }}</template>
                 <span class="social-account-avatar__platform">
                   <svg viewBox="0 0 24 24"><path :d="platformIconPath(version.platform)" /></svg>
@@ -2659,7 +2809,10 @@ function currentQueryParam(name: string): string | null {
               </span>
               <span class="sr-only">{{ accountLabel(version) }}</span>
               <span
-                v-if="version.platform === 'tiktok' && !hasSavedTikTokSettings(version)"
+                v-if="
+                  (version.platform === 'tiktok' && !hasSavedTikTokSettings(version)) ||
+                  (version.platform === 'youtube' && !hasSavedYouTubeSettings(version))
+                "
                 class="version-tab__setup-dot"
                 aria-hidden="true"
               />
@@ -2668,6 +2821,12 @@ function currentQueryParam(name: string): string | null {
                 class="sr-only"
               >
                 TikTok publishing review required
+              </span>
+              <span
+                v-if="version.platform === 'youtube' && !hasSavedYouTubeSettings(version)"
+                class="sr-only"
+              >
+                YouTube publishing review required
               </span>
             </button>
             <button
@@ -2779,9 +2938,9 @@ function currentQueryParam(name: string): string | null {
                   (sharedEditor || selectedVersion?.platform === 'tiktok')
                 "
                 :class="[
-                  'tiktok-publish-readiness',
+                  'platform-publish-readiness',
                   {
-                    'tiktok-publish-readiness--ready':
+                    'platform-publish-readiness--ready':
                       hasSavedTikTokSettings(publicationTikTokVersion),
                   },
                 ]"
@@ -2820,6 +2979,61 @@ function currentQueryParam(name: string): string | null {
                 >
                   {{
                     hasSavedTikTokSettings(publicationTikTokVersion)
+                      ? 'Edit'
+                      : 'Review settings'
+                  }}
+                </Button>
+              </section>
+
+              <section
+                v-if="
+                  !selectedPostReadOnly &&
+                  !selectedPostOptimistic &&
+                  publicationYouTubeVersion &&
+                  (sharedEditor || selectedVersion?.platform === 'youtube')
+                "
+                :class="[
+                  'platform-publish-readiness',
+                  {
+                    'platform-publish-readiness--ready':
+                      hasSavedYouTubeSettings(publicationYouTubeVersion),
+                  },
+                ]"
+                aria-label="YouTube publishing settings"
+              >
+                <UiIcon
+                  :name="
+                    hasSavedYouTubeSettings(publicationYouTubeVersion)
+                      ? 'CircleCheck'
+                      : 'Info'
+                  "
+                  :size="20"
+                  aria-hidden="true"
+                />
+                <span>
+                  <strong>
+                    {{
+                      hasSavedYouTubeSettings(publicationYouTubeVersion)
+                        ? 'YouTube ready'
+                        : 'Review YouTube before uploading'
+                    }}
+                  </strong>
+                  <small>{{ youtubeSettingsSummary(publicationYouTubeVersion) }}</small>
+                </span>
+                <Button
+                  :color="
+                    hasSavedYouTubeSettings(publicationYouTubeVersion)
+                      ? 'ghost'
+                      : 'primary'
+                  "
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="saving || scheduling"
+                  @click="openYouTubeSettings(publicationYouTubeVersion)"
+                >
+                  {{
+                    hasSavedYouTubeSettings(publicationYouTubeVersion)
                       ? 'Edit'
                       : 'Review settings'
                   }}
@@ -2914,18 +3128,16 @@ function currentQueryParam(name: string): string | null {
                     <span>Add a video to preview your TikTok</span>
                   </div>
 
-                  <div class="tiktok-preview__topbar" aria-hidden="true">
-                    <span class="tiktok-preview__back">‹</span>
-                    <span class="tiktok-preview__search-pill">
-                      <UiIcon name="Search" :size="14" />
-                      <span>Find related content</span>
-                      <strong>Search</strong>
-                    </span>
-                  </div>
-                  <span class="tiktok-preview__draft-toast" aria-hidden="true">Draft saved</span>
-
                   <div class="tiktok-preview__rail" aria-hidden="true">
-                    <span class="tiktok-preview__profile-avatar">{{ previewAccountName(selectedVersion).slice(0, 1).toUpperCase() }}</span>
+                    <span class="tiktok-preview__profile-avatar">
+                      <img
+                        v-if="accountAvatarUrl(selectedVersion)"
+                        :src="accountAvatarUrl(selectedVersion) || undefined"
+                        alt=""
+                        referrerpolicy="no-referrer"
+                      />
+                      <span v-else>{{ accountInitials(selectedVersion) }}</span>
+                    </span>
                     <span class="tiktok-preview__rail-action">
                       <UiIcon name="Heart" :size="25" />
                       <strong>22</strong>
@@ -2957,10 +3169,6 @@ function currentQueryParam(name: string): string | null {
                     <span />
                   </div>
                 </div>
-                <div class="tiktok-preview__footer" aria-hidden="true">
-                  <span>First-time boost? More followers await!</span>
-                  <UiIcon name="ChevronRight" :size="17" />
-                </div>
               </template>
               <template v-else-if="selectedVersion.platform === 'youtube'">
                 <div class="short-video-preview__platform-bar">
@@ -2991,23 +3199,16 @@ function currentQueryParam(name: string): string | null {
                     <span>Add a video to preview your Short</span>
                   </div>
 
-                  <div class="youtube-short-preview__controls" aria-hidden="true">
-                    <span class="youtube-short-preview__control-group">
-                      <UiIcon name="Pause" :size="21" />
-                      <span class="youtube-short-preview__speaker" />
-                    </span>
-                    <span class="youtube-short-preview__control-group">
-                      <span class="youtube-short-preview__cc">CC</span>
-                      <UiIcon name="Ellipsis" :size="21" />
-                      <span class="youtube-short-preview__expand">↗</span>
-                    </span>
-                  </div>
-
                   <div class="short-video-preview__bottom-fade" aria-hidden="true" />
                   <div class="youtube-short-preview__caption">
                     <div class="youtube-short-preview__channel">
                       <span class="short-video-preview__avatar">
-                        <img v-if="accountAvatarUrl(selectedVersion)" :src="accountAvatarUrl(selectedVersion) || undefined" alt="" />
+                        <img
+                          v-if="accountAvatarUrl(selectedVersion)"
+                          :src="accountAvatarUrl(selectedVersion) || undefined"
+                          alt=""
+                          referrerpolicy="no-referrer"
+                        />
                         <span v-else>{{ accountInitials(selectedVersion) }}</span>
                       </span>
                       <strong>{{ previewAccountHandle(selectedVersion) }}</strong>
@@ -3081,7 +3282,12 @@ function currentQueryParam(name: string): string | null {
                   <div class="instagram-reel-preview__caption">
                     <div class="instagram-reel-preview__identity">
                       <span class="short-video-preview__avatar">
-                        <img v-if="accountAvatarUrl(selectedVersion)" :src="accountAvatarUrl(selectedVersion) || undefined" alt="" />
+                        <img
+                          v-if="accountAvatarUrl(selectedVersion)"
+                          :src="accountAvatarUrl(selectedVersion) || undefined"
+                          alt=""
+                          referrerpolicy="no-referrer"
+                        />
                         <span v-else>{{ accountInitials(selectedVersion) }}</span>
                       </span>
                       <strong>{{ previewAccountHandle(selectedVersion) }}</strong>
@@ -3106,7 +3312,15 @@ function currentQueryParam(name: string): string | null {
                   <span>{{ platformLabel(selectedVersion.platform) }}</span>
                 </div>
                 <div class="preview-profile">
-                  <span class="preview-avatar">{{ previewAccountName(selectedVersion).slice(0, 1).toUpperCase() }}</span>
+                  <span class="preview-avatar">
+                    <img
+                      v-if="accountAvatarUrl(selectedVersion)"
+                      :src="accountAvatarUrl(selectedVersion) || undefined"
+                      alt=""
+                      referrerpolicy="no-referrer"
+                    />
+                    <span v-else>{{ accountInitials(selectedVersion) }}</span>
+                  </span>
                   <span><strong>{{ previewAccountName(selectedVersion) }}</strong><small>{{ previewAccountHandle(selectedVersion) }} · now</small></span>
                   <UiIcon name="Ellipsis" :size="18" aria-hidden="true" />
                 </div>
@@ -3207,7 +3421,15 @@ function currentQueryParam(name: string): string | null {
                   View published Post
                 </a>
                 <div class="preview-actions" aria-hidden="true">
-                  <template v-if="selectedVersion.platform === 'instagram' || selectedVersion.platform === 'instagram_business'">
+                  <template v-if="selectedVersion.platform === 'x'">
+                    <UiIcon name="MessageCircle" :size="18" />
+                    <UiIcon name="Redo" :size="18" />
+                    <UiIcon name="Heart" :size="18" />
+                    <UiIcon name="Activity" :size="18" />
+                    <UiIcon name="Bookmark" :size="18" />
+                    <UiIcon name="Upload" :size="18" />
+                  </template>
+                  <template v-else-if="selectedVersion.platform === 'instagram' || selectedVersion.platform === 'instagram_business'">
                     <UiIcon name="Heart" :size="20" />
                     <UiIcon name="MessageCircle" :size="20" />
                     <UiIcon name="Redo" :size="20" />
@@ -3276,7 +3498,13 @@ function currentQueryParam(name: string): string | null {
             @click="toggleDestinationAccount(option.account.id)"
           >
             <span :class="['social-account-avatar', `social-account-avatar--${option.account.platform}`]" aria-hidden="true">
-              <img v-if="option.account.avatarUrl" class="social-account-avatar__image" :src="option.account.avatarUrl" alt="" />
+              <img
+                v-if="option.account.avatarUrl"
+                class="social-account-avatar__image"
+                :src="option.account.avatarUrl"
+                alt=""
+                referrerpolicy="no-referrer"
+              />
               <template v-else>{{ accountInitialsForAccount(option.account) }}</template>
               <span class="social-account-avatar__platform">
                 <svg viewBox="0 0 24 24"><path :d="platformIconPath(option.account.platform as SocialPlatform)" /></svg>
@@ -3492,7 +3720,7 @@ function currentQueryParam(name: string): string | null {
               Publish immediately or choose a date and time.
             </p>
             <p v-else-if="publicationIsYouTubeOnly">
-              Upload this Short privately for final review in YouTube Studio.
+              Review the saved YouTube settings, then upload this Short.
             </p>
             <p v-else>Publish the selected platforms immediately.</p>
           </div>
@@ -3503,7 +3731,7 @@ function currentQueryParam(name: string): string | null {
 
         <div
           v-if="publicationTikTokVersion"
-          class="tiktok-publish-summary"
+          class="platform-publish-summary"
         >
           <UiIcon name="CircleCheck" :size="18" aria-hidden="true" />
           <span>
@@ -3517,6 +3745,27 @@ function currentQueryParam(name: string): string | null {
             type="button"
             :disabled="scheduling"
             @click="showSchedule = false; openTikTokSettings(publicationTikTokVersion)"
+          >
+            Edit
+          </Button>
+        </div>
+
+        <div
+          v-if="publicationYouTubeVersion"
+          class="platform-publish-summary"
+        >
+          <UiIcon name="CircleCheck" :size="18" aria-hidden="true" />
+          <span>
+            <strong>YouTube ready</strong>
+            <small>{{ youtubeSettingsSummary(publicationYouTubeVersion) }}</small>
+          </span>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            type="button"
+            :disabled="scheduling"
+            @click="showSchedule = false; openYouTubeSettings(publicationYouTubeVersion)"
           >
             Edit
           </Button>
@@ -3838,6 +4087,137 @@ function currentQueryParam(name: string): string | null {
             "
           >
             {{ tiktokSettingsSaving ? 'Saving…' : 'Save TikTok settings' }}
+          </Button>
+        </footer>
+      </form>
+    </AppDialog>
+
+    <AppDialog
+      :open="showYouTubeSettings"
+      labelled-by="youtube-settings-title"
+      @close="closeYouTubeSettings"
+    >
+      <form class="youtube-settings-dialog" @submit.prevent="saveYouTubeSettings">
+        <header>
+          <div>
+            <h2 id="youtube-settings-title">YouTube publishing</h2>
+            <p>
+              Review the audience, visibility, and disclosure settings for this video.
+            </p>
+          </div>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Close YouTube publishing settings"
+            :disabled="youtubeSettingsSaving"
+            @click="closeYouTubeSettings"
+          >
+            <UiIcon name="X" :size="17" aria-hidden="true" />
+          </Button>
+        </header>
+
+        <section class="youtube-upload-settings" aria-labelledby="youtube-upload-settings-title">
+          <h3 id="youtube-upload-settings-title">Upload settings</h3>
+
+          <div
+            v-if="youtubeSettingsAccount"
+            class="youtube-upload-settings__channel"
+          >
+            <img
+              v-if="youtubeSettingsAccount.avatarUrl"
+              :src="youtubeSettingsAccount.avatarUrl"
+              alt=""
+              referrerpolicy="no-referrer"
+            />
+            <span v-else aria-hidden="true">
+              {{ accountInitialsForAccount(youtubeSettingsAccount) }}
+            </span>
+            <p>
+              Uploading to
+              <strong>{{ accountDisplayName(youtubeSettingsAccount) }}</strong>
+              <small v-if="youtubeSettingsAccount.handle">
+                @{{ youtubeSettingsAccount.handle.replace(/^@/, '') }}
+              </small>
+            </p>
+          </div>
+
+          <p class="youtube-upload-settings__review-note">
+            Until the YouTube API audit is approved, YouTube may keep API uploads
+            private even when Public or Unlisted is selected.
+          </p>
+
+          <label class="field">
+            <span>Visibility</span>
+            <select v-model="youtubePrivacyStatus" required>
+              <option disabled value="">Choose visibility</option>
+              <option value="private">Private</option>
+              <option value="unlisted">Unlisted</option>
+              <option value="public">Public</option>
+            </select>
+          </label>
+
+          <fieldset class="youtube-upload-settings__checks">
+            <legend>Audience</legend>
+            <label>
+              <input v-model="youtubeMadeForKids" type="radio" value="no" required />
+              No, it’s not made for kids
+            </label>
+            <label>
+              <input v-model="youtubeMadeForKids" type="radio" value="yes" required />
+              Yes, it’s made for kids
+            </label>
+          </fieldset>
+
+          <fieldset class="youtube-upload-settings__checks">
+            <legend>Content disclosure</legend>
+            <label>
+              <input v-model="youtubeContainsSyntheticMedia" type="checkbox" />
+              <span>
+                This video contains realistic altered or synthetic content
+                <small>
+                  Select this when realistic people, places, scenes, or events were
+                  meaningfully generated or altered.
+                </small>
+              </span>
+            </label>
+          </fieldset>
+
+          <p class="youtube-upload-settings__notice">
+            ME3 sends these exact settings with the upload. They remain saved until
+            this publishing attempt starts or the Post changes.
+          </p>
+        </section>
+
+        <p v-if="youtubeSettingsError" class="form-error" role="alert">
+          {{ youtubeSettingsError }}
+        </p>
+
+        <footer>
+          <Button
+            color="outline"
+            shape="soft"
+            size="compact"
+            type="button"
+            :disabled="youtubeSettingsSaving"
+            @click="closeYouTubeSettings"
+          >
+            Cancel
+          </Button>
+          <Button
+            color="primary"
+            shape="soft"
+            size="compact"
+            type="submit"
+            :disabled="
+              youtubeSettingsSaving ||
+              !youtubePrivacyStatus ||
+              !youtubeMadeForKids
+            "
+          >
+            {{ youtubeSettingsSaving ? 'Saving…' : 'Save YouTube settings' }}
           </Button>
         </footer>
       </form>
@@ -4744,11 +5124,18 @@ input:focus {
   width: 34px;
   height: 34px;
   place-items: center;
+  overflow: hidden;
   border-radius: 50%;
   background: #dbe3ea;
   color: #334155;
   font-size: 0.75rem;
   font-weight: 750;
+}
+
+.preview-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .post-preview p {
@@ -4832,75 +5219,6 @@ input:focus {
   text-align: center;
 }
 
-.tiktok-preview__topbar {
-  position: absolute;
-  z-index: 4;
-  top: 12px;
-  right: 10px;
-  left: 10px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  pointer-events: none;
-}
-
-.tiktok-preview__back {
-  display: inline-flex;
-  width: 22px;
-  justify-content: center;
-  color: #fff;
-  font-size: 2rem;
-  font-weight: 300;
-  line-height: 1;
-  text-shadow: 0 1px 4px rgb(0 0 0 / 45%);
-}
-
-.tiktok-preview__search-pill {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  min-width: 0;
-  flex: 1;
-  gap: 6px;
-  height: 34px;
-  padding: 0 8px;
-  border: 1px solid rgb(255 255 255 / 88%);
-  border-radius: 10px;
-  background: rgb(24 24 24 / 16%);
-  color: #fff;
-  font-size: 0.68rem;
-  backdrop-filter: blur(7px);
-}
-
-.tiktok-preview__search-pill span {
-  overflow: hidden;
-  color: rgb(255 255 255 / 88%);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tiktok-preview__search-pill strong {
-  padding-left: 8px;
-  border-left: 1px solid rgb(255 255 255 / 38%);
-  font-size: 0.68rem;
-  font-weight: 650;
-}
-
-.tiktok-preview__draft-toast {
-  position: absolute;
-  z-index: 4;
-  top: 64px;
-  left: 50%;
-  padding: 10px 18px;
-  border-radius: 15px;
-  background: rgb(78 87 102 / 82%);
-  color: #fff;
-  font-size: 0.78rem;
-  font-weight: 650;
-  transform: translateX(-50%);
-  white-space: nowrap;
-}
-
 .tiktok-preview__rail {
   position: absolute;
   z-index: 4;
@@ -4919,11 +5237,18 @@ input:focus {
   width: 35px;
   height: 35px;
   place-items: center;
+  overflow: hidden;
   border: 2px solid #fff;
   border-radius: 50%;
   background: #343434;
   font-size: 0.72rem;
   font-weight: 750;
+}
+
+.tiktok-preview__profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .tiktok-preview__rail-action {
@@ -5010,19 +5335,6 @@ input:focus {
   background: #fff;
 }
 
-.tiktok-preview__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 40px;
-  padding: 8px 12px 9px;
-  background: #151515;
-  color: rgb(255 255 255 / 88%);
-  font-size: 0.68rem;
-  line-height: 1.25;
-}
-
 .post-preview--linkedin .preview-platform-bar {
   color: #0a66c2;
 }
@@ -5045,23 +5357,51 @@ input:focus {
 }
 
 .post-preview--x .preview-profile {
-  padding: 13px 14px 2px;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  padding: 13px 14px 3px;
 }
 
 .post-preview--x .preview-avatar {
+  width: 40px;
+  height: 40px;
   background: #111827;
   color: #fff;
 }
 
+.post-preview--x .preview-profile > span:not(.preview-avatar) {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.post-preview--x .preview-profile strong {
+  flex: 0 1 auto;
+  font-size: 0.9rem;
+}
+
+.post-preview--x .preview-profile small {
+  min-width: 0;
+  flex: 1;
+  font-size: 0.8rem;
+}
+
+.post-preview--x > p {
+  margin: 3px 14px 9px 63px;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
 .post-preview--x .preview-actions {
   justify-content: space-between;
-  padding: 11px 18px;
+  margin-left: 49px;
+  padding: 10px 14px 12px;
   border-top: 0;
   color: #536471;
 }
 
 .post-preview--x .preview-media {
-  margin: 2px 14px 12px;
+  margin: 2px 14px 12px 63px;
   border: 1px solid #cfd9de;
   border-radius: 13px;
 }
@@ -5077,6 +5417,7 @@ input:focus {
 }
 
 .post-preview--x .preview-link-card {
+  margin-left: 63px;
   border-color: #cfd9de;
   border-radius: 13px;
   background: #fff;
@@ -5246,76 +5587,6 @@ input:focus {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.youtube-short-preview__controls {
-  position: absolute;
-  z-index: 3;
-  top: 12px;
-  right: 10px;
-  left: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: #fff;
-  pointer-events: none;
-  filter: drop-shadow(0 1px 3px rgb(0 0 0 / 56%));
-}
-
-.youtube-short-preview__control-group {
-  display: inline-flex;
-  min-height: 36px;
-  align-items: center;
-  gap: 14px;
-  padding: 0 11px;
-  border-radius: 999px;
-  background: rgb(0 0 0 / 35%);
-  backdrop-filter: blur(7px);
-}
-
-.youtube-short-preview__speaker {
-  position: relative;
-  display: inline-block;
-  width: 17px;
-  height: 18px;
-}
-
-.youtube-short-preview__speaker::before {
-  position: absolute;
-  top: 5px;
-  left: 1px;
-  width: 5px;
-  height: 8px;
-  border-radius: 1px;
-  background: currentColor;
-  box-shadow: 4px 0 0 -1px currentColor;
-  content: "";
-}
-
-.youtube-short-preview__speaker::after {
-  position: absolute;
-  top: 3px;
-  right: 0;
-  width: 8px;
-  height: 12px;
-  border-right: 2px solid currentColor;
-  border-radius: 50%;
-  content: "";
-}
-
-.youtube-short-preview__cc {
-  padding: 1px 3px;
-  border: 1.5px solid currentColor;
-  border-radius: 3px;
-  font-size: 0.58rem;
-  font-weight: 850;
-  letter-spacing: 0.02em;
-}
-
-.youtube-short-preview__expand {
-  font-size: 1.28rem;
-  font-weight: 650;
-  line-height: 1;
 }
 
 .youtube-short-preview__caption {
@@ -5582,6 +5853,7 @@ input:focus {
 .social-media-picker,
 .social-schedule-dialog,
 .tiktok-settings-dialog,
+.youtube-settings-dialog,
 .publishing-checks-dialog {
   position: relative;
   width: min(680px, calc(100vw - 32px));
@@ -5598,6 +5870,7 @@ input:focus {
 .social-media-picker,
 .social-schedule-dialog,
 .tiktok-settings-dialog,
+.youtube-settings-dialog,
 .publishing-checks-dialog {
   display: grid;
   gap: 18px;
@@ -5616,6 +5889,8 @@ input:focus {
 .social-schedule-dialog footer,
 .tiktok-settings-dialog header,
 .tiktok-settings-dialog footer,
+.youtube-settings-dialog header,
+.youtube-settings-dialog footer,
 .publishing-checks-dialog header,
 .publishing-checks-dialog footer {
   display: flex;
@@ -5635,6 +5910,8 @@ input:focus {
 .social-schedule-dialog p,
 .tiktok-settings-dialog h2,
 .tiktok-settings-dialog p,
+.youtube-settings-dialog h2,
+.youtube-settings-dialog p,
 .publishing-checks-dialog h2,
 .publishing-checks-dialog p {
   margin: 0;
@@ -5644,6 +5921,7 @@ input:focus {
 .social-media-picker header p,
 .social-schedule-dialog header p,
 .tiktok-settings-dialog header p,
+.youtube-settings-dialog header p,
 .publishing-checks-dialog header p {
   margin-top: 4px;
   color: var(--ui-text-muted);
@@ -5887,8 +6165,8 @@ input:focus {
   padding: 0;
 }
 
-.tiktok-publish-readiness,
-.tiktok-publish-summary {
+.platform-publish-readiness,
+.platform-publish-summary {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   min-height: 52px;
@@ -5900,26 +6178,26 @@ input:focus {
   background: var(--ui-surface-muted);
 }
 
-.tiktok-publish-readiness--ready,
-.tiktok-publish-summary {
+.platform-publish-readiness--ready,
+.platform-publish-summary {
   border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-border));
   background: var(--ui-accent-soft);
 }
 
-.tiktok-publish-readiness > svg,
-.tiktok-publish-summary > svg {
+.platform-publish-readiness > svg,
+.platform-publish-summary > svg {
   color: var(--ui-accent-strong);
 }
 
-.tiktok-publish-readiness span,
-.tiktok-publish-readiness small,
-.tiktok-publish-summary span,
-.tiktok-publish-summary small {
+.platform-publish-readiness span,
+.platform-publish-readiness small,
+.platform-publish-summary span,
+.platform-publish-summary small {
   display: block;
 }
 
-.tiktok-publish-readiness small,
-.tiktok-publish-summary small {
+.platform-publish-readiness small,
+.platform-publish-summary small {
   margin-top: 2px;
   color: var(--ui-text-muted);
   font-size: 0.75rem;
@@ -6023,7 +6301,7 @@ input:focus {
   padding: 9px 10px;
   border-radius: var(--ui-radius-sm);
   background: var(--ui-accent-soft);
-  color: var(--ui-text);
+  color: var(--ui-accent-strong);
 }
 
 .tiktok-direct-post__duration.is-invalid {
@@ -6091,6 +6369,104 @@ input:focus {
   text-underline-offset: 2px;
 }
 
+.youtube-upload-settings {
+  display: grid;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+}
+
+.youtube-upload-settings h3 {
+  margin: 0;
+  font-size: 0.94rem;
+}
+
+.youtube-upload-settings__channel {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.youtube-upload-settings__channel > img,
+.youtube-upload-settings__channel > span {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--ui-border);
+  border-radius: 50%;
+  background: var(--ui-surface);
+  object-fit: cover;
+}
+
+.youtube-upload-settings__channel p,
+.youtube-upload-settings__channel strong,
+.youtube-upload-settings__channel small {
+  display: block;
+}
+
+.youtube-upload-settings__channel p {
+  min-width: 0;
+}
+
+.youtube-upload-settings__channel small,
+.youtube-upload-settings__checks small,
+.youtube-upload-settings__notice {
+  margin-top: 2px;
+  color: var(--ui-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.youtube-upload-settings__review-note {
+  padding: 9px 10px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-strong);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.youtube-upload-settings__checks {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.youtube-upload-settings__checks legend {
+  margin-bottom: 2px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.youtube-upload-settings__checks label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.youtube-upload-settings__checks input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--ui-accent-strong);
+}
+
+.youtube-upload-settings__checks small {
+  display: block;
+}
+
 .schedule-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6125,6 +6501,7 @@ input:focus {
 
   .social-workspace {
     display: block;
+    background: var(--ui-surface-muted);
   }
 
   .version-workspace {
@@ -6132,8 +6509,10 @@ input:focus {
   }
 
   .post-list {
+    min-height: inherit;
     border-right: 0;
     border-bottom: 0;
+    background: var(--ui-surface-muted);
   }
 
   .post-detail,
@@ -6168,13 +6547,13 @@ input:focus {
 }
 
 @media (max-width: 520px) {
-  .tiktok-publish-readiness,
-  .tiktok-publish-summary {
+  .platform-publish-readiness,
+  .platform-publish-summary {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .tiktok-publish-readiness :deep(.me3-btn),
-  .tiktok-publish-summary :deep(.me3-btn) {
+  .platform-publish-readiness :deep(.me3-btn),
+  .platform-publish-summary :deep(.me3-btn) {
     grid-column: 1 / -1;
     justify-self: stretch;
   }

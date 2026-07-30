@@ -10227,8 +10227,8 @@ describe("ME3 Worker auth", () => {
         draft: true,
         schedule: false,
         publish: true,
-        deliveryMode: "provider_draft",
-        deliveryLabel: "Uploads privately",
+        deliveryMode: "direct_publish",
+        deliveryLabel: "Uploads directly",
         contentRules: [
           expect.objectContaining({ contentType: "short_video" }),
         ],

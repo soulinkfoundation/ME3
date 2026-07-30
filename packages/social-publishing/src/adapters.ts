@@ -1087,6 +1087,14 @@ export type TikTokDeliveryOptions =
     videoDurationSeconds: number;
   };
 
+export type YouTubePrivacyStatus = "private" | "unlisted" | "public";
+
+export type YouTubePublishingSettings = {
+  privacyStatus: YouTubePrivacyStatus | null;
+  madeForKids: boolean | null;
+  containsSyntheticMedia: boolean;
+};
+
 type TikTokCreatorInfoApiResponse = {
   data?: {
     creator_avatar_url?: string;
@@ -1220,6 +1228,35 @@ export function normalizeTikTokDeliveryOptions(value: unknown): TikTokDeliveryOp
     isAiGenerated: options.isAiGenerated === true,
     consent: options.consent === true,
     videoDurationSeconds: Number(options.videoDurationSeconds),
+  };
+}
+
+const YOUTUBE_PRIVACY_STATUSES = new Set<YouTubePrivacyStatus>([
+  "private",
+  "unlisted",
+  "public",
+]);
+
+export function normalizeYouTubePublishingSettings(
+  value: unknown,
+): YouTubePublishingSettings {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      privacyStatus: null,
+      madeForKids: null,
+      containsSyntheticMedia: false,
+    };
+  }
+  const settings = value as Record<string, unknown>;
+  return {
+    privacyStatus:
+      typeof settings.privacyStatus === "string" &&
+        YOUTUBE_PRIVACY_STATUSES.has(settings.privacyStatus as YouTubePrivacyStatus)
+        ? settings.privacyStatus as YouTubePrivacyStatus
+        : null,
+    madeForKids:
+      typeof settings.madeForKids === "boolean" ? settings.madeForKids : null,
+    containsSyntheticMedia: settings.containsSyntheticMedia === true,
   };
 }
 
@@ -1645,7 +1682,7 @@ async function checkYouTubeUploadStatus(
       kind: "failed",
       result: providerError(
         "youtube_upload_outcome_unknown",
-        "YouTube did not confirm whether the private video upload completed. Check YouTube Studio before trying again.",
+        "YouTube did not confirm whether the video upload completed. Check YouTube Studio before trying again.",
         describeFetchError(error),
         "outcome_unknown",
       ),
@@ -1742,6 +1779,25 @@ const youtubeAdapter: SocialPublishAdapter = {
     const asset = input.assets[0]!;
     const byteLength = asset.byteLength!;
     const mimeType = normalizeMimeType(asset.mimeType)!;
+    const publishingSettings = normalizeYouTubePublishingSettings(
+      input.providerOptions,
+    );
+    if (!publishingSettings.privacyStatus) {
+      return providerError(
+        "youtube_privacy_required",
+        "Choose who can view this YouTube video before uploading.",
+        undefined,
+        "rejected",
+      );
+    }
+    if (publishingSettings.madeForKids === null) {
+      return providerError(
+        "youtube_audience_required",
+        "Choose whether this YouTube video is made for kids before uploading.",
+        undefined,
+        "rejected",
+      );
+    }
     const metadata = {
       snippet: {
         title: input.title!.trim(),
@@ -1749,8 +1805,9 @@ const youtubeAdapter: SocialPublishAdapter = {
         categoryId: "22",
       },
       status: {
-        privacyStatus: "private",
-        selfDeclaredMadeForKids: false,
+        privacyStatus: publishingSettings.privacyStatus,
+        selfDeclaredMadeForKids: publishingSettings.madeForKids,
+        containsSyntheticMedia: publishingSettings.containsSyntheticMedia,
       },
     };
     const metadataBody = JSON.stringify(metadata);
@@ -1777,7 +1834,7 @@ const youtubeAdapter: SocialPublishAdapter = {
     } catch (error) {
       return providerError(
         "youtube_upload_initialize",
-        "YouTube did not finish preparing the private upload. ME3 can safely try again.",
+        "YouTube did not finish preparing the upload. ME3 can safely try again.",
         describeFetchError(error),
         "retryable",
       );
@@ -1788,7 +1845,7 @@ const youtubeAdapter: SocialPublishAdapter = {
         "youtube_upload_initialize",
         youtubeErrorMessage(
           initialized,
-          `YouTube could not prepare the private upload (${initResponse.status}).`,
+          `YouTube could not prepare the upload (${initResponse.status}).`,
         ),
         initialized,
         youtubeFailureClass(initResponse.status, initialized),
@@ -1893,7 +1950,7 @@ const youtubeAdapter: SocialPublishAdapter = {
         if (!uploaded.id) {
           return providerError(
             "youtube_upload_outcome_unknown",
-            "YouTube accepted the private video without returning its id. Check YouTube Studio before trying again.",
+            "YouTube accepted the video without returning its id. Check YouTube Studio before trying again.",
             uploaded,
             "outcome_unknown",
           );
@@ -1916,7 +1973,7 @@ const youtubeAdapter: SocialPublishAdapter = {
         "youtube_upload",
         youtubeErrorMessage(
           uploaded,
-          `YouTube could not upload the private video (${uploadResponse.status}).`,
+          `YouTube could not upload the video (${uploadResponse.status}).`,
         ),
         uploaded,
         youtubeFailureClass(uploadResponse.status, uploaded),
@@ -1926,7 +1983,7 @@ const youtubeAdapter: SocialPublishAdapter = {
     if (!videoId) {
       return providerError(
         "youtube_upload_outcome_unknown",
-        "YouTube did not confirm the private video's id. Check YouTube Studio before trying again.",
+        "YouTube did not confirm the video's id. Check YouTube Studio before trying again.",
         providerResponses,
         "outcome_unknown",
       );
@@ -1950,7 +2007,9 @@ const youtubeAdapter: SocialPublishAdapter = {
       platformPostId: videoId,
       platformPostUrl: `https://studio.youtube.com/video/${videoId}/edit`,
       providerResponse: {
-        privacyStatus: "private",
+        privacyStatus: publishingSettings.privacyStatus,
+        madeForKids: publishingSettings.madeForKids,
+        containsSyntheticMedia: publishingSettings.containsSyntheticMedia,
         upload: providerResponses,
         processing,
       },

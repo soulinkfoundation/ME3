@@ -1,6 +1,7 @@
 import {
   adapterFor,
   normalizeTikTokDeliveryOptions,
+  normalizeYouTubePublishingSettings,
   queryTikTokCreatorInfo,
   type TikTokCreatorInfo,
 } from "./adapters";
@@ -25,12 +26,15 @@ import {
 export {
   adapterFor,
   normalizeTikTokDeliveryOptions,
+  normalizeYouTubePublishingSettings,
   type SocialPublishAdapter,
   type SocialPublishAdapterResult,
   type SocialPublishFailureClass,
   type TikTokCreatorInfo,
   type TikTokDeliveryOptions,
   type TikTokPrivacyLevel,
+  type YouTubePrivacyStatus,
+  type YouTubePublishingSettings,
 } from "./adapters";
 
 export {
@@ -2580,7 +2584,7 @@ export async function createPostVersionPublication(
           now,
         );
       const statements = [insertPublication];
-      if (version.platform === "tiktok") {
+      if (version.platform === "tiktok" || version.platform === "youtube") {
         statements.push(
           env.DB.prepare(
             `UPDATE social_variants
@@ -3793,7 +3797,12 @@ export async function publishQueuedPublication(
       bodyText: row.body,
       assets,
       fetcher,
-      providerOptions: requestContext.tiktok,
+      providerOptions:
+        row.platform === "tiktok"
+          ? requestContext.tiktok
+          : row.platform === "youtube"
+            ? requestContext.youtube
+            : undefined,
       resumeProviderResponse,
       markProviderCostStarted: managedXReservation.managed
         ? async () => {
@@ -5587,6 +5596,36 @@ function publicationRequestContextForVersion(
   input: unknown,
 ): string {
   const requestContext = isRecord(input) ? { ...input } : {};
+  if (version.platform === "youtube") {
+    const savedSettings = parseJsonObject(version.publishing_settings_json);
+    const savedYouTube = isRecord(savedSettings.youtube)
+      ? savedSettings.youtube
+      : null;
+    const requestedYouTube = isRecord(requestContext.youtube)
+      ? requestContext.youtube
+      : null;
+    const rawYouTube = requestedYouTube || savedYouTube;
+    if (!rawYouTube) {
+      throw new SocialPublishingInputError(
+        "Review YouTube publishing settings before uploading this video",
+        409,
+      );
+    }
+    const youtube = normalizeYouTubePublishingSettings(rawYouTube);
+    if (!youtube.privacyStatus) {
+      throw new SocialPublishingInputError(
+        "Choose who can view this YouTube video before uploading",
+        409,
+      );
+    }
+    if (youtube.madeForKids === null) {
+      throw new SocialPublishingInputError(
+        "Choose whether this YouTube video is made for kids before uploading",
+        409,
+      );
+    }
+    requestContext.youtube = youtube;
+  }
   if (version.platform === "tiktok") {
     const savedSettings = parseJsonObject(version.publishing_settings_json);
     const savedTikTok = isRecord(savedSettings.tiktok) ? savedSettings.tiktok : null;
