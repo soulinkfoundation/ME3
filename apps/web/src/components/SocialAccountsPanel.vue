@@ -539,7 +539,7 @@ watch(() => props.siteId, () => void reloadAccounts());
             class="x-funding-notice__acknowledgement"
           >
             <input v-model="xFundingAcknowledged" type="checkbox" />
-            <span>I pay X API charges.</span>
+            <span>I will pay X API charges</span>
           </label>
           <label>
             <span>Client ID</span>
@@ -854,12 +854,12 @@ watch(() => props.siteId, () => void reloadAccounts());
   background: var(--color-bg-muted);
 }
 
-.x-funding-notice__acknowledgement input:focus-visible {
+.social-own-app .x-funding-notice__acknowledgement input:focus-visible {
   outline: 2px solid var(--ui-accent, var(--color-accent));
   outline-offset: 2px;
 }
 
-.x-funding-notice__acknowledgement {
+.social-own-app .x-funding-notice__acknowledgement {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -872,10 +872,12 @@ watch(() => props.siteId, () => void reloadAccounts());
   line-height: 1.45;
 }
 
-.x-funding-notice__acknowledgement input {
+.social-own-app .x-funding-notice__acknowledgement input {
   width: 18px;
   height: 18px;
+  min-height: 18px;
   margin: 1px 0 0;
+  padding: 0;
   flex: 0 0 auto;
   accent-color: var(--ui-accent, var(--color-accent));
 }

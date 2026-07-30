@@ -92,7 +92,7 @@ describe("SocialAccountsPanel managed X connection", () => {
     expect(dialog.text()).not.toContain("X API access is pay-per-use");
     expect(dialog.text()).not.toContain("your own X developer account");
     expect(dialog.findAll("a")).toHaveLength(0);
-    expect(notice.text()).toBe("I pay X API charges.");
+    expect(notice.text()).toBe("I will pay X API charges");
 
     const connectButton = wrapper.get(".social-own-app__button");
     expect(connectButton.attributes()).toHaveProperty("disabled");

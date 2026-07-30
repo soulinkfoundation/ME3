@@ -18,6 +18,7 @@ import {
   recoverStrandedQueuedSocialPublications,
   reschedulePublication,
   resolvePublicationOutcome,
+  updateSocialPublishingAccountDefaults,
   updatePostVersion,
   type Publication,
 } from "@me3-core/plugin-social-publishing";
@@ -717,7 +718,7 @@ describe("reusable social Publications", () => {
     });
   });
 
-  it("uses the saved YouTube Version title when the queued upload runs", async () => {
+  it("uses account-wide YouTube defaults when the queued upload runs", async () => {
     fixture.db.run(
       `INSERT INTO social_accounts (
          id, user_id, site_id, platform, platform_account_id, display_name, status,
@@ -739,12 +740,17 @@ describe("reusable social Publications", () => {
       madeForKids: false,
       containsSyntheticMedia: true,
     };
+    await updateSocialPublishingAccountDefaults(
+      fixture.env as never,
+      "owner",
+      "account-youtube",
+      { youtube: youtubeSettings },
+    );
     fixture.db.run(
       `UPDATE social_variants
        SET format = 'short_video',
            title = 'Saved YouTube title',
-           asset_manifest_json = ?,
-           publishing_settings_json = ?
+           asset_manifest_json = ?
        WHERE id = 'version-youtube'`,
       JSON.stringify([{
         url: "https://media.example/short.mp4",
@@ -752,7 +758,6 @@ describe("reusable social Publications", () => {
         mimeType: "video/mp4",
         byteLength: 4,
       }]),
-      JSON.stringify({ youtube: youtubeSettings }),
     );
 
     const publication = await createPublication(fixture, "version-youtube");
@@ -760,6 +765,12 @@ describe("reusable social Publications", () => {
       "SELECT request_context_json FROM social_publications WHERE id = ?",
       publication.id,
     )!.request_context_json)).toMatchObject({ youtube: youtubeSettings });
+    expect(JSON.parse(fixture.db.first<{ metadata_json: string }>(
+      "SELECT metadata_json FROM social_accounts WHERE id = ?",
+      "account-youtube",
+    )!.metadata_json)).toMatchObject({
+      publishingDefaults: { youtube: youtubeSettings },
+    });
     expect(fixture.db.first<{ publishing_settings_json: string }>(
       "SELECT publishing_settings_json FROM social_variants WHERE id = ?",
       "version-youtube",
@@ -914,6 +925,7 @@ describe("reusable social Publications", () => {
   });
 
   it("authenticates a hosted LinkedIn refresh as the linked installation", async () => {
+    fixture.env.ME3_DEPLOYMENT_MODE = "managed";
     const publication = await createPublication(fixture, "version-1");
     fixture.db.exec(
       `CREATE TABLE install_secrets (

@@ -855,6 +855,7 @@ CREATE TABLE social_variants (
   title TEXT,
   body_text TEXT NOT NULL DEFAULT '',
   asset_manifest_json TEXT NOT NULL DEFAULT '[]',
+  publishing_settings_json TEXT NOT NULL DEFAULT '{}',
   source_excerpt TEXT,
   approval_status TEXT NOT NULL DEFAULT 'draft',
   approved_at TEXT,

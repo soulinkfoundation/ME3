@@ -4,6 +4,7 @@ import {
   normalizeYouTubePublishingSettings,
   queryTikTokCreatorInfo,
   type TikTokCreatorInfo,
+  type YouTubePrivacyStatus,
 } from "./adapters";
 import {
   canPublishSocialPlatform,
@@ -283,11 +284,20 @@ export type SocialPublishingAccount = {
   avatarUrl: string | null;
   avatarSource: "provider" | "owner_profile" | null;
   credentialSource: "hosted_oauth" | "byo";
+  publishingDefaults: SocialPublishingDefaults;
   status: string;
   scopes: string[];
   lastVerifiedAt: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type SocialPublishingDefaults = {
+  youtube?: {
+    privacyStatus: YouTubePrivacyStatus;
+    madeForKids: boolean;
+    containsSyntheticMedia: boolean;
+  };
 };
 
 export type ManagedXUsageWarning = {
@@ -648,6 +658,7 @@ type PostVersionPublicationCandidate = {
   id: string;
   platform: SocialPlatform;
   target_account_id: string | null;
+  account_metadata_json: string | null;
   format: string;
   body_text: string;
   post_title: string;
@@ -688,6 +699,7 @@ type SocialPublishingEnv = {
   ME3_CUSTOM_DOMAIN?: string;
   ME3_DEPLOYMENT_MODE?: string;
   ME3_SOCIAL_OAUTH_ORIGIN?: string;
+  ME3_SOCIAL_OAUTH_TEST_INSTALL?: string;
   TOKEN_ENCRYPTION_KEY?: string;
 };
 
@@ -706,6 +718,10 @@ export async function resolveHostedSocialOAuthOrigin(
   if (configuredOrigin && configuredOrigin !== ME3_CLOUD_SOCIAL_OAUTH_ORIGIN) {
     return configuredOrigin;
   }
+  const officialBridgeAllowed =
+    isManagedDeployment(env) ||
+    env.ME3_SOCIAL_OAUTH_TEST_INSTALL?.trim().toLowerCase() === "true";
+  if (!officialBridgeAllowed) return null;
 
   try {
     const [ownerId, installId, installToken] = await Promise.all(
@@ -1113,6 +1129,7 @@ export async function listSocialPublishingAccounts(
         metadata.credentialSource === "hosted_oauth"
           ? "hosted_oauth" as const
           : "byo" as const,
+      publishingDefaults: socialPublishingDefaultsFromMetadata(metadata),
       status: row.status,
       scopes: parseStringArray(row.scopes_json),
       lastVerifiedAt: row.last_verified_at,
@@ -1120,6 +1137,63 @@ export async function listSocialPublishingAccounts(
       updatedAt: row.updated_at,
     };
   });
+}
+
+export async function updateSocialPublishingAccountDefaults(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  accountIdInput: unknown,
+  input: unknown,
+): Promise<SocialPublishingDefaults> {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  if (!gate.ready) throw new SocialPublishingGateError(gate);
+  const accountId = normalizeId(accountIdInput);
+  if (!accountId) throw new SocialPublishingInputError("Social account id is required");
+  const account = await env.DB.prepare(
+    `SELECT id, platform, metadata_json
+     FROM social_accounts
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(accountId, ownerId)
+    .first<{ id: string; platform: SocialPlatform; metadata_json: string | null }>();
+  if (!account) throw new SocialPublishingInputError("Social account not found", 404);
+  if (account.platform !== "youtube") {
+    throw new SocialPublishingInputError(
+      "Account-wide publishing defaults are currently available for YouTube only",
+    );
+  }
+  const rawYouTube = isRecord(input) && isRecord(input.youtube)
+    ? input.youtube
+    : null;
+  const youtube = normalizeYouTubePublishingSettings(rawYouTube);
+  if (!youtube.privacyStatus || youtube.madeForKids === null) {
+    throw new SocialPublishingInputError(
+      "Choose YouTube visibility and audience before saving defaults",
+    );
+  }
+
+  const metadata = parseJsonObject(account.metadata_json);
+  const publishingDefaults: SocialPublishingDefaults = {
+    ...socialPublishingDefaultsFromMetadata(metadata),
+    youtube: {
+      privacyStatus: youtube.privacyStatus,
+      madeForKids: youtube.madeForKids,
+      containsSyntheticMedia: youtube.containsSyntheticMedia,
+    },
+  };
+  await env.DB.prepare(
+    `UPDATE social_accounts
+     SET metadata_json = ?, updated_at = ?
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(
+      JSON.stringify({ ...metadata, publishingDefaults }),
+      new Date().toISOString(),
+      account.id,
+      ownerId,
+    )
+    .run();
+  return publishingDefaults;
 }
 
 export async function getTikTokCreatorInfo(
@@ -1468,16 +1542,16 @@ export async function completeSocialOAuth(
   const profile = await fetchSocialProfile(platform, token.accessToken, options.fetch);
   const publishingAccessToken = profile.accessToken || token.accessToken;
   const now = new Date().toISOString();
-  const previousAccount =
-    platform === "x" && isManagedDeployment(env)
-      ? await env.DB.prepare(
-          `SELECT id, metadata_json
-           FROM social_accounts
-           WHERE site_id = ? AND platform = 'x' AND platform_account_id = ?`,
-        )
-          .bind(stateRow.site_id, profile.id)
-          .first<{ id: string; metadata_json: string | null }>()
-      : null;
+  const previousAccount = await env.DB.prepare(
+    `SELECT id, metadata_json
+     FROM social_accounts
+     WHERE site_id = ? AND platform = ? AND platform_account_id = ?`,
+  )
+    .bind(stateRow.site_id, platform, profile.id)
+    .first<{ id: string; metadata_json: string | null }>();
+  const previousPublishingDefaults = socialPublishingDefaultsFromMetadata(
+    parseJsonObject(previousAccount?.metadata_json),
+  );
 
   await env.DB.prepare("DELETE FROM social_oauth_states WHERE id = ?")
     .bind(stateRow.id)
@@ -1517,6 +1591,9 @@ export async function completeSocialOAuth(
       JSON.stringify({
         provider: platform,
         ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : {}),
+        ...(Object.keys(previousPublishingDefaults).length
+          ? { publishingDefaults: previousPublishingDefaults }
+          : {}),
       }),
       now,
       now,
@@ -1524,6 +1601,8 @@ export async function completeSocialOAuth(
     )
     .run();
   if (
+    platform === "x" &&
+    isManagedDeployment(env) &&
     previousAccount &&
     parseJsonObject(previousAccount.metadata_json).credentialSource === "hosted_oauth"
   ) {
@@ -1578,6 +1657,16 @@ async function completeHostedSocialOAuth(
   }
 
   const now = new Date().toISOString();
+  const previousAccount = await env.DB.prepare(
+    `SELECT metadata_json
+     FROM social_accounts
+     WHERE site_id = ? AND platform = ? AND platform_account_id = ?`,
+  )
+    .bind(stateRow.site_id, stateRow.platform, payload.account.id)
+    .first<{ metadata_json: string | null }>();
+  const previousPublishingDefaults = socialPublishingDefaultsFromMetadata(
+    parseJsonObject(previousAccount?.metadata_json),
+  );
   await env.DB.prepare("DELETE FROM social_oauth_states WHERE id = ?")
     .bind(stateRow.id)
     .run();
@@ -1618,6 +1707,9 @@ async function completeHostedSocialOAuth(
         credentialSource: "hosted_oauth",
         ...(normalizeAvatarUrl(payload.account.avatarUrl)
           ? { avatarUrl: normalizeAvatarUrl(payload.account.avatarUrl) }
+          : {}),
+        ...(Object.keys(previousPublishingDefaults).length
+          ? { publishingDefaults: previousPublishingDefaults }
           : {}),
       }),
       now,
@@ -2181,7 +2273,8 @@ async function getOwnedPostVersionPublicationCandidate(
   versionId: string,
 ): Promise<PostVersionPublicationCandidate | null> {
   return env.DB.prepare(
-    `SELECT v.id, v.platform, v.target_account_id, v.format, v.body_text,
+    `SELECT v.id, v.platform, v.target_account_id,
+            account.metadata_json AS account_metadata_json, v.format, v.body_text,
             COALESCE(NULLIF(TRIM(v.title), ''), p.post_title_snapshot) AS post_title,
             v.asset_manifest_json, v.publishing_settings_json,
             v.approval_status, v.approved_at,
@@ -2189,6 +2282,7 @@ async function getOwnedPostVersionPublicationCandidate(
      FROM social_variants v
      JOIN social_packages p ON p.id = v.package_id
      JOIN sites s ON s.id = p.site_id
+     LEFT JOIN social_accounts account ON account.id = v.target_account_id
      WHERE v.id = ? AND s.user_id = ?`,
   )
     .bind(versionId, ownerId)
@@ -5520,6 +5614,24 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
   }
 }
 
+function socialPublishingDefaultsFromMetadata(
+  metadata: Record<string, unknown>,
+): SocialPublishingDefaults {
+  const rawDefaults = isRecord(metadata.publishingDefaults)
+    ? metadata.publishingDefaults
+    : {};
+  const youtube = normalizeYouTubePublishingSettings(rawDefaults.youtube);
+  return youtube.privacyStatus && youtube.madeForKids !== null
+    ? {
+        youtube: {
+          privacyStatus: youtube.privacyStatus,
+          madeForKids: youtube.madeForKids,
+          containsSyntheticMedia: youtube.containsSyntheticMedia,
+        },
+      }
+    : {};
+}
+
 function isHttpsUrl(value: string): boolean {
   try {
     return new URL(value).protocol === "https:";
@@ -5597,6 +5709,9 @@ function publicationRequestContextForVersion(
 ): string {
   const requestContext = isRecord(input) ? { ...input } : {};
   if (version.platform === "youtube") {
+    const accountDefaults = socialPublishingDefaultsFromMetadata(
+      parseJsonObject(version.account_metadata_json),
+    );
     const savedSettings = parseJsonObject(version.publishing_settings_json);
     const savedYouTube = isRecord(savedSettings.youtube)
       ? savedSettings.youtube
@@ -5604,7 +5719,7 @@ function publicationRequestContextForVersion(
     const requestedYouTube = isRecord(requestContext.youtube)
       ? requestContext.youtube
       : null;
-    const rawYouTube = requestedYouTube || savedYouTube;
+    const rawYouTube = requestedYouTube || accountDefaults.youtube || savedYouTube;
     if (!rawYouTube) {
       throw new SocialPublishingInputError(
         "Review YouTube publishing settings before uploading this video",

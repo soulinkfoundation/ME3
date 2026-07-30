@@ -70,6 +70,7 @@ export {
   updateSocialPost,
   updateSocialSuggestion,
   updatePreferredPostingTimes,
+  updateSocialPublishingAccountDefaults,
   updateSocialProviderSettings,
   uploadSocialCarouselMedia,
   type CreatePublicationInput,

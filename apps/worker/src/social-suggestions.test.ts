@@ -772,6 +772,7 @@ const schemaSql = `
     title TEXT,
     body_text TEXT NOT NULL,
     asset_manifest_json TEXT NOT NULL,
+    publishing_settings_json TEXT NOT NULL DEFAULT '{}',
     carousel_render_set_id TEXT,
     source_excerpt TEXT,
     approval_status TEXT NOT NULL,

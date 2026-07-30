@@ -3,10 +3,30 @@ import {
   SocialPublishingInputError,
   disconnectSocialPublishingAccount,
   getTikTokCreatorInfo,
+  updateSocialPublishingAccountDefaults,
 } from "../social-publishing";
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
 
 export function registerSocialAccountRoutes(app: AppHono, deps: OwnerRouteDeps) {
+  app.patch("/api/social/accounts/:id/publishing-defaults", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
+    try {
+      return c.json({
+        ok: true,
+        publishingDefaults: await updateSocialPublishingAccountDefaults(
+          c.env,
+          ownerId,
+          c.req.param("id"),
+          body,
+        ),
+      });
+    } catch (error) {
+      return socialAccountErrorResponse(c, error);
+    }
+  });
+
   app.get("/api/social/accounts/:id/tiktok/creator-info", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);

@@ -394,7 +394,10 @@ function tikTokSettingsSummary(version: PostVersion | null | undefined): string 
 function savedYouTubeSettings(
   version: PostVersion | null | undefined,
 ): YouTubePublishingSettings | null {
-  return version?.publishingSettings?.youtube || null;
+  if (!version) return null;
+  return accountForVersion(version)?.publishingDefaults?.youtube ||
+    version.publishingSettings?.youtube ||
+    null;
 }
 
 function hasSavedYouTubeSettings(version: PostVersion | null | undefined): boolean {
@@ -2229,7 +2232,7 @@ async function copyTikTokCaption() {
 
 function resetYouTubeSettings() {
   youtubeSettingsError.value = "";
-  youtubePrivacyStatus.value = "";
+  youtubePrivacyStatus.value = "public";
   youtubeMadeForKids.value = "";
   youtubeContainsSyntheticMedia.value = false;
 }
@@ -2259,8 +2262,10 @@ function closeYouTubeSettings() {
 
 async function saveYouTubeSettings() {
   const version = youtubeSettingsVersion.value;
+  const account = youtubeSettingsAccount.value;
   if (
     !version ||
+    !account ||
     youtubeSettingsSaving.value ||
     !youtubePrivacyStatus.value ||
     !youtubeMadeForKids.value
@@ -2274,10 +2279,16 @@ async function saveYouTubeSettings() {
 
   youtubeSettingsSaving.value = true;
   try {
-    replaceVersion(await social.updatePostVersion(version.id, {
-      publishingSettings: { youtube: settings },
-    }));
-    toastSuccess("YouTube publishing settings saved for this video.");
+    const publishingDefaults = await social.updateSocialAccountPublishingDefaults(
+      account.id,
+      { youtube: settings },
+    );
+    accounts.value = accounts.value.map((candidate) =>
+      candidate.id === account.id
+        ? { ...candidate, publishingDefaults }
+        : candidate,
+    );
+    toastSuccess("YouTube defaults saved for this channel.");
     closeYouTubeSettings();
   } catch (value) {
     social.setErrorFromApi(value, "YouTube settings could not be saved.");
@@ -2930,116 +2941,6 @@ function currentQueryParam(name: string): string | null {
                 </div>
               </div>
 
-              <section
-                v-if="
-                  !selectedPostReadOnly &&
-                  !selectedPostOptimistic &&
-                  publicationTikTokVersion &&
-                  (sharedEditor || selectedVersion?.platform === 'tiktok')
-                "
-                :class="[
-                  'platform-publish-readiness',
-                  {
-                    'platform-publish-readiness--ready':
-                      hasSavedTikTokSettings(publicationTikTokVersion),
-                  },
-                ]"
-                aria-label="TikTok publishing settings"
-              >
-                <UiIcon
-                  :name="
-                      hasSavedTikTokSettings(publicationTikTokVersion)
-                      ? 'CircleCheck'
-                      : 'Info'
-                  "
-                  :size="20"
-                  aria-hidden="true"
-                />
-                <span>
-                  <strong>
-                    {{
-                      hasSavedTikTokSettings(publicationTikTokVersion)
-                        ? 'TikTok ready'
-                        : 'Review TikTok before publishing'
-                    }}
-                  </strong>
-                  <small>{{ tikTokSettingsSummary(publicationTikTokVersion) }}</small>
-                </span>
-                <Button
-                  :color="
-                    hasSavedTikTokSettings(publicationTikTokVersion)
-                      ? 'ghost'
-                      : 'primary'
-                  "
-                  shape="soft"
-                  size="compact"
-                  type="button"
-                  :disabled="saving || scheduling"
-                  @click="openTikTokSettings(publicationTikTokVersion)"
-                >
-                  {{
-                    hasSavedTikTokSettings(publicationTikTokVersion)
-                      ? 'Edit'
-                      : 'Review settings'
-                  }}
-                </Button>
-              </section>
-
-              <section
-                v-if="
-                  !selectedPostReadOnly &&
-                  !selectedPostOptimistic &&
-                  publicationYouTubeVersion &&
-                  (sharedEditor || selectedVersion?.platform === 'youtube')
-                "
-                :class="[
-                  'platform-publish-readiness',
-                  {
-                    'platform-publish-readiness--ready':
-                      hasSavedYouTubeSettings(publicationYouTubeVersion),
-                  },
-                ]"
-                aria-label="YouTube publishing settings"
-              >
-                <UiIcon
-                  :name="
-                    hasSavedYouTubeSettings(publicationYouTubeVersion)
-                      ? 'CircleCheck'
-                      : 'Info'
-                  "
-                  :size="20"
-                  aria-hidden="true"
-                />
-                <span>
-                  <strong>
-                    {{
-                      hasSavedYouTubeSettings(publicationYouTubeVersion)
-                        ? 'YouTube ready'
-                        : 'Review YouTube before uploading'
-                    }}
-                  </strong>
-                  <small>{{ youtubeSettingsSummary(publicationYouTubeVersion) }}</small>
-                </span>
-                <Button
-                  :color="
-                    hasSavedYouTubeSettings(publicationYouTubeVersion)
-                      ? 'ghost'
-                      : 'primary'
-                  "
-                  shape="soft"
-                  size="compact"
-                  type="button"
-                  :disabled="saving || scheduling"
-                  @click="openYouTubeSettings(publicationYouTubeVersion)"
-                >
-                  {{
-                    hasSavedYouTubeSettings(publicationYouTubeVersion)
-                      ? 'Edit'
-                      : 'Review settings'
-                  }}
-                </Button>
-              </section>
-
               <div v-if="!selectedPostReadOnly && !selectedPostOptimistic" class="editor-actions">
                 <Button color="neutral" shape="soft" size="compact" type="button" :disabled="saving || scheduling || !canOpenSchedule" @click="openSchedule">
                   <template #icon>
@@ -3064,6 +2965,38 @@ function currentQueryParam(name: string): string | null {
                   @click="showPublishingChecks = true"
                 >
                   <UiIcon name="Info" :size="19" aria-hidden="true" />
+                </Button>
+                <Button
+                  v-if="
+                    publicationTikTokVersion &&
+                    (sharedEditor || selectedVersion?.platform === 'tiktok')
+                  "
+                  class="editor-actions__settings"
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="saving || scheduling"
+                  @click="openTikTokSettings(publicationTikTokVersion)"
+                >
+                  <UiIcon name="SlidersHorizontal" :size="16" aria-hidden="true" />
+                  Review settings
+                </Button>
+                <Button
+                  v-if="
+                    publicationYouTubeVersion &&
+                    (sharedEditor || selectedVersion?.platform === 'youtube')
+                  "
+                  class="editor-actions__settings"
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="saving || scheduling"
+                  @click="openYouTubeSettings(publicationYouTubeVersion)"
+                >
+                  <UiIcon name="SlidersHorizontal" :size="16" aria-hidden="true" />
+                  YouTube settings
                 </Button>
                 <Button
                   v-if="canDeleteDraft"
@@ -3928,11 +3861,6 @@ function currentQueryParam(name: string): string | null {
               </p>
             </div>
 
-            <p class="tiktok-direct-post__review-note">
-              During app review testing, the TikTok account must be private and visibility
-              must be <strong>Only me</strong>. Wider visibility unlocks after approval.
-            </p>
-
             <label class="field">
               <span>Who can view this post?</span>
               <select v-model="tiktokPrivacyLevel" required>
@@ -4102,7 +4030,7 @@ function currentQueryParam(name: string): string | null {
           <div>
             <h2 id="youtube-settings-title">YouTube publishing</h2>
             <p>
-              Review the audience, visibility, and disclosure settings for this video.
+              Set the defaults ME3 will use for every upload to this channel.
             </p>
           </div>
           <Button
@@ -4144,11 +4072,6 @@ function currentQueryParam(name: string): string | null {
             </p>
           </div>
 
-          <p class="youtube-upload-settings__review-note">
-            Until the YouTube API audit is approved, YouTube may keep API uploads
-            private even when Public or Unlisted is selected.
-          </p>
-
           <label class="field">
             <span>Visibility</span>
             <select v-model="youtubePrivacyStatus" required>
@@ -4186,8 +4109,7 @@ function currentQueryParam(name: string): string | null {
           </fieldset>
 
           <p class="youtube-upload-settings__notice">
-            ME3 sends these exact settings with the upload. They remain saved until
-            this publishing attempt starts or the Post changes.
+            These defaults apply to every YouTube upload until you edit them here.
           </p>
         </section>
 
@@ -4217,7 +4139,7 @@ function currentQueryParam(name: string): string | null {
               !youtubeMadeForKids
             "
           >
-            {{ youtubeSettingsSaving ? 'Saving…' : 'Save YouTube settings' }}
+            {{ youtubeSettingsSaving ? 'Saving…' : 'Save YouTube defaults' }}
           </Button>
         </footer>
       </form>
@@ -6165,7 +6087,6 @@ input:focus {
   padding: 0;
 }
 
-.platform-publish-readiness,
 .platform-publish-summary {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -6178,25 +6099,20 @@ input:focus {
   background: var(--ui-surface-muted);
 }
 
-.platform-publish-readiness--ready,
 .platform-publish-summary {
   border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-border));
   background: var(--ui-accent-soft);
 }
 
-.platform-publish-readiness > svg,
 .platform-publish-summary > svg {
   color: var(--ui-accent-strong);
 }
 
-.platform-publish-readiness span,
-.platform-publish-readiness small,
 .platform-publish-summary span,
 .platform-publish-summary small {
   display: block;
 }
 
-.platform-publish-readiness small,
 .platform-publish-summary small {
   margin-top: 2px;
   color: var(--ui-text-muted);
@@ -6290,18 +6206,10 @@ input:focus {
 
 .tiktok-direct-post__status,
 .tiktok-direct-post__duration,
-.tiktok-direct-post__notice,
-.tiktok-direct-post__review-note {
+.tiktok-direct-post__notice {
   color: var(--ui-text-muted);
   font-size: 0.78rem;
   line-height: 1.45;
-}
-
-.tiktok-direct-post__review-note {
-  padding: 9px 10px;
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-accent-soft);
-  color: var(--ui-accent-strong);
 }
 
 .tiktok-direct-post__duration.is-invalid {
@@ -6422,15 +6330,6 @@ input:focus {
   line-height: 1.4;
 }
 
-.youtube-upload-settings__review-note {
-  padding: 9px 10px;
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-accent-soft);
-  color: var(--ui-accent-strong);
-  font-size: 0.78rem;
-  line-height: 1.45;
-}
-
 .youtube-upload-settings__checks {
   display: grid;
   gap: 8px;
@@ -6547,12 +6446,10 @@ input:focus {
 }
 
 @media (max-width: 520px) {
-  .platform-publish-readiness,
   .platform-publish-summary {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .platform-publish-readiness :deep(.me3-btn),
   .platform-publish-summary :deep(.me3-btn) {
     grid-column: 1 / -1;
     justify-self: stretch;

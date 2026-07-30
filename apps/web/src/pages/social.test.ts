@@ -1296,14 +1296,9 @@ describe("SocialPage", () => {
       throw new Error(`Unexpected GET ${endpoint}`);
     });
     vi.mocked(api.patch).mockImplementation(async (endpoint, input) => {
-      if (endpoint === "/social/versions/version-youtube") {
+      if (endpoint === "/social/accounts/account-youtube/publishing-defaults") {
         return {
-          version: {
-            ...youtubePost.versions[0],
-            publishingSettings: (
-              input as { publishingSettings: PostVersion["publishingSettings"] }
-            ).publishingSettings,
-          },
+          publishingDefaults: input,
         };
       }
       throw new Error(`Unexpected PATCH ${endpoint}`);
@@ -1336,24 +1331,25 @@ describe("SocialPage", () => {
       "Unlisted",
       "Public",
     ]);
+    expect((settingsDialog.get("select").element as HTMLSelectElement).value).toBe("public");
     await settingsDialog.get("select").setValue("unlisted");
     await settingsDialog.get("input[type='radio'][value='no']").setValue();
     await settingsDialog.get("input[type='checkbox']").setValue(true);
     await settingsDialog.trigger("submit");
     await flushPromises();
 
-    expect(api.patch).toHaveBeenCalledWith("/social/versions/version-youtube", {
-      publishingSettings: {
+    expect(api.patch).toHaveBeenCalledWith(
+      "/social/accounts/account-youtube/publishing-defaults",
+      {
         youtube: {
           privacyStatus: "unlisted",
           madeForKids: false,
           containsSyntheticMedia: true,
         },
       },
-    });
-    expect(wrapper.get(".platform-publish-readiness").text()).toContain(
-      "Unlisted · Not made for kids · Altered or synthetic",
     );
+    expect(wrapper.find(".platform-publish-readiness").exists()).toBe(false);
+    expect(wrapper.get(".editor-actions__settings").text()).toBe("YouTube settings");
 
     const upload = wrapper.get(".editor-actions").findAll("button")
       .find((button) => button.text().trim() === "Upload");
@@ -2159,6 +2155,17 @@ describe("SocialPage", () => {
       .toContain("Video length: 13 seconds");
     expect(wrapper.get(".tiktok-settings-dialog .tiktok-direct-post__checks").text())
       .toContain("Unavailable in TikTok settings");
+    expect(wrapper.find(".tiktok-direct-post__review-note").exists()).toBe(false);
+    expect((
+      wrapper.get(".tiktok-settings-dialog .tiktok-direct-post select")
+        .element as HTMLSelectElement
+    ).value).toBe("");
+    expect((
+      wrapper.get(".tiktok-settings-dialog .tiktok-direct-post__consent input")
+        .element as HTMLInputElement
+    ).checked).toBe(false);
+    expect(wrapper.find(".platform-publish-readiness").exists()).toBe(false);
+    expect(wrapper.get(".editor-actions__settings").text()).toBe("Review settings");
 
     await wrapper.get(".tiktok-settings-dialog .tiktok-direct-post select")
       .setValue("PUBLIC_TO_EVERYONE");

@@ -1085,7 +1085,8 @@ const baseSchemaSql = `
   CREATE TABLE social_variants (
     id TEXT PRIMARY KEY, package_id TEXT NOT NULL, platform TEXT NOT NULL,
     target_account_id TEXT, format TEXT NOT NULL, title TEXT, body_text TEXT NOT NULL,
-    asset_manifest_json TEXT NOT NULL DEFAULT '[]', carousel_render_set_id TEXT,
+    asset_manifest_json TEXT NOT NULL DEFAULT '[]',
+    publishing_settings_json TEXT NOT NULL DEFAULT '{}', carousel_render_set_id TEXT,
     source_excerpt TEXT,
     approval_status TEXT NOT NULL, approved_at TEXT, approved_by_user_id TEXT,
     scheduled_for TEXT, timezone TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,

@@ -47,6 +47,7 @@ export type SocialAccountRow = {
   avatarUrl?: string | null;
   avatarSource?: "provider" | "owner_profile" | null;
   credentialSource: "hosted_oauth" | "byo";
+  publishingDefaults?: SocialPublishingDefaults;
   status: string;
   scopes?: string[];
   lastVerifiedAt: string | null;
@@ -90,6 +91,10 @@ export type YouTubePublishingSettings = {
   privacyStatus: YouTubePrivacyStatus;
   madeForKids: boolean;
   containsSyntheticMedia: boolean;
+};
+
+export type SocialPublishingDefaults = {
+  youtube?: YouTubePublishingSettings;
 };
 
 export type DriveFolder = {
@@ -943,6 +948,18 @@ export const useSocialStore = defineStore("social", () => {
     return data.creatorInfo;
   }
 
+  async function updateSocialAccountPublishingDefaults(
+    accountId: string,
+    publishingDefaults: SocialPublishingDefaults,
+  ): Promise<SocialPublishingDefaults> {
+    error.value = null;
+    const data = await api.patch<{ publishingDefaults: SocialPublishingDefaults }>(
+      `/social/accounts/${encodeURIComponent(accountId)}/publishing-defaults`,
+      publishingDefaults,
+    );
+    return data.publishingDefaults || {};
+  }
+
   async function listPostVersionPublications(versionId: string): Promise<Publication[]> {
     error.value = null;
     const data = await api.get<{ publications: Publication[] }>(
@@ -1063,6 +1080,7 @@ export const useSocialStore = defineStore("social", () => {
     listPostVersionPublications,
     createPostVersionPublication,
     getTikTokCreatorInfo,
+    updateSocialAccountPublishingDefaults,
     cancelPublication,
     resolvePublicationOutcome,
     updateProviderSetting,
