@@ -207,7 +207,12 @@ type ManagedAiLimitChoice = "25" | "50" | "100" | "custom";
 
 type AiRouteInputs = Record<AiRouteId, { providerId: string; model: string }>;
 
-type EmailProviderId = "cloudflare-email" | "smtp" | "mailgun" | "postmark";
+type EmailProviderId =
+  | "managed_gateway"
+  | "cloudflare-email"
+  | "smtp"
+  | "mailgun"
+  | "postmark";
 
 type EmailProviderSetupRequirement = {
   id: string;
@@ -242,7 +247,7 @@ type EmailProviderRecord = {
   configured: boolean;
   setupRequired: boolean;
   statusLabel: string;
-  source: "binding" | "stored" | "manual" | "not_configured";
+  source: "managed" | "binding" | "stored" | "manual" | "not_configured";
   secretLabel: string | null;
   keyHint: string | null;
   keyUpdatedAt: string | null;
@@ -355,6 +360,7 @@ const mailboxLoading = ref(false);
 const mailboxSaving = ref(false);
 const mailboxActivating = ref(false);
 const mailboxAvailable = ref(false);
+const mailboxCloudflareManaged = ref(false);
 const mailbox = ref<MailboxRecord | null>(null);
 const mailboxAliasInput = ref("");
 const emailAddressInput = ref("");
@@ -528,11 +534,24 @@ const emailDisplayName = computed(() => {
 });
 
 const installationEmailDomain = computed(() => {
+  if (mailboxCloudflareManaged.value) return "me3.app";
   const configuredDomain = customDomainSite.value?.custom_domain || "";
   return (
     normalizeEmailDomain(configuredDomain) ||
     inferEmailDomainFromHost(window.location.hostname)
   );
+});
+
+const managedMailboxAddress = computed(() => {
+  const address = mailbox.value?.aliasAddress?.trim().toLowerCase() || "";
+  if (mailboxCloudflareManaged.value && isValidMailboxEmail(address)) {
+    return address;
+  }
+  const localPart =
+    mailboxAliasNormalized.value || mailbox.value?.aliasLocalPart || "";
+  return mailboxCloudflareManaged.value && localPart
+    ? `${localPart}@me3.app`
+    : "";
 });
 
 const mailboxRoutedAddress = computed(() => {
@@ -545,7 +564,11 @@ const mailboxRoutedAddress = computed(() => {
 });
 
 const customDomainSuggestedDomain = computed(
-  () => customDomainSite.value?.custom_domain || emailAddressDomain.value || "",
+  () => customDomainSite.value?.custom_domain || "",
+);
+
+const selectedEmailProviderIsManaged = computed(
+  () => selectedEmailProviderId.value === "managed_gateway",
 );
 
 const selectedProviderNeedsSecret = computed(() => {
@@ -593,6 +616,18 @@ const unifiedEmailSaveDisabled = computed(
     !emailProviderSpecificSettingsValid.value ||
     (emailProviderApiTokenCount.value > 0 &&
       !emailProviderEncryptionConfigured.value),
+);
+
+const emailSenderSaveDisabled = computed(
+  () =>
+    emailProviderSaving.value ||
+    emailProviderLoading.value ||
+    !activeEmailProvider.value ||
+    (!selectedEmailProviderIsManaged.value &&
+      (!emailAddressIsValid.value ||
+        !emailProviderSpecificSettingsValid.value ||
+        (emailProviderApiTokenCount.value > 0 &&
+          !emailProviderEncryptionConfigured.value))),
 );
 
 const soulinkStatusLabel = computed(() => {
@@ -1106,6 +1141,8 @@ function inferEmailAddressFromState() {
     return cloudflareFromAddress.trim().toLowerCase();
   }
 
+  if (managedMailboxAddress.value) return managedMailboxAddress.value;
+
   if (mailboxRoutedAddress.value) return mailboxRoutedAddress.value;
 
   const localPart =
@@ -1197,6 +1234,7 @@ async function saveSettings() {
 
 function syncMailboxInputs(response: MailboxResponse) {
   mailboxAvailable.value = response.available;
+  mailboxCloudflareManaged.value = response.cloudflareManaged;
   mailbox.value = response.mailbox;
   mailboxAliasInput.value =
     response.mailbox?.aliasLocalPart ||
@@ -1308,6 +1346,43 @@ async function saveUnifiedEmailSettings() {
   } finally {
     mailboxSaving.value = false;
     mailboxActivating.value = false;
+    emailProviderSaving.value = false;
+  }
+}
+
+async function saveEmailSenderSettings() {
+  if (!mailboxCloudflareManaged.value) {
+    await saveUnifiedEmailSettings();
+    return;
+  }
+  if (emailSenderSaveDisabled.value) return;
+
+  emailProviderSaving.value = true;
+  mailboxError.value = null;
+  emailProviderError.value = null;
+
+  try {
+    const providerResponse = await api.put<EmailProviderSettingsResponse>(
+      "/email-provider-settings",
+      selectedEmailProviderIsManaged.value
+        ? { activeProviderId: selectedEmailProviderId.value }
+        : {
+            activeProviderId: selectedEmailProviderId.value,
+            providers: [
+              buildEmailProviderUpdate(emailAddressNormalized.value),
+            ],
+          },
+    );
+    syncEmailProviderSettings(providerResponse);
+    toastSuccess(
+      selectedEmailProviderIsManaged.value
+        ? "ME3 managed email restored as your sender."
+        : "Custom email sender saved.",
+    );
+  } catch (e: any) {
+    emailProviderError.value =
+      e.message || "Failed to save email sender settings";
+  } finally {
     emailProviderSaving.value = false;
   }
 }
@@ -1682,6 +1757,7 @@ function createEmptyEmailProviderInputs(): Record<
   EmailProviderInputs
 > {
   return {
+    managed_gateway: createDefaultEmailProviderInput("managed_gateway"),
     "cloudflare-email": createDefaultEmailProviderInput("cloudflare-email"),
     smtp: createDefaultEmailProviderInput("smtp"),
     mailgun: createDefaultEmailProviderInput("mailgun"),
@@ -2498,8 +2574,13 @@ onBeforeUnmount(() => {
                 <section class="domain-email-section">
                   <div class="setup-disclosure-intro">
                     <div>
-                      <h3>Custom domain</h3>
-                      <p>
+                      <h3>Custom website domain</h3>
+                      <p v-if="mailboxCloudflareManaged">
+                        Connect a public <strong>www</strong> address. Your
+                        permanent ME3 address, login, API, and mailbox stay
+                        unchanged.
+                      </p>
+                      <p v-else>
                         Follow the steps in the
                         <button
                           class="setup-guide-link"
@@ -2520,6 +2601,7 @@ onBeforeUnmount(() => {
                   <template v-else-if="customDomainSite">
                     <CustomDomain
                       embedded
+                      :managed="mailboxCloudflareManaged"
                       :username="customDomainSite.username"
                       :show-settings-link="false"
                       :profile-published="
@@ -2537,8 +2619,18 @@ onBeforeUnmount(() => {
                 <section class="mailbox-setup">
                   <div class="setup-disclosure-intro">
                     <div>
-                      <h3>Mailbox</h3>
-                      <p>
+                      <h3>
+                        {{
+                          mailboxCloudflareManaged
+                            ? "ME3 mailbox"
+                            : "Mailbox"
+                        }}
+                      </h3>
+                      <p v-if="mailboxCloudflareManaged">
+                        This permanent address keeps receiving mail even if you
+                        configure a separate custom sender.
+                      </p>
+                      <p v-else>
                         Follow the steps in the
                         <button
                           class="setup-guide-link"
@@ -2551,7 +2643,23 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
 
-                  <div class="email-address-save">
+                  <div
+                    v-if="mailboxCloudflareManaged"
+                    class="email-address-save"
+                  >
+                    <label class="field email-address-field">
+                      <span>ME3 email address</span>
+                      <input
+                        class="input email-address-input"
+                        type="email"
+                        :value="managedMailboxAddress"
+                        readonly
+                        aria-readonly="true"
+                      />
+                    </label>
+                  </div>
+
+                  <div v-else class="email-address-save">
                     <label class="field email-address-field">
                       <span>Email address</span>
                       <input
@@ -2579,7 +2687,11 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
                   <p
-                    v-if="emailAddressInput.trim() && !emailAddressIsValid"
+                    v-if="
+                      !mailboxCloudflareManaged &&
+                      emailAddressInput.trim() &&
+                      !emailAddressIsValid
+                    "
                     class="error compact-error"
                   >
                     Enter an address like name@your-domain.com. Use letters,
@@ -2587,7 +2699,10 @@ onBeforeUnmount(() => {
                   </p>
                 </section>
 
-                <details class="email-disclosure">
+                <details
+                  v-if="!mailboxCloudflareManaged"
+                  class="email-disclosure"
+                >
                   <summary>Forward a copy</summary>
                   <div class="email-disclosure-body email-forwarding-row">
                     <label class="checkbox-row email-forwarding-row__toggle">
@@ -2621,6 +2736,7 @@ onBeforeUnmount(() => {
                         v-model="selectedEmailProviderId"
                         class="input"
                         aria-label="Email sender provider"
+                        @change="syncEmailAddressInput(true)"
                       >
                         <option
                           v-for="provider in emailProviders"
@@ -2636,6 +2752,36 @@ onBeforeUnmount(() => {
                       v-if="activeEmailProvider"
                       class="email-provider-fields"
                     >
+                      <label
+                        v-if="
+                          mailboxCloudflareManaged &&
+                          !selectedEmailProviderIsManaged
+                        "
+                        class="field"
+                      >
+                        <span>From address</span>
+                        <input
+                          v-model="emailAddressInput"
+                          class="input"
+                          type="email"
+                          placeholder="name@your-domain.com"
+                          autocomplete="email"
+                          spellcheck="false"
+                        />
+                      </label>
+
+                      <p
+                        v-if="
+                          mailboxCloudflareManaged &&
+                          selectedEmailProviderIsManaged
+                        "
+                        class="email-provider-managed-note"
+                      >
+                        ME3 sends from
+                        <strong>{{ managedMailboxAddress }}</strong>. No
+                        provider credentials are needed.
+                      </p>
+
                       <template v-if="selectedEmailProviderId === 'smtp'">
                         <label class="field">
                           <span>SMTP host</span>
@@ -2751,6 +2897,19 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="email-provider-actions">
                       <button
+                        v-if="mailboxCloudflareManaged"
+                        class="button primary"
+                        type="button"
+                        :disabled="emailSenderSaveDisabled"
+                        @click="saveEmailSenderSettings"
+                      >
+                        {{
+                          emailProviderSaving
+                            ? "Saving..."
+                            : "Save sender"
+                        }}
+                      </button>
+                      <button
                         class="button secondary"
                         type="button"
                         :disabled="
@@ -2768,8 +2927,17 @@ onBeforeUnmount(() => {
                         }}
                       </button>
                       <p class="email-provider-test-note">
-                        Save changes first. The test sends to
-                        {{ emailAddressNormalized || "this address" }}.
+                        {{
+                          mailboxCloudflareManaged
+                            ? "Your ME3 mailbox remains active when you use a custom sender. Connecting a website domain does not configure email."
+                            : "Save changes first."
+                        }}
+                        The test sends to
+                        {{
+                          emailAddressNormalized ||
+                          managedMailboxAddress ||
+                          "this address"
+                        }}.
                       </p>
                     </div>
                   </div>
@@ -5752,6 +5920,14 @@ h1 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.email-provider-managed-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .email-provider-actions {

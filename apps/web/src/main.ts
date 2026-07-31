@@ -5,7 +5,23 @@ import App from './App.vue'
 import './styles/main.css'
 import 'vue-sonner/style.css'
 import { useTheme } from './composables/useTheme'
-import { registerServiceWorker } from './registerServiceWorker'
+import { cleanupLegacyServiceWorker } from './serviceWorkerCleanup'
+
+const staleChunkReloadKey = 'me3:stale-chunk-reload'
+
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault()
+
+  const previousReload = Number(
+    window.sessionStorage.getItem(staleChunkReloadKey) || '0',
+  )
+  if (Date.now() - previousReload < 10_000) {
+    return
+  }
+
+  window.sessionStorage.setItem(staleChunkReloadKey, String(Date.now()))
+  window.location.reload()
+})
 
 // Extend window interface for testing
 declare global {
@@ -48,10 +64,9 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
 
 app.use(router)
 
-// Attach the load listener while the entry module is still evaluating. Initial
-// auth/workspace guards can finish after `load`, so registering from
-// router.isReady() would otherwise miss the event entirely.
-registerServiceWorker()
+// Existing installs may still be controlled by the retired PWA service worker.
+// Remove its registration and app-shell caches once the current page has loaded.
+cleanupLegacyServiceWorker()
 
 void router.isReady().finally(() => {
   // Keep the static, branded launch state in place until the initial route has

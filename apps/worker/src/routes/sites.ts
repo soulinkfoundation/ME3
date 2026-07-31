@@ -15,7 +15,7 @@ import {
   sendProductPurchaseConfirmationEmail,
 } from "../transactional-emails";
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
-import type { DbBooking, DbSite, DbSubscriber } from "../types";
+import type { DbBooking, DbSite, DbSubscriber, Env } from "../types";
 import {
   SitePageInputError,
   createSitePage,
@@ -36,6 +36,14 @@ import {
   productSendsPurchaseConfirmation,
 } from "../../../../shared/product-purchase-confirmation";
 import { getProfileCommercePublishBlockReason } from "../commerce-readiness";
+import {
+  ManagedSiteDomainError,
+  connectManagedSiteDomain,
+  disconnectManagedSiteDomain,
+  getManagedSiteDomainStatus,
+  isManagedSiteDomainDeployment,
+  type ManagedSiteDomainStatus,
+} from "../managed-site-domains";
 import {
   EMAIL_REGEX,
   USERNAME_REGEX,
@@ -762,6 +770,22 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
     if (!site) return c.json({ error: "Site not found" }, 404);
 
+    if (isManagedSiteDomainDeployment(c.env)) {
+      try {
+        const status = await getManagedSiteDomainStatus(c.env);
+        await syncManagedDomainSite(c.env, site, status);
+        return c.json(status);
+      } catch (error) {
+        if (error instanceof ManagedSiteDomainError) {
+          return c.json(
+            { error: error.message },
+            managedSiteDomainHttpStatus(error.status),
+          );
+        }
+        throw error;
+      }
+    }
+
     return c.json(buildCoreDomainStatus(c.env, site));
   });
 
@@ -785,6 +809,22 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const domain = normalizeDomain(body.domain);
     if (!isValidPublicSiteDomain(domain)) {
       return c.json({ error: "Use a domain you control, for example kieranbutler.com." }, 400);
+    }
+
+    if (isManagedSiteDomainDeployment(c.env)) {
+      try {
+        const status = await connectManagedSiteDomain(c.env, domain);
+        await syncManagedDomainSite(c.env, site, status);
+        return c.json(status);
+      } catch (error) {
+        if (error instanceof ManagedSiteDomainError) {
+          return c.json(
+            { error: error.message },
+            managedSiteDomainHttpStatus(error.status),
+          );
+        }
+        throw error;
+      }
     }
 
     const status = getCoreDomainState(c.env, site, domain);
@@ -813,6 +853,23 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
     if (!site) return c.json({ error: "Site not found" }, 404);
+
+    if (isManagedSiteDomainDeployment(c.env)) {
+      try {
+        const status = await getManagedSiteDomainStatus(c.env);
+        await syncManagedDomainSite(c.env, site, status);
+        return c.json(status);
+      } catch (error) {
+        if (error instanceof ManagedSiteDomainError) {
+          return c.json(
+            { error: error.message },
+            managedSiteDomainHttpStatus(error.status),
+          );
+        }
+        throw error;
+      }
+    }
+
     if (!site.custom_domain) return c.json(buildCoreDomainStatus(c.env, site));
 
     const status = getCoreDomainState(c.env, site, site.custom_domain);
@@ -831,6 +888,20 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
     if (!site) return c.json({ error: "Site not found" }, 404);
+
+    if (isManagedSiteDomainDeployment(c.env)) {
+      try {
+        await disconnectManagedSiteDomain(c.env);
+      } catch (error) {
+        if (error instanceof ManagedSiteDomainError) {
+          return c.json(
+            { error: error.message },
+            managedSiteDomainHttpStatus(error.status),
+          );
+        }
+        throw error;
+      }
+    }
 
     await c.env.DB.prepare(
       `UPDATE sites
@@ -1506,6 +1577,60 @@ export function registerPublicSiteRoutes(app: AppHono) {
     const canonicalUrl = new URL("/.well-known/security.txt", c.req.url);
     return c.redirect(canonicalUrl.toString(), 301);
   });
+}
+
+async function syncManagedDomainSite(
+  env: Env,
+  site: DbSite,
+  domainStatus: ManagedSiteDomainStatus,
+): Promise<void> {
+  if (
+    domainStatus.connected &&
+    domainStatus.domain &&
+    domainStatus.status
+  ) {
+    await env.DB.prepare(
+      `UPDATE sites
+       SET custom_domain = ?,
+           custom_domain_status = ?,
+           custom_domain_cf_id = NULL,
+           updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+      .bind(domainStatus.domain, domainStatus.status, site.id)
+      .run();
+    return;
+  }
+
+  if (!site.custom_domain) return;
+  await env.DB.prepare(
+    `UPDATE sites
+     SET custom_domain = NULL,
+         custom_domain_status = NULL,
+         custom_domain_cf_id = NULL,
+         updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(site.id)
+    .run();
+}
+
+function managedSiteDomainHttpStatus(
+  status: number,
+): 400 | 401 | 403 | 404 | 409 | 422 | 502 | 503 {
+  switch (status) {
+    case 400:
+    case 401:
+    case 403:
+    case 404:
+    case 409:
+    case 422:
+    case 502:
+    case 503:
+      return status;
+    default:
+      return 502;
+  }
 }
 
 function normalizeShortEmailText(value: unknown, maxLength: number): string {

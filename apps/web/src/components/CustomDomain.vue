@@ -7,6 +7,7 @@ const props = defineProps<{
   profilePublished?: boolean;
   initialDomain?: string;
   embedded?: boolean;
+  managed?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -73,8 +74,9 @@ async function connectDomain() {
   }
 
   if (!isValidDomain.value) {
-    domainError.value =
-      "Enter the root domain you control, for example kieranbutler.com.";
+    domainError.value = props.managed
+      ? "Enter a domain you control, for example kieranbutler.com."
+      : "Enter the root domain you control, for example kieranbutler.com.";
     return;
   }
 
@@ -175,7 +177,10 @@ const normalizedDomainInput = computed(() =>
 );
 
 const domainInputForConnect = computed(() => {
-  return normalizedDomainInput.value;
+  if (!normalizedDomainInput.value || !props.managed) {
+    return normalizedDomainInput.value;
+  }
+  return `www.${normalizedDomainInput.value}`;
 });
 
 const isValidDomain = computed(() =>
@@ -195,6 +200,7 @@ const rootDomain = computed(() => {
 });
 
 const adminHost = computed(() => {
+  if (props.managed) return "";
   if (domainStatus.value?.admin_host) return domainStatus.value.admin_host;
   return rootDomain.value ? `me3.${rootDomain.value}` : "";
 });
@@ -255,11 +261,14 @@ watch(
         <div v-if="domainStatus?.status === 'pending'" class="dns-instructions">
           <h4>DNS Configuration Required</h4>
           <p class="dns-hint">
-            Complete the Cloudflare setup for this Core install, then click
-            Check Status.
+            {{
+              managed
+                ? "Add the DNS record below, then check the connection."
+                : "Complete the Cloudflare setup for this ME3 install, then check the connection."
+            }}
           </p>
 
-          <div v-if="setupHostnames.length" class="setup-card">
+          <div v-if="!managed && setupHostnames.length" class="setup-card">
             <strong>Attach custom domains to this Worker</strong>
             <ul class="hostname-list">
               <li v-for="hostname in setupHostnames" :key="hostname">
@@ -380,7 +389,7 @@ watch(
             :disabled="!isProfilePublished"
             @click="showDomainInput = true"
           >
-            Connect root domain
+            {{ managed ? "Connect domain" : "Connect root domain" }}
           </button>
           <router-link
             v-if="!isProfilePublished"
@@ -444,8 +453,12 @@ watch(
               </a>
             </span>
             <span v-else-if="normalizedDomainInput" class="domain-note">
-              Use the root domain you control, like
-              <strong>kieranbutler.com</strong>.
+              {{
+                managed
+                  ? "ME3 will connect the www address and keep your permanent me3.app address available."
+                  : "Use the root domain you control."
+              }}
+              <strong v-if="!managed">kieranbutler.com</strong>
             </span>
           </div>
           <p v-if="domainError" class="error">{{ domainError }}</p>

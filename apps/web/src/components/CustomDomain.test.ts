@@ -96,4 +96,37 @@ describe("CustomDomain", () => {
     const input = wrapper.get("input.domain-input").element as HTMLInputElement;
     expect(input.value).toBe("kieranbutler.com");
   });
+
+  it("connects a managed installation through the www hostname", async () => {
+    sitesStore.connectDomain.mockResolvedValue({
+      ok: true,
+      domain: "www.example.com",
+      status: "pending",
+    });
+
+    const wrapper = mount(CustomDomain, {
+      props: {
+        username: "testuser",
+        managed: true,
+        embedded: true,
+        showSettingsLink: false,
+        profilePublished: true,
+      },
+      global: {
+        stubs: {
+          RouterLink: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    await wrapper.get("input.domain-input").setValue("www.example.com");
+    await wrapper.get("form.domain-input-wrapper").trigger("submit");
+    await flushPromises();
+
+    expect(sitesStore.connectDomain).toHaveBeenCalledWith(
+      "testuser",
+      "www.example.com",
+    );
+  });
 });

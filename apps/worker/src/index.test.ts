@@ -408,6 +408,7 @@ function createEnv(): Env & {
   schedulingRequests: DbSchedulingRequest[];
   schedulingRequestVotes: DbSchedulingRequestVote[];
   schedulingRequestAudit: DbSchedulingRequestAudit[];
+  managedRuntimeInstallationId: string | null;
 } {
   const state = {
     owner: null as StoredOwner | null,
@@ -458,6 +459,7 @@ function createEnv(): Env & {
     schedulingRequests: [] as DbSchedulingRequest[],
     schedulingRequestVotes: [] as DbSchedulingRequestVote[],
     schedulingRequestAudit: [] as DbSchedulingRequestAudit[],
+    managedRuntimeInstallationId: null as string | null,
   };
 
   const toStoredSiteFileContent = (value: unknown): Uint8Array => {
@@ -503,6 +505,23 @@ function createEnv(): Env & {
         async run() {
           return { success: true };
         },
+        async first<T>() {
+          if (sql.includes("FROM managed_runtime_state")) {
+            return (state.managedRuntimeInstallationId
+              ? {
+                  installation_id: state.managedRuntimeInstallationId,
+                  state: "active",
+                  generation: 1,
+                  quiesced_at: null,
+                  suspended_at: null,
+                  credentials_revoked_at: null,
+                  storage_purged_at: null,
+                  last_request_id: null,
+                }
+              : null) as T | null;
+          }
+          return null;
+        },
         async all<T>() {
           if (sql.includes("PRAGMA table_info")) {
             return {
@@ -527,6 +546,13 @@ function createEnv(): Env & {
         bind(...values: unknown[]) {
           return {
             async run() {
+              if (sql.includes("INSERT INTO managed_runtime_state")) {
+                state.managedRuntimeInstallationId = String(values[0]);
+              }
+              if (sql.includes("INSERT INTO managed_runtime_write_leases")) {
+                return { success: true, meta: { changes: 1 } };
+              }
+
               if (sql.includes("INSERT INTO owner_profile")) {
                 const existingOwner = state.owner;
                 if (
@@ -744,6 +770,40 @@ function createEnv(): Env & {
                 state.sites = state.sites.map((site) =>
                   site.id === values[0]
                     ? { ...site, published_at: null, updated_at: "2026-06-05T10:00:00Z" }
+                    : site,
+                );
+              }
+
+              if (
+                sql.includes("UPDATE sites") &&
+                sql.includes("SET custom_domain = ?")
+              ) {
+                state.sites = state.sites.map((site) =>
+                  site.id === values[2]
+                    ? {
+                        ...site,
+                        custom_domain: String(values[0]),
+                        custom_domain_status: values[1] as DbSite["custom_domain_status"],
+                        custom_domain_cf_id: null,
+                        updated_at: "2026-06-05T10:00:00Z",
+                      }
+                    : site,
+                );
+              }
+
+              if (
+                sql.includes("UPDATE sites") &&
+                sql.includes("SET custom_domain = NULL")
+              ) {
+                state.sites = state.sites.map((site) =>
+                  site.id === values[0]
+                    ? {
+                        ...site,
+                        custom_domain: null,
+                        custom_domain_status: null,
+                        custom_domain_cf_id: null,
+                        updated_at: "2026-06-05T10:00:00Z",
+                      }
                     : site,
                 );
               }
@@ -3088,6 +3148,12 @@ function createEnv(): Env & {
     get schedulingRequestAudit() {
       return state.schedulingRequestAudit;
     },
+    get managedRuntimeInstallationId() {
+      return state.managedRuntimeInstallationId;
+    },
+    set managedRuntimeInstallationId(value: string | null) {
+      state.managedRuntimeInstallationId = value;
+    },
     DB: db as unknown as D1Database,
     ENVIRONMENT: "local",
     ME3_DEPLOYMENT_MODE: "self_hosted",
@@ -3883,6 +3949,73 @@ describe("ME3 Worker auth", () => {
     expect(response.status).toBe(404);
     expect(html).toContain("Page not found");
     expect(html).not.toContain("Sign in with ME3.app");
+  });
+
+  it("connects a managed public domain through ME3 Cloud and keeps login on me3.app", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.ME3_DEPLOYMENT_MODE = "managed";
+    env.ME3_MANAGED_INSTALLATION_ID = "mi-1234567890abcdef";
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+    env.managedRuntimeInstallationId = env.ME3_MANAGED_INSTALLATION_ID;
+    addBookableSite(env);
+    env.installSecrets.set(
+      "ME3_CORE_INSTALL_ID",
+      "core_11111111-1111-4111-8111-111111111111",
+    );
+    env.installSecrets.set("ME3_CLOUD_CORE_TOKEN", "core-update-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        connected: true,
+        domain: "www.example.com",
+        status: "pending",
+        ssl_status: "pending_validation",
+        verification_records: [
+          {
+            type: "cname",
+            name: "www.example.com",
+            value: "sites.me3.app",
+          },
+        ],
+      }),
+    );
+
+    try {
+      const response = await app.fetch(
+        new Request("https://tester.me3.app/api/domains/owner", {
+          method: "POST",
+          headers: {
+            Cookie: session,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ domain: "www.example.com" }),
+        }),
+        env,
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        ok: true,
+        connected: true,
+        domain: "www.example.com",
+        status: "pending",
+      });
+      expect(env.sites[0]).toMatchObject({
+        custom_domain: "www.example.com",
+        custom_domain_status: "pending",
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.me3.example/v1/installs/core_11111111-1111-4111-8111-111111111111/domain",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            "X-ME3-Core-Update-Token": "core-update-token",
+          }),
+        }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("blocks owner auth endpoints on the public root domain", async () => {
