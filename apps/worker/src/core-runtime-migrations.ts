@@ -146,6 +146,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-07-31-manual-payments-v1",
     apply: applyManualPaymentsMigration,
   },
+  {
+    id: "0034_owner_onboarding",
+    checksum: "2026-07-31-owner-onboarding-v1",
+    apply: applyOwnerOnboardingMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -2081,6 +2086,25 @@ async function applyManualPaymentsMigration(db: D1Database): Promise<void> {
       `UPDATE commerce_orders
        SET amount_due = amount_paid
        WHERE amount_due IS NULL`,
+    )
+    .run();
+}
+
+async function applyOwnerOnboardingMigration(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS owner_onboarding (
+        user_id TEXT PRIMARY KEY,
+        profile_source TEXT NOT NULL
+          CHECK (profile_source IN ('hosted_starter')),
+        profile_site_id TEXT NOT NULL,
+        current_step INTEGER
+          CHECK (current_step IS NULL OR current_step IN (2, 3)),
+        completed_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE
+      )`,
     )
     .run();
 }

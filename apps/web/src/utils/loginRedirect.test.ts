@@ -54,6 +54,17 @@ describe("login redirects", () => {
     ).toBe("https://core.example/start");
   });
 
+  it("resumes imported managed onboarding even when the profile site exists", () => {
+    expect(
+      resolveProfileSetupPath({
+        sitesLoaded: true,
+        hasProfileSite: true,
+        onboardingStartStep: 2,
+        defaultPath: "/mission-control",
+      }),
+    ).toBe("/start");
+  });
+
   it("sends first ME3.app claims to start setup", () => {
     expect(
       resolveMe3OAuthRedirect(undefined, {

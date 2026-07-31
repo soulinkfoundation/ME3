@@ -52,6 +52,16 @@ function updateLinkTag(rel: string, href: string | undefined) {
 }
 
 async function resolveDefaultAppPathForSession(): Promise<string> {
+  const auth = useAuthStore();
+  if (auth.sessionOnboardingStartStep !== null) {
+    return resolveProfileSetupPath({
+      sitesLoaded: true,
+      hasProfileSite: auth.sessionHasProfileSite === true,
+      onboardingStartStep: auth.sessionOnboardingStartStep,
+      defaultPath: DEFAULT_APP_PATH,
+    });
+  }
+
   const sites = useSitesStore();
   if (sites.loaded) {
     return resolveProfileSetupPath({
@@ -61,7 +71,6 @@ async function resolveDefaultAppPathForSession(): Promise<string> {
     });
   }
 
-  const auth = useAuthStore();
   if (auth.sessionHasProfileSite !== null) {
     return resolveProfileSetupPath({
       sitesLoaded: true,

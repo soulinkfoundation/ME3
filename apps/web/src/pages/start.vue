@@ -106,8 +106,11 @@ const {
   publish,
 } = usePublish();
 
-const currentStep = ref(1);
-const furthestStep = ref(1);
+const importedProfileStartStep = auth.sessionOnboardingStartStep;
+const profileWasImported =
+  importedProfileStartStep === 2 || importedProfileStartStep === 3;
+const currentStep = ref(importedProfileStartStep || 1);
+const furthestStep = ref(importedProfileStartStep || 1);
 const name = ref(wizard.profile.name || auth.user?.name || "");
 const handle = ref(
   wizard.profile.handle || wizard.username || auth.user?.username || "",
@@ -180,9 +183,14 @@ const progressSteps = computed(() =>
       number,
       isCurrent,
       isVisited,
-      isJumpable: isVisited && !isCurrent,
+      isJumpable:
+        isVisited &&
+        !isCurrent &&
+        !(profileWasImported && number === 1),
       ariaLabel: isCurrent
         ? `Current step: ${stepName}`
+        : profileWasImported && number === 1
+          ? "Profile imported from ME3.app"
         : isVisited
           ? `Go to ${stepName}`
           : `${stepName} is locked until you complete the earlier steps`,
@@ -263,6 +271,7 @@ function queueUsernameAvailabilityCheck(value: string) {
 }
 
 function goToStep(step: number) {
+  if (profileWasImported && step === 1) return;
   if (step < 1 || step > STEPS.length || step > furthestStep.value) return;
   currentStep.value = step;
 }
@@ -423,7 +432,7 @@ async function saveWheelSnapshotAndFinish() {
       segments,
       notes,
     });
-    advanceTo(3);
+    await advancePastWheel();
   } catch (error) {
     wheelError.value = messageFromUnknown(
       error,
@@ -436,20 +445,53 @@ async function saveWheelSnapshotAndFinish() {
 
 async function skipWheel() {
   wheelError.value = "";
-  advanceTo(3);
+  try {
+    await advancePastWheel();
+  } catch (error) {
+    wheelError.value = messageFromUnknown(
+      error,
+      "Could not save onboarding progress.",
+    );
+  }
 }
 
 async function finish() {
+  if (profileWasImported) {
+    try {
+      await api.post<{ ok: boolean }>("/onboarding/complete", {});
+      auth.setSessionOnboardingStartStep(null);
+    } catch (error) {
+      pluginsError.value = messageFromUnknown(
+        error,
+        "Could not complete onboarding.",
+      );
+      return;
+    }
+  }
   await router.push("/assistant");
+}
+
+async function advancePastWheel() {
+  if (profileWasImported) {
+    await api.post<{ ok: boolean; currentStep: 3 }>("/onboarding/progress", {
+      step: 3,
+    });
+    auth.setSessionOnboardingStartStep(3);
+  }
+  advanceTo(3);
 }
 
 watch(handle, queueUsernameAvailabilityCheck, { immediate: true });
 
-watch(currentStep, (step) => {
-  if (step === 3 && !pluginsLoading.value && plugins.value.length === 0) {
-    void loadPlugins();
-  }
-});
+watch(
+  currentStep,
+  (step) => {
+    if (step === 3 && !pluginsLoading.value && plugins.value.length === 0) {
+      void loadPlugins();
+    }
+  },
+  { immediate: true },
+);
 
 onMounted(() => {
   void sites.fetchSites();
@@ -483,8 +525,10 @@ onBeforeUnmount(clearUsernameCheck);
           :data-step-name="step.name"
           :aria-label="step.ariaLabel"
           :aria-current="step.isCurrent ? 'step' : undefined"
-          :aria-disabled="step.isVisited ? undefined : 'true'"
-          :tabindex="step.isVisited ? undefined : -1"
+          :aria-disabled="
+            step.isCurrent || step.isJumpable ? undefined : 'true'
+          "
+          :tabindex="step.isCurrent || step.isJumpable ? undefined : -1"
           @click="goToStep(step.number)"
         >
           <span class="progress-step-dot" aria-hidden="true">
@@ -643,8 +687,16 @@ onBeforeUnmount(clearUsernameCheck);
           <p v-if="wheelError" class="error">{{ wheelError }}</p>
         </div>
 
-        <div class="step-nav split">
-          <button class="nav-btn back" type="button" @click="goToStep(1)">
+        <div
+          class="step-nav split"
+          :class="{ 'no-back': profileWasImported }"
+        >
+          <button
+            v-if="!profileWasImported"
+            class="nav-btn back"
+            type="button"
+            @click="goToStep(1)"
+          >
             ← Back
           </button>
           <div class="nav-actions-right">
@@ -1015,6 +1067,10 @@ onBeforeUnmount(clearUsernameCheck);
 
 .step-nav.split {
   justify-content: space-between;
+}
+
+.step-nav.split.no-back {
+  justify-content: flex-end;
 }
 
 .nav-actions-right {

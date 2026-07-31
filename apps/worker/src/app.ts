@@ -98,6 +98,11 @@ import { registerJournalRoutes } from "./routes/journal";
 import { registerLocalExecutorRoutes } from "./routes/local-executor";
 import { registerManagedRuntimeRoutes } from "./routes/managed-runtime";
 import {
+  getPendingOnboardingStartStep,
+  registerOnboardingRoutes,
+} from "./routes/onboarding";
+import { importManagedStarterProfile } from "./managed-starter-profile";
+import {
   getManagedAiBillingSettings,
   ManagedAiBillingInputError,
   updateManagedAiBillingSettings,
@@ -245,6 +250,7 @@ type Me3ClaimTokenPayload = {
   display_name?: unknown;
   handle?: unknown;
   managed_email_address?: unknown;
+  starter_profile_handoff?: unknown;
   install_id?: unknown;
   core_update_token?: unknown;
   core_origin?: unknown;
@@ -666,6 +672,22 @@ app.get("/api/auth/me3/callback", async (c) => {
   }
 
   await upsertMe3ClaimedOwner(c.env, payload, claimedHandle);
+  if (
+    normalizeMe3DeploymentMode(c.env.ME3_DEPLOYMENT_MODE) === "managed" &&
+    payload.starter_profile_handoff === true
+  ) {
+    try {
+      await importManagedStarterProfile(c.env, {
+        claimToken,
+        handle: claimedHandle,
+      });
+    } catch (error) {
+      console.warn(
+        "Managed starter profile import failed; continuing with local profile setup:",
+        error,
+      );
+    }
+  }
   if (managedEmailAddress) {
     await bootstrapManagedEmailMailbox(c.env, managedEmailAddress, payload.email);
   }
@@ -820,9 +842,10 @@ app.get("/api/auth/me", async (c) => {
     return c.json({ ok: false, user: null }, 401);
   }
 
-  const [owner, hasProfileSite] = await Promise.all([
+  const [owner, hasProfileSite, onboardingStartStep] = await Promise.all([
     getOwnerProfile(c.env, ownerId),
     hasOwnerProfileSite(c.env, ownerId),
+    getPendingOnboardingStartStep(c.env, ownerId),
   ]);
   if (!owner) {
     clearOwnerSession(c);
@@ -832,7 +855,7 @@ app.get("/api/auth/me", async (c) => {
   return c.json({
     ok: true,
     user: toPublicOwner(owner),
-    workspace: { hasProfileSite },
+    workspace: { hasProfileSite, onboardingStartStep },
   });
 });
 
@@ -842,6 +865,7 @@ app.post("/api/auth/logout", (c) => {
 });
 
 registerAssistantRoutes(app, { requireOwner, unauthorized, getSessionOwnerId, getSetupRequired });
+registerOnboardingRoutes(app, { requireOwner, unauthorized });
 
 app.get("/api/account", async (c) => {
   const ownerId = await requireOwner(c);

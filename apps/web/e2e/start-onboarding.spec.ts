@@ -374,6 +374,93 @@ test.describe("/start onboarding wizard", () => {
     ).toBeVisible();
   });
 
+  test("resumes managed onboarding at Wheel after importing the hosted profile", async ({
+    page,
+  }) => {
+    let progressBody = "";
+    let completed = false;
+    await page.route("**/api/auth/me", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          user: {
+            id: "owner-1",
+            email: "owner@example.com",
+            name: "Connie",
+            username: "connie",
+            timezone: null,
+          },
+          workspace: {
+            hasProfileSite: true,
+            onboardingStartStep: 2,
+          },
+        }),
+      });
+    });
+    await page.route("**/api/sites", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          sites: [
+            {
+              id: "imported-site",
+              username: "connie",
+              user_id: "owner-1",
+              site_type: "profile",
+              template_id: null,
+              custom_domain: null,
+              custom_domain_status: null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              published_at: new Date().toISOString(),
+            },
+          ],
+        }),
+      });
+    });
+    await page.route("**/api/onboarding/progress", async (route) => {
+      progressBody = route.request().postData() || "";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, currentStep: 3 }),
+      });
+    });
+    await page.route("**/api/onboarding/complete", async (route) => {
+      completed = true;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true }),
+      });
+    });
+
+    await page.goto("/");
+
+    await expect(page).toHaveURL(/\/start$/);
+    await expect(
+      page.getByRole("heading", { name: "The Wheel Of Life" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "← Back" })).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Profile imported from ME3.app" }),
+    ).toHaveAttribute("aria-disabled", "true");
+
+    await page.getByRole("button", { name: "Skip" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Choose plugins" }),
+    ).toBeVisible();
+    expect(progressBody).toContain('"step":3');
+
+    await page.getByRole("button", { name: "Skip" }).click();
+    await expect(page).toHaveURL(/\/assistant$/);
+    expect(completed).toBe(true);
+  });
+
   test("checks persisted handle availability on refresh", async ({ page }) => {
     await page.addInitScript(() => {
       window.localStorage.setItem(

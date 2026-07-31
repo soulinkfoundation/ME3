@@ -50,6 +50,7 @@ describe("Core runtime migrations", () => {
       db.columns.get("managed_runtime_control_requests")?.has("expected_generation"),
     ).toBe(true);
     expect(db.tables.has("managed_runtime_write_leases")).toBe(true);
+    expect(db.tables.has("owner_onboarding")).toBe(true);
     expect(db.tables.has("drive_multipart_uploads")).toBe(true);
     expect(db.tables.has("drive_multipart_parts")).toBe(true);
     expect(db.tables.has("social_media_delivery_grants")).toBe(true);
@@ -140,6 +141,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0033_manual_payments")).toBe(
       "2026-07-31-manual-payments-v1",
+    );
+    expect(db.migrations.get("0034_owner_onboarding")).toBe(
+      "2026-07-31-owner-onboarding-v1",
     );
     expect(
       db.statements.some(

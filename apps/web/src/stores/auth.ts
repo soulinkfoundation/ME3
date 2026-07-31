@@ -25,6 +25,7 @@ interface AuthSessionResponse {
   user: OwnerProfile | null;
   workspace?: {
     hasProfileSite?: boolean;
+    onboardingStartStep?: 2 | 3 | null;
   };
 }
 
@@ -71,6 +72,7 @@ export const useAuthStore = defineStore("auth", () => {
   const user = ref<User | null>(null);
   const initialized = ref(false);
   const sessionHasProfileSite = ref<boolean | null>(null);
+  const sessionOnboardingStartStep = ref<2 | 3 | null>(null);
   let initializePromise: Promise<void> | null = null;
 
   const isAuthenticated = computed(() => !!user.value);
@@ -78,6 +80,8 @@ export const useAuthStore = defineStore("auth", () => {
   function setSession(newUser: User) {
     user.value = newUser;
     initialized.value = true;
+    sessionHasProfileSite.value = null;
+    sessionOnboardingStartStep.value = null;
     clearStoredSession();
   }
 
@@ -89,10 +93,16 @@ export const useAuthStore = defineStore("auth", () => {
         typeof response.workspace?.hasProfileSite === "boolean"
           ? response.workspace.hasProfileSite
           : null;
+      sessionOnboardingStartStep.value =
+        response.workspace?.onboardingStartStep === 2 ||
+        response.workspace?.onboardingStartStep === 3
+          ? response.workspace.onboardingStartStep
+          : null;
       return Boolean(user.value);
     } catch {
       user.value = null;
       sessionHasProfileSite.value = null;
+      sessionOnboardingStartStep.value = null;
       return false;
     } finally {
       clearStoredSession();
@@ -186,13 +196,19 @@ export const useAuthStore = defineStore("auth", () => {
     user.value = null;
     initialized.value = true;
     sessionHasProfileSite.value = null;
+    sessionOnboardingStartStep.value = null;
     clearStoredSession();
+  }
+
+  function setSessionOnboardingStartStep(step: 2 | 3 | null) {
+    sessionOnboardingStartStep.value = step;
   }
 
   return {
     user,
     initialized,
     sessionHasProfileSite,
+    sessionOnboardingStartStep,
     isAuthenticated,
     ensureInitialized,
     refreshSession,
@@ -201,5 +217,6 @@ export const useAuthStore = defineStore("auth", () => {
     resetOwnerPassword,
     logout,
     setSession,
+    setSessionOnboardingStartStep,
   };
 });

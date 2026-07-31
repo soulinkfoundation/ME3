@@ -8,6 +8,7 @@ export interface LoginRedirectOptions {
 export interface ProfileSetupPathOptions {
   sitesLoaded: boolean;
   hasProfileSite: boolean;
+  onboardingStartStep?: 2 | 3 | null;
   defaultPath: string;
   setupPath?: string;
 }
@@ -15,6 +16,9 @@ export interface ProfileSetupPathOptions {
 export function resolveProfileSetupPath(
   options: ProfileSetupPathOptions,
 ): string {
+  if (options.onboardingStartStep === 2 || options.onboardingStartStep === 3) {
+    return options.setupPath || "/start";
+  }
   if (!options.sitesLoaded || options.hasProfileSite) {
     return options.defaultPath;
   }

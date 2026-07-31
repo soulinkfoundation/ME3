@@ -53,6 +53,7 @@ describe("auth store", () => {
         },
         workspace: {
           hasProfileSite: true,
+          onboardingStartStep: 2,
         },
       });
 
@@ -63,6 +64,7 @@ describe("auth store", () => {
       expect(store.user).toEqual(storedUser);
       expect(store.isAuthenticated).toBe(true);
       expect(store.sessionHasProfileSite).toBe(true);
+      expect(store.sessionOnboardingStartStep).toBe(2);
       expect(api.get).toHaveBeenCalledWith("/auth/me");
       expect(window.localStorage.getItem("me3_core_owner_session")).toBeNull();
     });
@@ -74,6 +76,7 @@ describe("auth store", () => {
       expect(store.initialized).toBe(true);
       expect(store.user).toBeNull();
       expect(store.isAuthenticated).toBe(false);
+      expect(store.sessionOnboardingStartStep).toBeNull();
       expect(api.get).toHaveBeenCalledWith("/auth/me");
     });
 
