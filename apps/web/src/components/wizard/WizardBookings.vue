@@ -617,6 +617,26 @@ const timezoneOptions = computed(() => {
 const bookingConfirmationTestInbox = computed(
   () => auth.user?.email?.trim() || "",
 );
+const bookingConfirmationTestRecipient = ref("");
+
+watch(
+  bookingConfirmationTestInbox,
+  (email) => {
+    if (!bookingConfirmationTestRecipient.value) {
+      bookingConfirmationTestRecipient.value = email;
+    }
+  },
+  { immediate: true },
+);
+
+const normalizedBookingConfirmationTestRecipient = computed(() =>
+  bookingConfirmationTestRecipient.value.trim().toLowerCase(),
+);
+const bookingConfirmationTestRecipientIsValid = computed(() =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+    normalizedBookingConfirmationTestRecipient.value,
+  ),
+);
 
 const bookingConfirmationTestUsername = computed(() => wizard.username.trim());
 
@@ -676,6 +696,7 @@ const canSendBookingConfirmationTest = computed(
   () =>
     Boolean(bookingConfirmationTestInbox.value) &&
     Boolean(bookingConfirmationTestUsername.value) &&
+    bookingConfirmationTestRecipientIsValid.value &&
     hasBookingTypes.value,
 );
 
@@ -691,11 +712,16 @@ async function sendBookingConfirmationTest() {
     toastError("Sign in to send a test email.");
     return;
   }
+  if (!bookingConfirmationTestRecipientIsValid.value) {
+    toastError("Enter a valid test recipient email address.");
+    return;
+  }
 
   isSendingBookingConfirmationTest.value = true;
   try {
     const details = bookingConfirmationTestDetails.value;
     const response = await sites.sendBookingConfirmationTest(siteUsername, {
+      to: normalizedBookingConfirmationTestRecipient.value,
       bookingTitle: details.title,
       durationMinutes: details.durationMinutes,
       timezone: details.timezone,
@@ -1540,30 +1566,17 @@ onMounted(() => {
         <div class="confirmation-email-section">
           <div class="confirmation-email-header">
             <div>
-              <h3 class="confirmation-email-title">Confirmation email</h3>
+              <h3 class="confirmation-email-title">
+                Booking confirmation emails
+              </h3>
               <p class="confirmation-email-lead">
-                Booking confirmations use your account email sender,
+                ME3 always emails the customer their booking details, even when
+                the optional message below is blank. Emails use your account
+                sender;
                 <RouterLink class="confirmation-email-inline-link" to="/account?section=mailbox">
-                  see settings
+                  see sender settings
                 </RouterLink>.
-                Save and test the sender before taking live bookings.
               </p>
-            </div>
-            <div class="confirmation-email-actions">
-              <button
-                class="offer-tab-add confirmation-email-test-button"
-                type="button"
-                :disabled="
-                  isSendingBookingConfirmationTest ||
-                  !canSendBookingConfirmationTest
-                "
-                @click="sendBookingConfirmationTest"
-              >
-                <UiIcon name="Mail" :size="16" aria-hidden="true" />
-                <span>{{
-                  isSendingBookingConfirmationTest ? "Sending..." : "Send test"
-                }}</span>
-              </button>
             </div>
           </div>
 
@@ -1573,24 +1586,83 @@ onMounted(() => {
           </label>
 
           <div class="form-group">
+            <label for="booking-confirmation-message">
+              Additional message (optional)
+            </label>
             <textarea
               id="booking-confirmation-message"
               v-model="bookingConfirmationMessage"
               class="confirmation-email-textarea"
-              aria-label="Extra message for the requester"
               rows="5"
               maxlength="8000"
-              placeholder="Optional plain text with links. You can use placeholders."
+              placeholder="Add directions, preparation notes, links, or other next steps."
             ></textarea>
           </div>
 
-          <p class="confirmation-email-test-note">
+          <div class="confirmation-email-test-controls">
+            <div class="confirmation-email-test-field">
+              <label for="booking-confirmation-test-recipient">
+                Send a test to
+              </label>
+              <input
+                id="booking-confirmation-test-recipient"
+                v-model="bookingConfirmationTestRecipient"
+                type="email"
+                inputmode="email"
+                autocomplete="email"
+                maxlength="254"
+                placeholder="name@example.com"
+                :aria-invalid="
+                  bookingConfirmationTestRecipient &&
+                  !bookingConfirmationTestRecipientIsValid
+                    ? 'true'
+                    : undefined
+                "
+                :aria-describedby="
+                  bookingConfirmationTestRecipient &&
+                  !bookingConfirmationTestRecipientIsValid
+                    ? 'booking-confirmation-test-error booking-confirmation-test-help'
+                    : 'booking-confirmation-test-help'
+                "
+                @keyup.enter="sendBookingConfirmationTest"
+              />
+            </div>
+            <button
+              class="offer-tab-add confirmation-email-test-button"
+              type="button"
+              :disabled="
+                isSendingBookingConfirmationTest ||
+                !canSendBookingConfirmationTest
+              "
+              @click="sendBookingConfirmationTest"
+            >
+              <UiIcon name="Mail" :size="16" aria-hidden="true" />
+              <span>{{
+                isSendingBookingConfirmationTest ? "Sending..." : "Send test"
+              }}</span>
+            </button>
+          </div>
+          <p
+            v-if="
+              bookingConfirmationTestRecipient &&
+              !bookingConfirmationTestRecipientIsValid
+            "
+            id="booking-confirmation-test-error"
+            class="confirmation-email-test-error"
+            role="alert"
+          >
+            Enter a valid email address.
+          </p>
+          <p
+            id="booking-confirmation-test-help"
+            class="confirmation-email-test-note"
+          >
             {{
               !bookingConfirmationTestInbox
                 ? "Sign in to send a test."
                 : !bookingConfirmationTestUsername
                   ? "Claim your username first."
-                  : `Sends to ${bookingConfirmationTestInbox}.`
+                  : "The test includes the selected booking type’s generated details, payment details when applicable, and your optional message."
             }}
             Test values:
             <code>{{ bookingConfirmationTestTokenPreview.guestName }}</code
@@ -1740,6 +1812,52 @@ onMounted(() => {
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.confirmation-email-test-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.confirmation-email-test-field {
+  display: grid;
+  gap: 6px;
+}
+
+.confirmation-email-test-field label {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.confirmation-email-test-field input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+  font-size: 14px;
+}
+
+.confirmation-email-test-field input:focus-visible {
+  outline: 2px solid var(--ui-accent, var(--color-primary));
+  outline-offset: 2px;
+}
+
+.confirmation-email-test-error {
+  margin: -6px 0 0;
+  color: var(--color-danger, #b42318);
+  font-size: 12px;
+}
+
+.confirmation-email-test-button {
+  min-height: 44px;
 }
 
 .confirmation-email-test-button:disabled {
@@ -2016,6 +2134,14 @@ onMounted(() => {
 
   .confirmation-email-actions {
     justify-content: flex-start;
+  }
+
+  .confirmation-email-test-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .confirmation-email-test-button {
+    justify-content: center;
   }
 
   .form-row:not(.retreat-schedule-row) {

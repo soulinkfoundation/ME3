@@ -311,6 +311,7 @@ export interface ProductConfirmationTestResponse {
 }
 
 export interface BookingConfirmationTestRequest {
+  to?: string;
   bookingTitle: string;
   siteName?: string;
   message?: string;

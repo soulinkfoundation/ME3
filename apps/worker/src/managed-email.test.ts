@@ -432,6 +432,7 @@ describe("managed email outbound provider", () => {
     await expect(
       sendEmailWithProvider(managedEnv(db), "owner", {
         purpose: "workflow",
+        replyToAddress: "private-owner@example.com",
         toAddress: "client@example.com",
         subject: "Automated send",
         textBody: "System workflow send.",
@@ -439,6 +440,11 @@ describe("managed email outbound provider", () => {
     ).resolves.toMatchObject({
       providerId: "managed_gateway",
       providerMessageId: "cf-workflow-message",
+    });
+    const workflowBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(workflowBody).toMatchObject({
+      from: { address: "owner@me3.app" },
+      replyTo: "owner@me3.app",
     });
     await expect(
       sendEmailWithProvider(managedEnv(db), "owner", {

@@ -65,7 +65,7 @@ function updateInstructions(event: Event) {
     </div>
 
     <div v-if="modelValue === 'manual'" class="payment-instructions-field">
-      <label :for="`${inputId}-instructions`">Payment instructions</label>
+      <label :for="`${inputId}-instructions`">Payment details for this offer</label>
       <textarea
         :id="`${inputId}-instructions`"
         :value="instructions"
@@ -73,13 +73,12 @@ function updateInstructions(event: Event) {
         maxlength="4000"
         required
         :aria-describedby="`${inputId}-instructions-help`"
-        placeholder="Paste a payment link or explain how the customer should pay."
+        placeholder="Add a payment link, bank details, or explain how to pay."
         @input="updateInstructions"
       ></textarea>
       <small :id="`${inputId}-instructions-help`">
-        Include a payment link, bank transfer details, or explain what the
-        customer should do next. These instructions are sent by email and are
-        not shown publicly.
+        Required for Pay separately. ME3 includes these details privately in
+        the customer’s confirmation email; they never appear on your website.
       </small>
     </div>
 

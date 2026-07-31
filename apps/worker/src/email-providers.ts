@@ -887,7 +887,11 @@ export async function sendEmailWithProvider(
     (managedGateway ? await getManagedEmailFromName(env, ownerId) : resolved.config.fromName) ||
     "ME3"
   ).trim();
-  const replyToAddress = (input.replyToAddress || resolved.config.replyToAddress || "")
+  const replyToAddress = (
+    managedGateway
+      ? fromAddress
+      : input.replyToAddress || resolved.config.replyToAddress || ""
+  )
     .trim()
     .toLowerCase();
   const toAddress = input.toAddress.trim().toLowerCase();

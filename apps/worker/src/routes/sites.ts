@@ -243,6 +243,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     const body = await c.req
       .json<{
+        to?: unknown;
         bookingTitle?: unknown;
         siteName?: unknown;
         message?: unknown;
@@ -258,6 +259,12 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     const owner = await getOwnerContact(c.env, ownerId);
     if (!owner.email) return c.json({ error: "Owner email is required for test sends" }, 400);
+    const requestedRecipient =
+      typeof body.to === "string" ? body.to.trim().toLowerCase() : "";
+    const recipient = requestedRecipient || owner.email.trim().toLowerCase();
+    if (!EMAIL_REGEX.test(recipient)) {
+      return c.json({ error: "Enter a valid test recipient email address" }, 400);
+    }
 
     const startsAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
     const manualPayment = body.paymentMethod === "manual";
@@ -272,7 +279,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       offer_id: "test-offer",
       booking_type: "one_to_one",
       guest_name: "Test Guest",
-      guest_email: owner.email,
+      guest_email: recipient,
       starts_at: startsAt,
       ends_at: new Date(new Date(startsAt).getTime() + 60 * 60_000).toISOString(),
       duration_minutes: normalizePositiveInteger(body.durationMinutes, 60),
@@ -318,7 +325,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       return c.json({ error: result.error || "Failed to send test email" }, 502);
     }
 
-    return c.json({ ok: true, sentTo: owner.email, providerMessageId: result.providerMessageId });
+    return c.json({ ok: true, sentTo: recipient, providerMessageId: result.providerMessageId });
   });
 
   app.post("/api/sites/:username/subscribe", async (c) => {

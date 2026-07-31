@@ -11955,6 +11955,7 @@ describe("ME3 Worker auth", () => {
           Cookie: session,
         },
         body: JSON.stringify({
+          to: "preview@example.com",
           bookingTitle: "Book a Call",
           siteName: "Booking Owner",
           durationMinutes: 75,
@@ -11970,9 +11971,9 @@ describe("ME3 Worker auth", () => {
     const body = (await response.json()) as { ok: boolean; sentTo: string };
 
     expect(response.status).toBe(200);
-    expect(body).toMatchObject({ ok: true, sentTo: "owner@example.com" });
+    expect(body).toMatchObject({ ok: true, sentTo: "preview@example.com" });
     expect(env.emailSends[0]).toMatchObject({
-      to: "owner@example.com",
+      to: "preview@example.com",
       subject: "[Test] Booking confirmed: Book a Call",
       text: expect.stringContaining(
         "Payment details:\nPay at https://pay.example/session",
