@@ -14,6 +14,9 @@ const env = (
   }
 ).process?.env || {};
 const liveEnabled = env.ME3_MODEL_EVAL_RUN === "1";
+const minimumToolChoiceAccuracy = Number(
+  env.ME3_MODEL_EVAL_MIN_TOOL_CHOICE_ACCURACY || 0,
+);
 
 describe.skipIf(!liveEnabled)("live fixed-task model evaluation", () => {
   it("writes one metadata-only report for the configured candidates", async () => {
@@ -35,8 +38,18 @@ describe.skipIf(!liveEnabled)("live fixed-task model evaluation", () => {
     console.info(`ME3_MODEL_EVAL_RESULTS ${JSON.stringify(report)}`);
     expect(report.candidates).toHaveLength(selected.length);
     expect(report.candidates.every((candidate) => candidate.totals.tasks === 39)).toBe(true);
+    if (minimumToolChoiceAccuracy > 0) {
+      expect(
+        report.candidates.every(
+          (candidate) =>
+            candidate.status !== "completed" ||
+            (candidate.toolMetrics.toolChoiceAccuracy ?? 0) >=
+              minimumToolChoiceAccuracy,
+        ),
+      ).toBe(true);
+    }
     expect(FIXED_MODEL_EVALUATION_TASKS).toHaveLength(39);
-  });
+  }, 600_000);
 });
 
 function selectCandidates(value: string | undefined): ModelEvaluationCandidateConfig[] {

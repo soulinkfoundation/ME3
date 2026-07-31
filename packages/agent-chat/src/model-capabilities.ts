@@ -47,6 +47,16 @@ const AI_MODEL_CAPABILITY_RECORDS: readonly AiModelCapabilityRecord[] = [
   },
   {
     providerId: "openai",
+    model: "gpt-5.4-mini",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "openai",
+    model: "gpt-5.4-nano",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "openai",
     model: "gpt-5.5",
     capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
   },
@@ -72,8 +82,23 @@ const AI_MODEL_CAPABILITY_RECORDS: readonly AiModelCapabilityRecord[] = [
   },
   {
     providerId: "workers-ai",
+    model: "openai/gpt-5.4-mini",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "workers-ai",
+    model: "openai/gpt-5.4-nano",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "workers-ai",
     model: "openai/gpt-5.5",
     capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "workers-ai",
+    model: "@cf/zai-org/glm-4.7-flash",
+    capabilities: ["text", "long-context", "reasoning", "tool-use"],
   },
   {
     providerId: "workers-ai",

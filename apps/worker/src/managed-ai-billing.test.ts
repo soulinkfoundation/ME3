@@ -40,6 +40,24 @@ describe("managed Everyday AI billing", () => {
   });
 
   it("uses the curated provider pricing for alternate managed models", () => {
+    const mini = estimateManagedAiUsage("openai/gpt-5.4-mini", {
+      inputTokens: 1_000_000,
+      cachedInputTokens: 0,
+      outputTokens: 100_000,
+    });
+    expect(mini.costUsd).toBeCloseTo(1.26, 8);
+    expect(mini).toMatchObject({
+      pricing: "cloudflare-unified-gpt-5-4-mini-2026-07",
+    });
+    const nano = estimateManagedAiUsage("openai/gpt-5.4-nano", {
+      inputTokens: 1_000_000,
+      cachedInputTokens: 0,
+      outputTokens: 100_000,
+    });
+    expect(nano.costUsd).toBeCloseTo(0.34125, 8);
+    expect(nano).toMatchObject({
+      pricing: "cloudflare-unified-gpt-5-4-nano-2026-07",
+    });
     const claude = estimateManagedAiUsage("anthropic/claude-sonnet-4.6", {
         inputTokens: 1_000_000,
         cachedInputTokens: 0,
@@ -122,7 +140,7 @@ describe("managed Everyday AI billing", () => {
             managed: true,
             currency: "usd",
             billingSource: "internal",
-            defaultModel: "moonshotai/kimi-k3",
+            defaultModel: "openai/gpt-5.4-mini",
             models: [],
             eligible: false,
             ineligibleReason: null,

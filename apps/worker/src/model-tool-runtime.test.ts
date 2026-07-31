@@ -44,6 +44,26 @@ describe("live agent tool model adapters", () => {
     expect(result.toolCalls[0]).toMatchObject({ name: "core_reminders_list" });
   });
 
+  it("runs managed GPT-5.4 mini with reasoning disabled", async () => {
+    const run = vi.fn(async () => ({
+      tool_calls: [{ name: "core_reminders_list", arguments: {} }],
+    }));
+
+    await runAgentToolModelStep(
+      route("workers-ai", {
+        model: "openai/gpt-5.4-mini",
+        ai: { run },
+      }),
+      [{ role: "user", content: "List reminders" }],
+      TOOLS,
+    );
+
+    expect(run).toHaveBeenCalledWith(
+      "openai/gpt-5.4-mini",
+      expect.objectContaining({ reasoning_effort: "none" }),
+    );
+  });
+
   it("uses Anthropic's native schema for a unified Workers AI model", async () => {
     const run = vi.fn(async () => ({
       content: [{
@@ -104,6 +124,25 @@ describe("live agent tool model adapters", () => {
       tools: [{ type: "function", function: { strict: true } }],
     });
     expect(result.toolCalls[0]).toMatchObject({ id: "openai-1" });
+  });
+
+  it("runs direct GPT-5.4 mini with reasoning disabled", async () => {
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({
+          choices: [{ message: { content: "Done" } }],
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await runAgentToolModelStep(
+      route("openai", { model: "gpt-5.4-mini", apiKey: "openai-key" }),
+      [{ role: "user", content: "List reminders" }],
+      TOOLS,
+    );
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+
+    expect(body.reasoning_effort).toBe("none");
   });
 
   it("calls Anthropic Messages with native tool-use schemas", async () => {

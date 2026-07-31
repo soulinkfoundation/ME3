@@ -17,6 +17,24 @@ const gemmaConfig = FIXED_MODEL_EVALUATION_CANDIDATES.find(
 )!;
 
 describe("fixed live model evaluation", () => {
+  it("registers GPT-5.4 mini as a fast explicit evaluation candidate", () => {
+    expect(
+      FIXED_MODEL_EVALUATION_CANDIDATES.find(
+        (candidate) => candidate.id === "openai-gpt-5-4-mini",
+      ),
+    ).toMatchObject({
+      providerId: "openai",
+      model: "gpt-5.4-mini",
+      enabledByDefault: false,
+    });
+    expect(modelSupportsImageInput("openai", "gpt-5.4-mini")).toBe(true);
+    expect(modelSupportsImageInput("workers-ai", "openai/gpt-5.4-mini")).toBe(true);
+    expect(modelSupportsImageInput("workers-ai", "openai/gpt-5.4-nano")).toBe(true);
+    expect(
+      modelCapabilitiesFor("workers-ai", "@cf/zai-org/glm-4.7-flash"),
+    ).toContain("tool-use");
+  });
+
   it("registers the managed Kimi K3 model with vision-input capabilities", () => {
     expect(
       FIXED_MODEL_EVALUATION_CANDIDATES.find(
@@ -134,6 +152,13 @@ describe("fixed live model evaluation", () => {
       tokensIn: 230,
       tokensOut: 22,
       tokenSource: "provider",
+    });
+    expect(report.candidates[0]?.toolMetrics).toEqual({
+      expectedCalls: 1,
+      correctChoices: 1,
+      validArguments: 1,
+      toolChoiceAccuracy: 1,
+      argumentValidity: 1,
     });
     expect(serialized).not.toContain("PRIVATE_PROMPT");
     expect(serialized).not.toContain("PRIVATE_RESPONSE");

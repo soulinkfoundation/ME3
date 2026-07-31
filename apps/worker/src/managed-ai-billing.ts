@@ -3,13 +3,20 @@ import type { Env } from "./types";
 
 export const MANAGED_AI_BILLING_POLICY_SECRET = "ME3_MANAGED_AI_BILLING_POLICY";
 const INCLUDED_MONTHLY_CENTS = 500;
-const DEFAULT_MANAGED_MODEL = "moonshotai/kimi-k3";
+const DEFAULT_MANAGED_MODEL = "openai/gpt-5.4-mini";
 const MANAGED_MODELS = [
+  "openai/gpt-5.4-mini",
+  "openai/gpt-5.4-nano",
+  "zai-org/glm-4.7-flash",
   "moonshotai/kimi-k3",
   "anthropic/claude-sonnet-4.6",
   "openai/gpt-5.5",
 ] as const;
 const MANAGED_FALLBACK_MODELS = ["zai-org/glm-4.7-flash"] as const;
+const MANAGED_BILLABLE_TEXT_MODELS = [...new Set<string>([
+  ...MANAGED_MODELS,
+  ...MANAGED_FALLBACK_MODELS,
+])];
 const MANAGED_IMAGE_MODELS = [
   "black-forest-labs/flux-2-klein-4b",
   "gpt-image-2",
@@ -132,7 +139,7 @@ export async function syncManagedAiUsage(
               estimated_cost_usd, metadata_json, created_at
        FROM ai_usage_events
        WHERE (
-           (kind = 'text' AND lower(replace(model, '@cf/', '')) IN (?, ?, ?, ?))
+           (kind = 'text' AND lower(replace(model, '@cf/', '')) IN (${MANAGED_BILLABLE_TEXT_MODELS.map(() => "?").join(", ")}))
            OR
            (kind = 'image' AND lower(replace(model, '@cf/', '')) IN (?, ?))
          )
@@ -141,7 +148,7 @@ export async function syncManagedAiUsage(
        ORDER BY created_at ASC
        LIMIT 100`,
     )
-      .bind(...MANAGED_MODELS, ...MANAGED_FALLBACK_MODELS, ...MANAGED_IMAGE_MODELS)
+      .bind(...MANAGED_BILLABLE_TEXT_MODELS, ...MANAGED_IMAGE_MODELS)
       .all<LocalUsageRow>();
     rows = result.results || [];
   } catch (error) {

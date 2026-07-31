@@ -1190,10 +1190,10 @@ describe("Core chat native context", () => {
       },
     );
 
-    expect(response.model).toBe("moonshotai/kimi-k3");
+    expect(response.model).toBe("openai/gpt-5.4-mini");
     expect(aiRun).toHaveBeenCalledWith(
-      "moonshotai/kimi-k3",
-      expect.any(Object),
+      "openai/gpt-5.4-mini",
+      expect.objectContaining({ reasoning_effort: "none" }),
     );
   });
 
@@ -1226,7 +1226,34 @@ describe("Core chat native context", () => {
     );
   });
 
-  it("switches managed Kimi K3 to the backup after the included allowance", async () => {
+  it("maps the normalized managed GLM choice to its Workers AI runtime ID", async () => {
+    const aiRun = vi.fn(async () => ({ response: "Managed GLM reply." }));
+    const env = createEnv({
+      managedAiPolicy: JSON.stringify({
+        defaultModel: "zai-org/glm-4.7-flash",
+        overagesEnabled: false,
+        monthlyMaximumCents: 500,
+      }),
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_DEPLOYMENT_MODE: "managed",
+      } as never,
+      createStorage(),
+      { ...dispatchInput("Use my managed default."), mode: "everyday" },
+    );
+
+    expect(response.model).toBe("@cf/zai-org/glm-4.7-flash");
+    expect(aiRun).toHaveBeenCalledWith(
+      "@cf/zai-org/glm-4.7-flash",
+      expect.any(Object),
+    );
+  });
+
+  it("switches the managed default to the backup after the included allowance", async () => {
     const aiRun = vi.fn(async () => ({ response: "Allowance fallback reply." }));
     const env = createEnv({
       aiUsageEvents: [{ estimated_cost_usd: 5 }],

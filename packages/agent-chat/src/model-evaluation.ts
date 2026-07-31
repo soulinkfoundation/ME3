@@ -80,11 +80,31 @@ export type ModelEvaluationReport = {
       estimatedCostUsd: number;
     };
     latencyMs: { p50: number; p95: number };
+    toolMetrics: {
+      expectedCalls: number;
+      correctChoices: number;
+      validArguments: number;
+      toolChoiceAccuracy: number | null;
+      argumentValidity: number | null;
+    };
     results: ModelEvaluationResult[];
   }>;
 };
 
 export const FIXED_MODEL_EVALUATION_CANDIDATES: readonly ModelEvaluationCandidateConfig[] = [
+  {
+    id: "openai-gpt-5-4-mini",
+    label: "GPT-5.4 mini",
+    mode: "everyday",
+    providerId: "openai",
+    model: "gpt-5.4-mini",
+    enabledByDefault: false,
+    pricing: {
+      inputPerMillionUsd: 0.75,
+      cachedInputPerMillionUsd: 0.075,
+      outputPerMillionUsd: 4.5,
+    },
+  },
   {
     id: "workers-kimi-k3",
     label: "Kimi K3",
@@ -599,6 +619,9 @@ const EVALUATION_SYSTEM_PROMPT = [
 ].join("\n");
 
 type RawEvaluationObservation = ModelEvaluationResult & {
+  expectedToolCalls?: number;
+  correctToolChoices?: number;
+  validToolArguments?: number;
   promptContent?: unknown;
   responseContent?: unknown;
   toolArguments?: unknown;
@@ -633,6 +656,15 @@ export async function runFixedModelEvaluation(input: {
       .map((result) => result.latencyMs);
     const errors = results.filter((result) => result.status === "error").length;
     const skipped = results.filter((result) => result.status === "skipped").length;
+    const expectedToolCalls = sum(
+      observations.map((result) => result.expectedToolCalls),
+    );
+    const correctToolChoices = sum(
+      observations.map((result) => result.correctToolChoices),
+    );
+    const validToolArguments = sum(
+      observations.map((result) => result.validToolArguments),
+    );
     candidates.push({
       candidateId: candidate.id,
       requestedMode: candidate.mode,
@@ -660,6 +692,17 @@ export async function runFixedModelEvaluation(input: {
       latencyMs: {
         p50: percentile(latencies, 0.5),
         p95: percentile(latencies, 0.95),
+      },
+      toolMetrics: {
+        expectedCalls: expectedToolCalls,
+        correctChoices: correctToolChoices,
+        validArguments: validToolArguments,
+        toolChoiceAccuracy: expectedToolCalls
+          ? roundRatio(correctToolChoices / expectedToolCalls)
+          : null,
+        argumentValidity: expectedToolCalls
+          ? roundRatio(validToolArguments / expectedToolCalls)
+          : null,
       },
       results,
     });
@@ -735,6 +778,10 @@ async function evaluateCandidateTask(
       task.expectedCalls || [],
       observation.toolCalls,
     );
+    const toolMetrics = assessToolMetrics(
+      task.expectedCalls || [],
+      observation.toolCalls,
+    );
     const passed =
       task.checkText(observation.responseText) && toolCorrectness !== "failed";
     return {
@@ -750,6 +797,7 @@ async function evaluateCandidateTask(
       estimatedCostUsd: estimateCost(candidate, usage),
       fallbackReason: observation.fallbackReason,
       errorClass: observation.fallbackReason ? "provider_request_failed" : null,
+      ...toolMetrics,
       promptContent: task.turns,
       responseContent: observation.responseText,
       toolArguments: observation.toolCalls,
@@ -762,6 +810,9 @@ async function evaluateCandidateTask(
       toolCorrectness: task.expectedCalls?.length ? "failed" : "not_applicable",
       latencyMs: roundMs(clock() - started),
       errorClass: classifyEvaluationError(error),
+      expectedToolCalls: task.expectedCalls?.length || 0,
+      correctToolChoices: 0,
+      validToolArguments: 0,
       promptContent: task.turns,
       providerPayload: error,
     };
@@ -947,6 +998,26 @@ function assessToolCorrectness(
     : "failed";
 }
 
+function assessToolMetrics(
+  expected: readonly ExpectedToolCall[],
+  actual: readonly AgentToolCall[],
+): Pick<
+  RawEvaluationObservation,
+  "expectedToolCalls" | "correctToolChoices" | "validToolArguments"
+> {
+  return {
+    expectedToolCalls: expected.length,
+    correctToolChoices: expected.filter(
+      (call, index) => call.name === actual[index]?.name,
+    ).length,
+    validToolArguments: expected.filter(
+      (call, index) =>
+        call.name === actual[index]?.name &&
+        argumentsInclude(actual[index]?.arguments || {}, call.arguments),
+    ).length,
+  };
+}
+
 function argumentsInclude(
   actual: Record<string, unknown>,
   expected: Record<string, unknown>,
@@ -1050,6 +1121,10 @@ function roundMs(value: number): number {
 
 function roundCost(value: number): number {
   return Number(Math.max(0, value).toFixed(8));
+}
+
+function roundRatio(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
 }
 
 function parseJson(text: string): unknown {

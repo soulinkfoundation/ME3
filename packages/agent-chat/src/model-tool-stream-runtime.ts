@@ -13,6 +13,7 @@ import {
 } from "./tool-runtime";
 import {
   externalProviderGatewayUrl,
+  openAiCompatibleReasoningEffort,
   type AgentChatAiRoute,
 } from "./model-runtime";
 
@@ -31,6 +32,7 @@ export async function runAgentToolModelStreamStep(
   if (route.providerId === "workers-ai") {
     if (!route.ai) throw new Error("Workers AI binding is not configured");
     const anthropicModel = isAnthropicUnifiedModel(route.model);
+    const reasoningEffort = openAiCompatibleReasoningEffort(route.model);
     const request = anthropicModel
       ? {
           max_tokens: 800,
@@ -39,6 +41,7 @@ export async function runAgentToolModelStreamStep(
         }
       : {
           ...toWorkersAiToolRequest(messages, tools, toolChoice),
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
           stream: true,
         };
     const options = route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
@@ -88,6 +91,9 @@ export async function runAgentToolModelStreamStep(
         body: JSON.stringify({
           model: route.model,
           ...toOpenAiToolRequest(messages, tools, toolChoice),
+          ...(openAiCompatibleReasoningEffort(route.model)
+            ? { reasoning_effort: openAiCompatibleReasoningEffort(route.model) }
+            : {}),
           stream: true,
           stream_options: { include_usage: true },
         }),

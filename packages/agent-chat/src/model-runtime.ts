@@ -43,6 +43,18 @@ export type AgentChatAiRoute = {
   configured: boolean;
 };
 
+export function openAiCompatibleReasoningEffort(
+  model: string,
+): "none" | null {
+  const normalized = model.trim().toLowerCase().replace(/^@cf\//, "");
+  return normalized === "openai/gpt-5.4-mini" ||
+    normalized === "openai/gpt-5.4-nano" ||
+    normalized === "gpt-5.4-mini" ||
+    normalized === "gpt-5.4-nano"
+    ? "none"
+    : null;
+}
+
 export async function runModelTurn(
   route: AgentChatAiRoute,
   messages: AgentChatTextMessage[],
@@ -194,6 +206,8 @@ async function runOpenAi(
     model: route.model,
     messages: withOpenAiImageContent(messages, images),
   };
+  const reasoningEffort = openAiCompatibleReasoningEffort(route.model);
+  if (reasoningEffort) body.reasoning_effort = reasoningEffort;
   if (!isOpenAiReasoningModel(route.model)) {
     body.temperature = 0.4;
   }
@@ -326,8 +340,10 @@ async function runWorkersAi(
     .toLowerCase()
     .replace(/^@cf\//, "")
     .startsWith("anthropic/");
+  const normalizedModel = route.model.trim().toLowerCase().replace(/^@cf\//, "");
   const chatCompletionsVisionModel =
-    route.model.trim().toLowerCase() === "moonshotai/kimi-k3";
+    normalizedModel === "moonshotai/kimi-k3" || normalizedModel.startsWith("openai/");
+  const reasoningEffort = openAiCompatibleReasoningEffort(route.model);
   const system = messages.find((message) => message.role === "system")?.content || "";
   const input = anthropicModel
     ? {
@@ -345,8 +361,11 @@ async function runWorkersAi(
           images,
         ),
       }
-    : chatCompletionsVisionModel && images.length > 0
-      ? { messages: withOpenAiImageContent(messages, images) }
+    : chatCompletionsVisionModel
+      ? {
+          messages: withOpenAiImageContent(messages, images),
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+        }
     : images[0]
       ? { messages, image: images[0].dataUrl }
       : { messages };

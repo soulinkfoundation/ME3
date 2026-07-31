@@ -11,6 +11,7 @@ import {
 } from "./tool-runtime";
 import {
   externalProviderGatewayUrl,
+  openAiCompatibleReasoningEffort,
   type AgentChatAiRoute,
 } from "./model-runtime";
 
@@ -28,9 +29,13 @@ export async function runAgentToolModelStep(
         ? { gateway: { id: route.aiGateway.gatewayId } }
         : undefined;
     const anthropicModel = isAnthropicUnifiedModel(route.model);
+    const reasoningEffort = openAiCompatibleReasoningEffort(route.model);
     const request = anthropicModel
       ? { max_tokens: 800, ...toAnthropicToolRequest(messages, tools, toolChoice) }
-      : toWorkersAiToolRequest(messages, tools, toolChoice);
+      : {
+          ...toWorkersAiToolRequest(messages, tools, toolChoice),
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+        };
     const result = options
       ? await route.ai.run(route.model, request, options)
       : await route.ai.run(route.model, request);
@@ -63,6 +68,9 @@ export async function runAgentToolModelStep(
         body: JSON.stringify({
           model: route.model,
           ...toOpenAiToolRequest(messages, tools, toolChoice),
+          ...(openAiCompatibleReasoningEffort(route.model)
+            ? { reasoning_effort: openAiCompatibleReasoningEffort(route.model) }
+            : {}),
         }),
       },
     );
