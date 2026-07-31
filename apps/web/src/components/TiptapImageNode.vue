@@ -12,11 +12,9 @@ const props = defineProps<{
 const menuOpen = ref(false);
 const containerRef = ref<HTMLDivElement | null>(null);
 const wrapperRef = ref<HTMLDivElement | null>(null);
-
-const captionText = computed(() => {
-  const caption = props.node?.attrs?.caption;
-  return typeof caption === "string" ? caption : "";
-});
+const captionDraft = ref(
+  typeof props.node?.attrs?.caption === "string" ? props.node.attrs.caption : "",
+);
 
 const widthStyle = computed(() => {
   const width = props.node?.attrs?.width;
@@ -31,13 +29,10 @@ function toggleMenu() {
   menuOpen.value = !menuOpen.value;
 }
 
-function commitCaption(value: string) {
-  const trimmed = value.trim();
+function commitCaption() {
+  const trimmed = captionDraft.value.trim();
+  captionDraft.value = trimmed;
   props.updateAttributes({ caption: trimmed || null });
-}
-
-function handleCaptionInput(value: string) {
-  props.updateAttributes({ caption: value });
 }
 
 function deleteImage() {
@@ -48,13 +43,20 @@ function deleteImage() {
 function handleCaptionKeydown(event: KeyboardEvent) {
   if (event.key === "Enter") {
     event.preventDefault();
-    commitCaption((event.target as HTMLInputElement).value);
+    (event.target as HTMLInputElement).blur();
   }
   if (event.key === "Escape") {
     event.preventDefault();
     (event.target as HTMLInputElement).blur();
   }
 }
+
+watch(
+  () => props.node?.attrs?.caption,
+  (caption) => {
+    captionDraft.value = typeof caption === "string" ? caption : "";
+  },
+);
 
 function startResize(direction: "left" | "right", event: PointerEvent) {
   if (!containerRef.value) return;
@@ -147,10 +149,10 @@ onBeforeUnmount(() => {
       <input
         class="image-caption-input"
         type="text"
-        :value="captionText"
+        v-model="captionDraft"
+        aria-label="Image caption"
         placeholder="Add a caption..."
-        @input="handleCaptionInput(($event.target as HTMLInputElement).value)"
-        @blur="commitCaption(($event.target as HTMLInputElement).value)"
+        @blur="commitCaption"
         @keydown="handleCaptionKeydown"
       />
     </div>
@@ -161,6 +163,12 @@ onBeforeUnmount(() => {
 .tiptap-image {
   position: relative;
   margin: 12px 0;
+}
+
+.tiptap-image-inner {
+  display: inline-flex;
+  flex-direction: column;
+  max-width: 100%;
 }
 
 .image-shell {
@@ -184,8 +192,8 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border: none;
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.7);
@@ -198,8 +206,14 @@ onBeforeUnmount(() => {
 }
 
 .tiptap-image:hover .image-menu-btn,
-.tiptap-image.menu-open .image-menu-btn {
+.tiptap-image.menu-open .image-menu-btn,
+.image-menu-btn:focus-visible {
   opacity: 1;
+}
+
+.image-menu-btn:focus-visible {
+  outline: 2px solid var(--ui-accent, var(--color-accent, #fff));
+  outline-offset: 2px;
 }
 
 .image-menu {
@@ -236,12 +250,20 @@ onBeforeUnmount(() => {
 }
 
 .image-caption-input {
+  box-sizing: border-box;
   margin-top: 8px;
-  width: min(420px, 100%);
+  width: 100%;
   padding: 8px 10px;
   border-radius: 8px;
-  border: 1px solid var(--color-border, #ddd);
+  border: 1px solid var(--ui-border, var(--color-border, #ddd));
+  background: var(--ui-surface, var(--color-bg, #fff));
+  color: var(--ui-text, var(--color-text, #111));
   font-size: 14px;
+}
+
+.image-caption-input:focus-visible {
+  outline: 2px solid var(--ui-accent, var(--color-accent, #111));
+  outline-offset: 2px;
 }
 
 .resize-handle {

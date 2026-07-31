@@ -38,6 +38,9 @@ describe('TiptapImageNode', () => {
     expect(input.exists()).toBe(true)
 
     await input.setValue('New caption')
+    expect((input.element as HTMLInputElement).value).toBe('New caption')
+    expect(updateAttributes).not.toHaveBeenCalled()
+
     await input.trigger('blur')
 
     expect(updateAttributes).toHaveBeenCalledWith({ caption: 'New caption' })
@@ -48,5 +51,16 @@ describe('TiptapImageNode', () => {
 
     const input = wrapper.find('.image-caption-input')
     expect((input.element as HTMLInputElement).value).toBe('Hello')
+  })
+
+  it('updates the input when the stored caption changes externally', async () => {
+    const { wrapper } = mountNode({ caption: 'Original' })
+
+    await wrapper.setProps({
+      node: { attrs: { src: 'test.jpg', alt: 'Test', caption: 'Updated' } },
+    })
+
+    const input = wrapper.find('.image-caption-input')
+    expect((input.element as HTMLInputElement).value).toBe('Updated')
   })
 })

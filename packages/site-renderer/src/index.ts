@@ -298,6 +298,7 @@ function generateContentPageHtml(
   basePath: string,
   capabilities: SiteRenderCapabilities,
 ): string {
+  const htmlContent = markdownToHtml(markdown, basePath);
   return pageShell(profile, {
     title: `${title} | ${profile.name || "ME3"}`,
     description: markdownToText(markdown).slice(0, 160),
@@ -305,9 +306,10 @@ function generateContentPageHtml(
     basePath,
     body: `<header class="page-header"><a class="back-link" href="${basePath}">${profile.avatar ? `<img src="${escapeHtml(filePathForHtml(profile.avatar, basePath))}" alt="" class="avatar-small">` : ""}<span>${escapeHtml(profile.name || "Home")}</span></a></header>
       ${generateNav(profile, activeSlug, basePath)}
-      <main class="content"><h1>${escapeHtml(title)}</h1>${markdownToHtml(markdown, basePath)}</main>`,
+      <main class="content"><h1>${escapeHtml(title)}</h1>${htmlContent}</main>`,
     footer: generateFooter(profile, capabilities.footerCustomization),
     vibe: getVibe(profile),
+    afterContainer: htmlContent.includes("<img") ? buildContentLightbox() : "",
   });
 }
 
@@ -369,6 +371,7 @@ function pageShell(
     body: string;
     footer: string;
     vibe: string;
+    afterContainer?: string;
   },
 ): string {
   const fontUrl = VIBE_FONT_URLS[options.vibe];
@@ -388,13 +391,14 @@ function pageShell(
   <link rel="icon" href="${escapeHtml(faviconPath)}">
   <link rel="apple-touch-icon" href="${escapeHtml(faviconPath)}">
   ${fontLinks}
-  <style>${siteCss(options.vibe, profile.links?._accent)}${siteCssOverrides(options.vibe)}.main.no-banner .profile-header{margin-top:0}</style>
+  <style>${siteCss(options.vibe, profile.links?._accent)}${siteCssOverrides(options.vibe)}${contentImageCss()}.main.no-banner .profile-header{margin-top:0}</style>
 </head>
 <body data-vibe="${escapeHtml(options.vibe)}">
   <div class="container">
     ${options.body}
     ${options.footer}
   </div>
+  ${options.afterContainer || ""}
 </body>
 </html>`;
 }
@@ -1486,6 +1490,159 @@ function escapeHtml(value: string): string {
 
 function siteCssOverrides(vibe: string): string {
   return `.name{font-size:28px;line-height:1.2;margin:12px 0 6px}.location{font-size:14px;line-height:1.5}.bio{font-size:16px;line-height:1.5}.newsletter form{display:flex;flex-wrap:wrap;gap:10px;max-width:520px;margin:18px auto 10px}.newsletter input[type=email]{min-width:200px;flex:1;background:var(--bg);border:2px solid var(--border);color:var(--text);cursor:text}.newsletter input[type=email]::placeholder{color:var(--muted)}.newsletter-honeypot{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important}.newsletter-status{min-height:1.4em;margin:8px 0 0!important;color:var(--muted);font-size:.95rem!important}.newsletter-status.is-error{color:#b42318}.newsletter button:disabled{cursor:wait;opacity:.7}.booking-widget{max-width:760px;margin:0 auto}.booking-date-picker{display:flex;flex-direction:column;align-items:stretch;gap:12px;margin:0 auto 8px;width:100%;max-width:520px}.booking-date-picker label{text-align:center;font-weight:700;color:var(--text);font-size:1.1rem}.booking-date-input-wrap{width:100%;overflow:hidden;border-radius:var(--radius);cursor:pointer}.booking-date-picker input[type=date]{display:block;width:100%;max-width:100%;min-width:0;margin:0;padding:16px 20px;border:0;border-radius:18px;background:var(--surface);color:var(--text);box-sizing:border-box;cursor:pointer;color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:1.1rem}.booking-date-picker input[type=date]::-webkit-calendar-picker-indicator{cursor:pointer}.booking-date-picker input[type=date]::-webkit-date-and-time-value{text-align:left;min-width:0}.testimonials-section{padding:24px 0;margin:32px 0}.testimonials-section .section-title{font-size:18px;font-weight:700;text-align:center;margin:0 0 16px}.testimonials-carousel{overflow:hidden}.testimonials-track{display:flex;gap:12px;padding:15px;transition:transform .25s ease}.testimonials-slide{flex:0 0 85%}.testimonials-single{display:flex;justify-content:center}.carousel-dots{display:flex;justify-content:center;gap:6px;margin-top:12px}.carousel-dot{width:8px;height:8px;border-radius:999px;border:0;background:var(--border);cursor:pointer;padding:0}.carousel-dot.active{background:var(--text)}.testimonial-card{border:1px solid var(--border);border-radius:18px;background:var(--bg);padding:20px;box-shadow:0 12px 24px rgba(0,0,0,.05);margin:0;color:var(--text)}.testimonial-header{display:flex;align-items:center;gap:14px;margin-bottom:12px}.testimonial-avatar{width:52px;height:52px;border-radius:999px;object-fit:cover;border:1px solid var(--border);flex:0 0 auto}.testimonial-avatar.placeholder{display:flex;align-items:center;justify-content:center;background:var(--border);color:var(--text);font-weight:700}.testimonial-meta{flex:1;min-width:0}.testimonial-name{font-weight:700;font-size:16px;margin:0}.testimonial-handle{color:var(--muted);font-size:14px;margin:0}.testimonial-link{font-weight:700;font-size:13px;text-decoration:underline;color:var(--accent)}.testimonial-quote{font-size:16px;line-height:1.6;margin:0}@media(max-width:480px){.newsletter input[type=email]{min-width:100%}.newsletter button{width:100%}.testimonials-slide{flex-basis:100%}}${vibe === "tech" ? `body[data-vibe=tech]{font-size:14px;line-height:1.5}body[data-vibe=tech] .name{font-size:24px;line-height:1.2;font-weight:700;letter-spacing:0;margin:12px 0 4px}body[data-vibe=tech] .bio{font-size:16px}body[data-vibe=tech] .location{font-size:14px}body[data-vibe=tech] .newsletter input[type=email],body[data-vibe=tech] .booking-date-picker input[type=date]{background:#0a0a0a;border-color:#2a2a2a;color:#e0e0e0;color-scheme:dark}body[data-vibe=tech] .testimonial-card{background:#050505;border-color:#2a2a2a;border-radius:24px;box-shadow:none}body[data-vibe=tech] .testimonial-avatar.placeholder{background:#242424}body[data-vibe=tech] .testimonials-section{background:transparent}` : ""}`;
+}
+
+function contentImageCss(): string {
+  return `
+.content figure{width:fit-content;max-width:100%;margin:24px auto;text-align:center}
+.content figure>img{display:block;margin:0 auto}
+.content figure>figcaption,.content .tiptap-gallery figcaption{margin-top:8px;color:var(--muted);font-size:14px;line-height:1.5;text-align:center}
+.content .tiptap-gallery{display:block;column-count:2;column-gap:16px;margin:24px 0}
+.content .tiptap-gallery>figure,.content .tiptap-gallery>img,.content .tiptap-gallery>.content-image-trigger{width:100%;break-inside:avoid;margin:0 0 16px}
+.content .tiptap-gallery>figure{margin:0 0 16px}
+.content .tiptap-gallery img{display:block;width:100%;margin:0}
+.content .content-image-trigger{display:flex;width:fit-content;max-width:100%;margin:16px auto;padding:0;border:0;border-radius:var(--radius-sm);background:transparent;color:inherit;cursor:zoom-in}
+.content figure>.content-image-trigger,.content .tiptap-gallery>.content-image-trigger,.content .tiptap-gallery figure>.content-image-trigger{width:100%;margin:0}
+.content .content-image-trigger img{display:block;margin:0}
+.content .content-image-trigger:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.content-lightbox{width:100vw;max-width:none;height:100vh;height:100dvh;max-height:none;margin:0;padding:0;border:0;background:rgba(8,8,8,.97);color:#fff}
+.content-lightbox::backdrop{background:rgba(8,8,8,.97)}
+.content-lightbox[open]{display:block}
+.content-lightbox-shell{position:relative;width:100%;height:100%}
+.content-lightbox-stage{box-sizing:border-box;width:100%;height:100%;padding:64px 76px 56px;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.content-lightbox-figure{display:flex;min-height:100%;margin:0;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+.content-lightbox-image{display:block;max-width:100%;max-height:calc(100dvh - 150px);height:auto;object-fit:contain}
+.content-lightbox-caption{max-width:720px;margin:0;color:rgba(255,255,255,.86);font-size:14px;line-height:1.5;text-align:center}
+.content-lightbox-close,.content-lightbox-arrow{position:absolute;z-index:1;width:48px;height:48px;border:1px solid rgba(255,255,255,.3);border-radius:var(--radius-full);background:rgba(20,20,20,.78);color:#fff;font:inherit;cursor:pointer}
+.content-lightbox-close{top:max(12px,env(safe-area-inset-top));right:max(16px,env(safe-area-inset-right));font-size:30px;line-height:1}
+.content-lightbox-arrow{top:50%;transform:translateY(-50%);font-size:36px;line-height:1}
+.content-lightbox-previous{left:max(16px,env(safe-area-inset-left))}
+.content-lightbox-next{right:max(16px,env(safe-area-inset-right))}
+.content-lightbox-close:hover,.content-lightbox-arrow:hover{background:rgba(48,48,48,.92)}
+.content-lightbox-close:focus-visible,.content-lightbox-arrow:focus-visible{outline:3px solid #fff;outline-offset:3px}
+.content-lightbox-count{position:absolute;left:50%;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%);margin:0;color:rgba(255,255,255,.72);font-size:13px}
+@media(max-width:520px){.content .tiptap-gallery{column-count:1}.content-lightbox-stage{padding:64px 16px 88px}.content-lightbox-image{max-height:calc(100dvh - 185px)}.content-lightbox-arrow{top:auto;bottom:max(16px,env(safe-area-inset-bottom));transform:none}.content-lightbox-previous{left:max(16px,env(safe-area-inset-left))}.content-lightbox-next{right:max(16px,env(safe-area-inset-right))}}
+`;
+}
+
+function buildContentLightbox(): string {
+  return `<dialog class="content-lightbox" data-content-lightbox aria-label="Image gallery">
+    <div class="content-lightbox-shell">
+      <button class="content-lightbox-close" type="button" data-lightbox-close aria-label="Close image gallery">×</button>
+      <button class="content-lightbox-arrow content-lightbox-previous" type="button" data-lightbox-previous aria-label="Previous image">‹</button>
+      <div class="content-lightbox-stage" data-lightbox-stage>
+        <figure class="content-lightbox-figure">
+          <img class="content-lightbox-image" data-lightbox-image src="" alt="">
+          <figcaption class="content-lightbox-caption" data-lightbox-caption></figcaption>
+        </figure>
+      </div>
+      <button class="content-lightbox-arrow content-lightbox-next" type="button" data-lightbox-next aria-label="Next image">›</button>
+      <p class="content-lightbox-count" data-lightbox-count aria-live="polite"></p>
+    </div>
+  </dialog>
+  <script>
+    (function() {
+      var dialog = document.querySelector("[data-content-lightbox]");
+      if (!dialog) return;
+
+      var galleryImage = dialog.querySelector("[data-lightbox-image]");
+      var caption = dialog.querySelector("[data-lightbox-caption]");
+      var count = dialog.querySelector("[data-lightbox-count]");
+      var closeButton = dialog.querySelector("[data-lightbox-close]");
+      var previousButton = dialog.querySelector("[data-lightbox-previous]");
+      var nextButton = dialog.querySelector("[data-lightbox-next]");
+      var stage = dialog.querySelector("[data-lightbox-stage]");
+      var currentIndex = 0;
+      var lastTrigger = null;
+      var touchStartX = null;
+      var images = Array.prototype.slice.call(document.querySelectorAll(".content img")).filter(function(img) {
+        return !img.closest("a, .tiptap-carousel, .testimonials-section, [data-content-lightbox]");
+      });
+
+      if (!images.length || !galleryImage || !caption || !count || !closeButton || !previousButton || !nextButton) return;
+
+      function imageCaption(img) {
+        var figure = img.closest("figure");
+        var figcaption = figure ? figure.querySelector("figcaption") : null;
+        return figcaption ? (figcaption.textContent || "").trim() : "";
+      }
+
+      function render(index) {
+        currentIndex = (index + images.length) % images.length;
+        var source = images[currentIndex];
+        galleryImage.src = source.currentSrc || source.src;
+        galleryImage.alt = source.getAttribute("alt") || "";
+        var captionText = imageCaption(source);
+        caption.textContent = captionText;
+        caption.hidden = !captionText;
+        count.textContent = String(currentIndex + 1) + " of " + String(images.length);
+        previousButton.hidden = images.length < 2;
+        nextButton.hidden = images.length < 2;
+        if (stage) stage.scrollTo(0, 0);
+      }
+
+      function open(index, trigger) {
+        lastTrigger = trigger;
+        render(index);
+        if (typeof dialog.showModal === "function") dialog.showModal();
+        else dialog.setAttribute("open", "");
+        closeButton.focus();
+      }
+
+      function close() {
+        if (typeof dialog.close === "function" && dialog.open) dialog.close();
+        else {
+          dialog.removeAttribute("open");
+          if (lastTrigger) lastTrigger.focus();
+        }
+      }
+
+      images.forEach(function(img, index) {
+        if (!img.parentNode) return;
+        var trigger = document.createElement("button");
+        var label = imageCaption(img) || img.getAttribute("alt") || "image";
+        trigger.type = "button";
+        trigger.className = "content-image-trigger";
+        trigger.setAttribute("aria-label", "Open " + label + " in gallery, image " + String(index + 1) + " of " + String(images.length));
+        img.parentNode.insertBefore(trigger, img);
+        trigger.appendChild(img);
+        trigger.addEventListener("click", function() { open(index, trigger); });
+      });
+
+      closeButton.addEventListener("click", close);
+      previousButton.addEventListener("click", function() { render(currentIndex - 1); });
+      nextButton.addEventListener("click", function() { render(currentIndex + 1); });
+      dialog.addEventListener("click", function(event) { if (event.target === dialog) close(); });
+      dialog.addEventListener("close", function() { if (lastTrigger) lastTrigger.focus(); });
+      dialog.addEventListener("cancel", function(event) { event.preventDefault(); close(); });
+      dialog.addEventListener("keydown", function(event) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          close();
+        } else if (event.key === "ArrowLeft" && images.length > 1) {
+          event.preventDefault();
+          render(currentIndex - 1);
+        } else if (event.key === "ArrowRight" && images.length > 1) {
+          event.preventDefault();
+          render(currentIndex + 1);
+        }
+      });
+
+      if (stage) {
+        stage.addEventListener("touchstart", function(event) {
+          touchStartX = event.touches.length ? event.touches[0].clientX : null;
+        }, { passive: true });
+        stage.addEventListener("touchend", function(event) {
+          var startX = touchStartX;
+          touchStartX = null;
+          if (startX === null || !event.changedTouches.length || images.length < 2) return;
+          var delta = event.changedTouches[0].clientX - startX;
+          if (Math.abs(delta) < 50) return;
+          render(currentIndex + (delta < 0 ? 1 : -1));
+        }, { passive: true });
+      }
+    })();
+  </script>`;
 }
 
 function siteCss(vibe: string, accentOverride?: string): string {

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import JSZip from "jszip";
-import TurndownService from "turndown";
 import {
   useWizardStore,
   type WizardPage,
@@ -23,40 +22,9 @@ import {
   type VibeId,
 } from "../../styles/vibes";
 import { resolvePublicProfileUrl } from "../../utils/publicSiteUrl";
+import { createContentTurndownService } from "../../utils/contentMarkdown";
 
-// Initialize turndown for HTML to Markdown conversion
-const turndown = new TurndownService({
-  headingStyle: "atx",
-  bulletListMarker: "-",
-});
-turndown.keep((node) => {
-  if (!(node instanceof HTMLElement)) return false;
-  return (
-    node.hasAttribute("data-tiptap-youtube") ||
-    node.hasAttribute("data-tiptap-faq") ||
-    node.hasAttribute("data-tiptap-carousel")
-  );
-});
-turndown.addRule("tiptapTaskItem", {
-  filter(node) {
-    return node.nodeType === 1 && node.getAttribute("data-type") === "taskItem";
-  },
-  replacement(content, node) {
-    const input = node.querySelector(
-      'input[type="checkbox"]',
-    ) as HTMLInputElement | null;
-    const checked =
-      node.getAttribute("data-checked") === "true" ||
-      input?.checked === true ||
-      input?.hasAttribute("checked") === true;
-    const itemContent = content
-      .trim()
-      .replace(/\n{3,}/g, "\n\n")
-      .replace(/\n/g, "\n  ");
-
-    return itemContent ? `- [${checked ? "x" : " "}] ${itemContent}\n` : "";
-  },
-});
+const turndown = createContentTurndownService();
 
 type ExportedContentImage = {
   contentSlug: string;

@@ -25,6 +25,51 @@ describe("site generator", () => {
     expect(files["me.json"]).toBeUndefined();
   });
 
+  it("keeps captions attached and adds one accessible gallery to image pages", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        name: "Gallery Site",
+        pages: [
+          { slug: "paintings", title: "Paintings", file: "paintings.md" },
+          { slug: "about", title: "About", file: "about.md" },
+        ],
+      },
+      [
+        {
+          name: "paintings.md",
+          content: `<div data-gallery="true" class="tiptap-gallery">
+            <figure data-tiptap-image="true" class="tiptap-image-figure">
+              <img src="./files/painting-1.jpg" alt="Number 37">
+              <figcaption class="tiptap-figcaption">Number 37. Size: 80cm x 90cm.</figcaption>
+            </figure>
+            <figure data-tiptap-image="true" class="tiptap-image-figure">
+              <img src="./files/painting-2.jpg" alt="Number 38">
+              <figcaption class="tiptap-figcaption">Number 38. Size: 120cm x 90cm.</figcaption>
+            </figure>
+          </div>`,
+        },
+        { name: "about.md", content: "# About\n\nNo images here." },
+      ],
+    );
+
+    const paintings = files["paintings.html"];
+    expect(paintings).toContain('data-gallery="true"');
+    expect(paintings).toContain("Number 37. Size: 80cm x 90cm.</figcaption>");
+    expect(paintings).toContain(".content figure>figcaption");
+    expect(paintings).toContain("text-align:center");
+    expect(paintings).toContain('data-content-lightbox aria-label="Image gallery"');
+    expect(paintings).toContain('document.querySelectorAll(".content img")');
+    expect(paintings).toContain('trigger.type = "button"');
+    expect(paintings).toContain('dialog.showModal()');
+    expect(paintings).toContain('event.key === "Escape"');
+    expect(paintings).toContain('event.key === "ArrowRight"');
+    expect(paintings).toContain('addEventListener("touchend"');
+    expect(paintings.match(/<dialog class="content-lightbox"/g)).toHaveLength(1);
+    expect(files["about.html"]).not.toContain('data-content-lightbox aria-label="Image gallery"');
+    expect(files["index.html"]).not.toContain('data-content-lightbox aria-label="Image gallery"');
+  });
+
   it("renders concise public locations from structured location data", async () => {
     const files = await generateSiteHtml(
       {

@@ -1,8 +1,8 @@
 import { computed, ref } from "vue";
-import TurndownService from "turndown";
 import { useWizardStore, type WizardPageImage } from "../stores/wizard";
 import { productSendsPurchaseConfirmation } from "../../../../shared/product-purchase-confirmation";
 import { useSitesStore, type PublishManifest } from "../stores/sites";
+import { createContentTurndownService } from "../utils/contentMarkdown";
 import { resolvePublicProfileUrl } from "../utils/publicSiteUrl";
 
 type ExportedContentImage = {
@@ -13,39 +13,7 @@ type ExportedContentImage = {
   filename: string;
 };
 
-// Initialize turndown for HTML to Markdown conversion
-const turndown = new TurndownService({
-  headingStyle: "atx",
-  bulletListMarker: "-",
-});
-turndown.keep((node) => {
-  if (!(node instanceof HTMLElement)) return false;
-  return (
-    node.hasAttribute("data-tiptap-youtube") ||
-    node.hasAttribute("data-tiptap-faq") ||
-    node.hasAttribute("data-tiptap-carousel")
-  );
-});
-turndown.addRule("tiptapTaskItem", {
-  filter(node) {
-    return node.nodeType === 1 && node.getAttribute("data-type") === "taskItem";
-  },
-  replacement(content, node) {
-    const input = node.querySelector(
-      'input[type="checkbox"]',
-    ) as HTMLInputElement | null;
-    const checked =
-      node.getAttribute("data-checked") === "true" ||
-      input?.checked === true ||
-      input?.hasAttribute("checked") === true;
-    const itemContent = content
-      .trim()
-      .replace(/\n{3,}/g, "\n\n")
-      .replace(/\n/g, "\n  ");
-
-    return itemContent ? `- [${checked ? "x" : " "}] ${itemContent}\n` : "";
-  },
-});
+const turndown = createContentTurndownService();
 
 function createEmptyPublishManifest(): PublishManifest {
   return {

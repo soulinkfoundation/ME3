@@ -1622,7 +1622,7 @@ defineExpose({
   height: auto;
 }
 
-.editor-content-wrapper :deep(.tiptap-gallery .image-caption) {
+.editor-content-wrapper :deep(.tiptap-gallery .image-caption-input) {
   margin-top: 6px;
   font-size: 12px;
 }
