@@ -5,7 +5,7 @@ import {
   resolveTimeZone,
 } from "./calendar";
 import {
-  createConfirmedFreeOneToOneBooking,
+  createConfirmedOneToOneBooking,
   findConfirmedBookingOverlap,
   formatUtcInstantInTimeZone,
   listOneToOneBookingOffers,
@@ -1598,7 +1598,7 @@ async function finalizeSchedulingRequestAsBooking(
   if (overlap) return { error: "That time has already been booked", status: 409 };
 
   const owner = await getOwnerProfile(env, ownerId);
-  const booking = await createConfirmedFreeOneToOneBooking(env, {
+    const booking = await createConfirmedOneToOneBooking(env, {
     site,
     bookIntent,
     offer: offerResult.offer,

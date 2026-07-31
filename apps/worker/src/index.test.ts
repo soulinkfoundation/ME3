@@ -485,6 +485,7 @@ function createEnv(): Env & {
         "mission_tasks",
         "journal_entries",
         "commerce_settings",
+        "commerce_orders",
         "content_bank_items",
         "financial_entries",
         "social_packages",
@@ -1555,7 +1556,8 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("INSERT INTO bookings")) {
-                const isFreeBooking = sql.includes("'not_required', 1");
+                const isUnpaidConfirmedBooking = sql.includes("'not_required'");
+                const isFreeBooking = isUnpaidConfirmedBooking && values[11] === 1;
                 state.bookings.push({
                   id: values[0] as string,
                   site_id: values[1] as string,
@@ -1571,13 +1573,25 @@ function createEnv(): Env & {
                   notes: values[8] as string | null,
                   created_at: "2026-05-31T22:30:00Z",
                   cancelled_at: null,
-                  payment_intent_id: isFreeBooking ? null : (values[9] as string | null),
-                  amount_paid: isFreeBooking ? null : (values[10] as number | null),
-                  suggested_amount: isFreeBooking ? null : (values[11] as number | null),
-                  currency: isFreeBooking ? null : (values[12] as DbBooking["currency"]),
-                  payment_status: isFreeBooking ? "not_required" : "succeeded",
+                  payment_intent_id: isUnpaidConfirmedBooking
+                    ? null
+                    : (values[9] as string | null),
+                  amount_paid: isUnpaidConfirmedBooking
+                    ? null
+                    : (values[10] as number | null),
+                  suggested_amount: isUnpaidConfirmedBooking
+                    ? (values[9] as number | null)
+                    : (values[11] as number | null),
+                  currency: isUnpaidConfirmedBooking
+                    ? (values[10] as DbBooking["currency"])
+                    : (values[12] as DbBooking["currency"]),
+                  payment_status: isUnpaidConfirmedBooking
+                    ? "not_required"
+                    : "succeeded",
                   is_free_booking: isFreeBooking ? 1 : 0,
-                  paid_at: isFreeBooking ? null : "2026-05-31T22:30:00Z",
+                  paid_at: isUnpaidConfirmedBooking
+                    ? null
+                    : "2026-05-31T22:30:00Z",
                 });
               }
 
@@ -8384,6 +8398,66 @@ describe("ME3 Worker auth", () => {
     });
   });
 
+  it("confirms pay-separately bookings and emails the selected amount", async () => {
+    const env = createEnv();
+    await bootstrap(env);
+    addBookableSite(env, {
+      enabled: true,
+      offers: [
+        {
+          id: "manual-session",
+          title: "Manual session",
+          duration: 60,
+          pricing: {
+            enabled: true,
+            suggestedAmount: 80,
+            currency: "EUR",
+            minimumAmount: 50,
+            allowFlexiblePricing: true,
+            paymentMethod: "manual",
+            paymentInstructions: "Pay at https://pay.example/session",
+          },
+        },
+      ],
+      availability: {
+        timezone: "Europe/Dublin",
+        windows: { tuesday: ["15:00-16:30"] },
+      },
+    });
+    addReadyCloudflareEmailProvider(env);
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/book/owner/free", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "manual-session",
+          localDate: "2026-06-09",
+          localTime: "15:15",
+          guestName: "Manual Guest",
+          guestEmail: "manual@example.com",
+          amount: 95,
+        }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(env.bookings[0]).toMatchObject({
+      suggested_amount: 9500,
+      currency: "eur",
+      payment_status: "not_required",
+      is_free_booking: 0,
+    });
+    expect(env.emailSends[0]).toMatchObject({
+      to: "manual@example.com",
+      text: expect.stringContaining("Amount due: €95.00"),
+    });
+    expect(String(env.emailSends[0].text)).toContain(
+      "Payment details:\nPay at https://pay.example/session",
+    );
+  });
+
   it("adds custom booking confirmation copy and can skip host copies", async () => {
     const env = createEnv();
     await bootstrap(env);
@@ -11885,6 +11959,10 @@ describe("ME3 Worker auth", () => {
           siteName: "Booking Owner",
           durationMinutes: 75,
           timezone: "Europe/Dublin",
+          paymentMethod: "manual",
+          amountDue: 80,
+          currency: "EUR",
+          paymentInstructions: "Pay at https://pay.example/session",
         }),
       }),
       env,
@@ -11896,6 +11974,9 @@ describe("ME3 Worker auth", () => {
     expect(env.emailSends[0]).toMatchObject({
       to: "owner@example.com",
       subject: "[Test] Booking confirmed: Book a Call",
+      text: expect.stringContaining(
+        "Payment details:\nPay at https://pay.example/session",
+      ),
     });
   });
 

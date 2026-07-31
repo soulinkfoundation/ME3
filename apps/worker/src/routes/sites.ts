@@ -248,6 +248,10 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         message?: unknown;
         durationMinutes?: unknown;
         timezone?: unknown;
+        paymentMethod?: unknown;
+        amountDue?: unknown;
+        currency?: unknown;
+        paymentInstructions?: unknown;
       }>()
       .catch(() => null);
     if (!body) return c.json({ error: "Invalid request body" }, 400);
@@ -256,6 +260,12 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (!owner.email) return c.json({ error: "Owner email is required for test sends" }, 400);
 
     const startsAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+    const manualPayment = body.paymentMethod === "manual";
+    const amountDue = Number(body.amountDue);
+    const currency = normalizeShortEmailText(body.currency, 3).toLowerCase();
+    const paymentInstructions = manualPayment
+      ? normalizeLongEmailText(body.paymentInstructions, 8000)
+      : "";
     const booking: DbBooking = {
       id: "test-booking",
       site_id: site.id,
@@ -273,10 +283,16 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       cancelled_at: null,
       payment_intent_id: null,
       amount_paid: null,
-      suggested_amount: null,
-      currency: null,
+      suggested_amount:
+        manualPayment && Number.isFinite(amountDue) && amountDue > 0
+          ? Math.round(amountDue * 100)
+          : null,
+      currency:
+        manualPayment && /^[a-z]{3}$/.test(currency)
+          ? (currency as DbBooking["currency"])
+          : null,
       payment_status: "not_required",
-      is_free_booking: 1,
+      is_free_booking: manualPayment ? 0 : 1,
       paid_at: null,
     };
     const result = await sendGuestBookingConfirmationEmail(
@@ -294,6 +310,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
           "Book a session",
         timezone: normalizeShortEmailText(body.timezone, 80) || "UTC",
         guestMessageText: normalizeLongEmailText(body.message, 8000),
+        paymentInstructions,
         test: true,
       }),
     );

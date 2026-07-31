@@ -141,6 +141,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-07-29-social-version-publishing-settings-v1",
     apply: applySocialVersionPublishingSettingsMigration,
   },
+  {
+    id: "0033_manual_payments",
+    checksum: "2026-07-31-manual-payments-v1",
+    apply: applyManualPaymentsMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -2055,6 +2060,29 @@ async function applySocialVersionPublishingSettingsMigration(
     "publishing_settings_json",
     "TEXT NOT NULL DEFAULT '{}'",
   );
+}
+
+async function applyManualPaymentsMigration(db: D1Database): Promise<void> {
+  if (!(await tableExists(db, "commerce_orders"))) {
+    // Some legacy/minimal databases intentionally do not include the site and
+    // commerce subsystem. There is nothing to migrate in those installations.
+    if (!(await tableExists(db, "sites"))) return;
+    await applySitePagesAndCommerceMigration(db);
+  }
+  await addColumnIfMissing(db, "commerce_orders", "amount_due", "INTEGER");
+  await addColumnIfMissing(
+    db,
+    "commerce_orders",
+    "payment_method",
+    "TEXT NOT NULL DEFAULT 'stripe' CHECK (payment_method IN ('stripe', 'manual'))",
+  );
+  await db
+    .prepare(
+      `UPDATE commerce_orders
+       SET amount_due = amount_paid
+       WHERE amount_due IS NULL`,
+    )
+    .run();
 }
 
 async function tableExists(db: D1Database, tableName: string): Promise<boolean> {

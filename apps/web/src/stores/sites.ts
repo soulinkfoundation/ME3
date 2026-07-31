@@ -316,6 +316,10 @@ export interface BookingConfirmationTestRequest {
   message?: string;
   durationMinutes?: number;
   timezone?: string;
+  paymentMethod?: "stripe" | "manual";
+  amountDue?: number;
+  currency?: string;
+  paymentInstructions?: string;
 }
 
 export interface BookingConfirmationTestResponse {

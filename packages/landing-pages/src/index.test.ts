@@ -168,10 +168,32 @@ describe("landing pages package", () => {
     });
     if (service.version !== 3) throw new Error("Expected v3 service page");
     service.actions[0].resourceId = "strategy-session";
-    const serviceHtml = renderLandingPageHtml(service, "owner", { pageId: "page-2" });
+    const serviceHtml = renderLandingPageHtml(service, "owner", {
+      pageId: "page-2",
+      bookingPaymentMethods: { "strategy-session": "manual" },
+    });
     expect(serviceHtml).toContain('data-offer="strategy-session"');
+    expect(serviceHtml).toContain('data-payment-method="manual"');
+    expect(serviceHtml).toContain(
+      "Payment is not taken now. You’ll receive payment details by email after booking.",
+    );
     expect(serviceHtml).toContain("/api/book/");
     expect(serviceHtml).not.toContain("sk_test_");
+
+    service.actions[0] = {
+      ...service.actions[0],
+      kind: "product",
+      resourceId: "clarity-kit",
+    };
+    const productHtml = renderLandingPageHtml(service, "owner", {
+      pageId: "page-3",
+      productPaymentMethods: { "clarity-kit": "manual" },
+    });
+    expect(productHtml).toContain('data-product="clarity-kit"');
+    expect(productHtml).toContain("/order");
+    expect(productHtml).toContain(
+      "Payment is not taken now. You’ll receive payment details by email after ordering.",
+    );
   });
 
   it("upgrades valid v1 documents to editable v3 documents", () => {

@@ -150,6 +150,37 @@ function validateShopConfirmationEmails(
   return null;
 }
 
+function validateManualPaymentInstructions(
+  wizard: ReturnType<typeof useWizardStore>,
+): string | null {
+  const product = wizard.products.find(
+    (candidate) =>
+      candidate.available &&
+      candidate.price > 0 &&
+      candidate.paymentMethod === "manual" &&
+      !candidate.paymentInstructions.trim(),
+  );
+  if (product) {
+    return `Offerings — "${product.title}": add payment instructions for pay separately.`;
+  }
+
+  const bookingOffers = [
+    ...wizard.profile.booking.offers,
+    ...wizard.profile.booking.classOffers,
+    ...wizard.profile.booking.retreatOffers,
+  ];
+  const booking = bookingOffers.find(
+    (candidate) =>
+      candidate.pricing?.enabled &&
+      candidate.pricing.paymentMethod === "manual" &&
+      !candidate.pricing.paymentInstructions.trim(),
+  );
+  if (booking) {
+    return `Bookings — "${booking.title}": add payment instructions for pay separately.`;
+  }
+  return null;
+}
+
 export function usePublish() {
   const wizard = useWizardStore();
   const sites = useSitesStore();
@@ -216,6 +247,10 @@ export function usePublish() {
       const shopConfirmationError = validateShopConfirmationEmails(wizard);
       if (shopConfirmationError) {
         throw new Error(shopConfirmationError);
+      }
+      const manualPaymentError = validateManualPaymentInstructions(wizard);
+      if (manualPaymentError) {
+        throw new Error(manualPaymentError);
       }
 
       // First, check if site exists or needs to be claimed

@@ -217,9 +217,11 @@ export interface DbCommerceOrder {
   buyer_email: string;
   buyer_note: string | null;
   amount_paid: number | null;
+  amount_due: number | null;
   currency: string | null;
   status: "pending" | "paid" | "failed" | "refunded";
   provider: "stripe_direct" | "me3_cloud";
+  payment_method: "stripe" | "manual";
   checkout_session_id: string | null;
   payment_intent_id: string | null;
   paid_at: string | null;

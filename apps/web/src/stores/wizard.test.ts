@@ -702,6 +702,8 @@ describe("wizard store", () => {
           price: 5000,
           currency: "USD",
           available: true,
+          paymentMethod: "stripe",
+          paymentInstructions: "",
         },
       ];
 
@@ -1475,6 +1477,8 @@ describe("wizard store", () => {
         minimumAmount: 5,
         allowFlexiblePricing: false,
         allowFree: true,
+        paymentMethod: "stripe",
+        paymentInstructions: "",
       });
       expect((me3 as any).services).toEqual([
         {
@@ -1532,6 +1536,8 @@ describe("wizard store", () => {
               minimumAmount: 5 as const,
               allowFlexiblePricing: false,
               allowFree: true,
+              paymentMethod: "stripe" as const,
+              paymentInstructions: "",
             },
           },
         },
@@ -1556,6 +1562,8 @@ describe("wizard store", () => {
         minimumAmount: 5,
         allowFlexiblePricing: false,
         allowFree: true,
+        paymentMethod: "stripe",
+        paymentInstructions: "",
       });
     });
 

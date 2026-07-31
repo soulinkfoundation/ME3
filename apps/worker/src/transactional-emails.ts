@@ -24,7 +24,9 @@ export type BookingEmailDetails = {
   notes?: string | null;
   bookingId?: string | null;
   amountPaid?: number | null;
+  amountDue?: number | null;
   currency?: string | null;
+  paymentInstructions?: string | null;
   guestMessageText?: string | null;
   sendHostCopy?: boolean;
   test?: boolean;
@@ -40,6 +42,19 @@ export type ProductPurchaseEmailDetails = {
   subject: string;
   messageText: string;
   test?: boolean;
+};
+
+export type ProductPaymentInstructionsEmailDetails = {
+  ownerId: string;
+  hostName: string;
+  hostEmail?: string | null;
+  buyerName: string;
+  buyerEmail: string;
+  productTitle: string;
+  amountDue: number;
+  currency: string;
+  paymentInstructions: string;
+  messageText?: string | null;
 };
 
 export async function sendBookingConfirmationEmails(
@@ -61,7 +76,12 @@ export async function sendGuestBookingConfirmationEmail(
   details: BookingEmailDetails,
 ): Promise<TransactionalEmailResult> {
   const startTime = formatBookingTime(details.startsAt, details.timezone);
-  const paymentLine = formatPaymentLine(details.amountPaid, details.currency);
+  const paymentLine = formatPaymentLine(
+    details.amountPaid,
+    details.amountDue,
+    details.currency,
+  );
+  const paymentInstructions = details.paymentInstructions?.trim() || "";
   const calendarUrl = googleCalendarUrl(details);
   const guestMessage = applyBookingEmailTokens(details.guestMessageText || "", {
     guestName: details.guestName,
@@ -79,7 +99,7 @@ Your booking is confirmed.
 
 ${details.bookingTitle} with ${details.hostName}
 ${startTime}
-Duration: ${details.durationMinutes} minutes${paymentLine ? `\n${paymentLine}` : ""}${details.notes ? `\n\nYour notes:\n${details.notes}` : ""}
+Duration: ${details.durationMinutes} minutes${paymentLine ? `\n${paymentLine}` : ""}${paymentInstructions ? `\n\nPayment is not taken now.\nPayment details:\n${paymentInstructions}` : ""}${details.notes ? `\n\nYour notes:\n${details.notes}` : ""}
 Add to Google Calendar: ${calendarUrl}
 ${guestMessage ? `\n\n${guestMessage}` : ""}
 
@@ -93,12 +113,19 @@ You can reply to this email to contact ${details.hostName}.
       ["With", details.hostName],
       ["When", startTime],
       ["Duration", `${details.durationMinutes} minutes`],
-      ...(paymentLine ? [["Payment", paymentLine.replace(/^Payment: /, "")] as [string, string]] : []),
+      ...(paymentLine
+        ? [[details.amountPaid ? "Payment" : "Amount due", paymentLine.replace(/^(?:Payment|Amount due): /, "")] as [string, string]]
+        : []),
     ],
     notesLabel: "Your notes",
     notes: details.notes,
     calendarUrl,
-    message: guestMessage,
+    message: [
+      paymentInstructions
+        ? `Payment is not taken now.\n\nPayment details:\n${paymentInstructions}`
+        : "",
+      guestMessage,
+    ].filter(Boolean).join("\n\n"),
     footer: `Reply to this email to contact ${escapeHtml(details.hostName)}.`,
   });
 
@@ -124,7 +151,12 @@ export async function sendHostBookingConfirmationEmail(
   if (!details.hostEmail) return { status: "skipped", error: "Host email is not configured" };
 
   const startTime = formatBookingTime(details.startsAt, details.timezone);
-  const paymentLine = formatPaymentLine(details.amountPaid, details.currency);
+  const paymentLine = formatPaymentLine(
+    details.amountPaid,
+    details.amountDue,
+    details.currency,
+  );
+  const paymentInstructions = details.paymentInstructions?.trim() || "";
   const subject = `${details.test ? "[Test] " : ""}New booking: ${details.guestName}`;
   const textBody = `Hi ${details.hostName},
 
@@ -135,7 +167,7 @@ Email: ${details.guestEmail}
 
 ${details.bookingTitle}
 ${startTime}
-Duration: ${details.durationMinutes} minutes${paymentLine ? `\n${paymentLine}` : ""}${details.notes ? `\n\nGuest notes:\n${details.notes}` : ""}
+Duration: ${details.durationMinutes} minutes${paymentLine ? `\n${paymentLine}` : ""}${paymentInstructions ? `\n\nPayment details sent to the guest:\n${paymentInstructions}` : ""}${details.notes ? `\n\nGuest notes:\n${details.notes}` : ""}
 
 - ME3`;
   const htmlBody = bookingEmailHtml({
@@ -146,10 +178,15 @@ Duration: ${details.durationMinutes} minutes${paymentLine ? `\n${paymentLine}` :
       ["Email", details.guestEmail],
       ["When", startTime],
       ["Duration", `${details.durationMinutes} minutes`],
-      ...(paymentLine ? [["Payment", paymentLine.replace(/^Payment: /, "")] as [string, string]] : []),
+      ...(paymentLine
+        ? [[details.amountPaid ? "Payment" : "Amount due", paymentLine.replace(/^(?:Payment|Amount due): /, "")] as [string, string]]
+        : []),
     ],
     notesLabel: "Guest notes",
     notes: details.notes,
+    message: paymentInstructions
+      ? `Payment details sent to the guest:\n${paymentInstructions}`
+      : null,
     footer: "Open ME3 Calendar to manage this booking.",
   });
 
@@ -196,6 +233,49 @@ You can reply to this email to contact ${details.hostName}.`;
   });
 }
 
+export async function sendProductPaymentInstructionsEmail(
+  env: Env,
+  details: ProductPaymentInstructionsEmailDetails,
+): Promise<TransactionalEmailResult> {
+  const amountDue = formatCurrencyAmount(details.amountDue, details.currency);
+  const message = details.messageText?.trim() || "";
+  const textBody = `Hi ${details.buyerName},
+
+Your request for ${details.productTitle} is confirmed.
+
+Payment is not taken now.
+Amount due: ${amountDue}
+
+Payment details:
+${details.paymentInstructions}${message ? `\n\n${message}` : ""}
+
+You can reply to this email to contact ${details.hostName}.`;
+  const htmlBody = emailShell(`
+    <h1 style="margin:0 0 8px;font-size:24px;color:#111;">Payment details</h1>
+    <p style="margin:0 0 32px;color:#666;font-size:14px;">Your request is confirmed. Payment is not taken now.</p>
+    <div style="background:#f8f8f8;border-radius:8px;padding:24px;margin:0 0 24px;">
+      <h2 style="margin:0 0 16px;font-size:18px;color:#111;">${escapeHtml(details.productTitle)}</h2>
+      <p style="margin:0 0 16px;color:#333;font-size:14px;"><strong>Amount due:</strong> ${escapeHtml(amountDue)}</p>
+      <p style="margin:0;color:#333;font-size:14px;line-height:1.6;"><strong>Payment details:</strong><br>${renderPlainText(details.paymentInstructions)}</p>
+    </div>
+    ${message ? `<div style="background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:18px;margin:0 0 24px;color:#333;font-size:14px;line-height:1.6;">${renderPlainText(message)}</div>` : ""}
+    <p style="margin:0;color:#666;font-size:14px;">Reply to this email to contact <strong>${escapeHtml(details.hostName)}</strong>.</p>
+  `);
+
+  return sendWorkflowEmail(env, details.ownerId, {
+    toAddress: details.buyerEmail,
+    subject: `Payment details: ${details.productTitle}`,
+    textBody,
+    htmlBody,
+    fromName: details.hostName,
+    replyToAddress: details.hostEmail || null,
+    metadata: {
+      product_title: details.productTitle,
+      product_email: "manual_payment_instructions",
+    },
+  });
+}
+
 export async function getOwnerContact(
   env: Env,
   ownerId: string,
@@ -215,6 +295,7 @@ export function bookingDetailsFromBooking(input: {
   bookingTitle: string;
   timezone: string;
   guestMessageText?: string | null;
+  paymentInstructions?: string | null;
   sendHostCopy?: boolean;
   test?: boolean;
 }): BookingEmailDetails {
@@ -232,7 +313,14 @@ export function bookingDetailsFromBooking(input: {
     notes: input.booking.notes,
     bookingId: input.booking.id,
     amountPaid: input.booking.amount_paid,
+    amountDue:
+      !input.booking.amount_paid &&
+      input.booking.is_free_booking === 0 &&
+      input.booking.payment_status === "not_required"
+        ? input.booking.suggested_amount
+        : null,
     currency: input.booking.currency,
+    paymentInstructions: input.paymentInstructions || null,
     guestMessageText: input.guestMessageText || null,
     sendHostCopy: input.sendHostCopy,
     test: input.test,
@@ -289,12 +377,21 @@ function formatBookingTime(value: string, timezone: string): string {
   }).format(date);
 }
 
-function formatPaymentLine(amountPaid: number | null | undefined, currency: string | null | undefined) {
-  if (!amountPaid || !currency) return "";
-  return `Payment: ${new Intl.NumberFormat("en", {
+function formatPaymentLine(
+  amountPaid: number | null | undefined,
+  amountDue: number | null | undefined,
+  currency: string | null | undefined,
+) {
+  const amount = amountPaid || amountDue;
+  if (!amount || !currency) return "";
+  return `${amountPaid ? "Payment" : "Amount due"}: ${formatCurrencyAmount(amount, currency)}`;
+}
+
+function formatCurrencyAmount(amount: number, currency: string) {
+  return new Intl.NumberFormat("en", {
     style: "currency",
     currency: currency.toUpperCase(),
-  }).format(amountPaid / 100)}`;
+  }).format(amount / 100);
 }
 
 function bookingEmailHtml(input: {

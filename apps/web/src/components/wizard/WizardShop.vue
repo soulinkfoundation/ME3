@@ -4,7 +4,7 @@ import { useWizardStore, type WizardProduct } from "../../stores/wizard";
 import { useSitesStore } from "../../stores/sites";
 import { useAuthStore } from "../../stores/auth";
 import TiptapEditor from "../TiptapEditor.vue";
-import StripePaymentSetupCallout from "./StripePaymentSetupCallout.vue";
+import PaymentCollectionFields from "./PaymentCollectionFields.vue";
 import UiIcon from "../UiIcon.vue";
 import { api } from "../../api";
 import { useAppToast } from "../../composables/useAppToast";
@@ -45,12 +45,10 @@ const routeInputRef = ref<HTMLInputElement | null>(null);
 const editorContent = ref("");
 const editorRef = ref<InstanceType<typeof TiptapEditor> | null>(null);
 const isSuggestingBusiness = ref(false);
-const isSavingBusiness = ref(false);
 const businessSuggestionError = ref("");
 const businessSuggestionSummary = ref("");
 const businessSuggestions = ref<BusinessSuggestion[]>([]);
 const showBusinessSuggestionsModal = ref(false);
-const lastSavedBusinessSignature = ref("");
 
 const isSendingConfirmationTest = ref(false);
 
@@ -212,12 +210,30 @@ const canSendConfirmationTest = computed(
 
 const canAddMore = computed(() => wizard.products.length < 20);
 
-const selectedProductNeedsStripe = computed(
+const selectedProductIsPaid = computed(
   () =>
     Boolean(selectedProduct.value) &&
     productAvailable.value &&
     priceDollars.value > 0,
 );
+
+const productPaymentMethod = computed({
+  get: () => selectedProduct.value?.paymentMethod ?? "stripe",
+  set: (val: WizardProduct["paymentMethod"]) => {
+    if (selectedProductIndex.value === null) return;
+    wizard.updateProduct(selectedProductIndex.value, { paymentMethod: val });
+  },
+});
+
+const productPaymentInstructions = computed({
+  get: () => selectedProduct.value?.paymentInstructions ?? "",
+  set: (val: string) => {
+    if (selectedProductIndex.value === null) return;
+    wizard.updateProduct(selectedProductIndex.value, {
+      paymentInstructions: val,
+    });
+  },
+});
 
 const shopTitle = computed({
   get: () => wizard.shopTitle,
@@ -267,11 +283,17 @@ function updateBusiness(
   if (sourceChanged) {
     businessSuggestionError.value = "";
     businessSuggestionSummary.value = "";
-    nextBusiness.positioningStatement = buildPositioningStatement(
-      nextBusiness.audience,
-      nextBusiness.primaryProblem,
-      nextBusiness.solution,
+    const previousGeneratedStatement = buildPositioningStatement(
+      currentBusiness.audience,
+      currentBusiness.primaryProblem,
+      currentBusiness.solution,
     );
+    if (
+      !currentBusiness.positioningStatement ||
+      currentBusiness.positioningStatement === previousGeneratedStatement
+    ) {
+      nextBusiness.positioningStatement = "";
+    }
     if (!options.preserveDerived) {
       nextBusiness.targetMarket = "";
       nextBusiness.primaryOutcome = "";
@@ -312,51 +334,12 @@ const businessSolution = computed({
   },
 });
 
-const businessPositioningStatement = computed(
-  () =>
-    wizard.profile.business?.positioningStatement ||
-    buildPositioningStatement(
-      wizard.profile.business?.audience || "",
-      wizard.profile.business?.primaryProblem || "",
-      wizard.profile.business?.solution || "",
-    ),
-);
-
-const businessTargetMarket = computed(
-  () => wizard.profile.business?.targetMarket || "",
-);
-
-const businessPrimaryOutcome = computed(
-  () => wizard.profile.business?.primaryOutcome || "",
-);
-
-function getBusinessSignature() {
-  return [
-    businessAudience.value.trim(),
-    businessPrimaryProblem.value.trim(),
-    businessSolution.value.trim(),
-  ].join("||");
-}
-
-const canSaveBusiness = computed(
-  () =>
-    Boolean(businessAudience.value.trim()) &&
-    Boolean(businessPrimaryProblem.value.trim()) &&
-    Boolean(businessSolution.value.trim()),
-);
-
-const isBusinessSaved = computed(
-  () =>
-    Boolean(lastSavedBusinessSignature.value) &&
-    lastSavedBusinessSignature.value === getBusinessSignature(),
-);
-
-if (
-  canSaveBusiness.value &&
-  (businessTargetMarket.value.trim() || businessPrimaryOutcome.value.trim())
-) {
-  lastSavedBusinessSignature.value = getBusinessSignature();
-}
+const businessPositioningStatement = computed({
+  get: () => wizard.profile.business?.positioningStatement || "",
+  set: (val: string) => {
+    updateBusiness({ positioningStatement: val });
+  },
+});
 
 function cleanSuggestion(value: unknown): BusinessSuggestion | null {
   if (!value || typeof value !== "object") return null;
@@ -507,7 +490,7 @@ function buildSuggestionPrompt() {
     "Return STRICT JSON only, with this exact shape:",
     '{"suggestions":[{"positioningStatement":"string","audience":"string","primaryProblem":"string","solution":"string","targetMarket":"string","primaryOutcome":"string","rationale":"string","clarityScore":1,"confidence":"low|medium|high"}]}',
     "Use 1 to 3 suggestions max.",
-    'Write each suggestion as a sentence in this format: "I help X with Y by Z."',
+    "Write positioningStatement as one natural sentence. Do not force it into a fixed formula.",
     "Audience should be a concrete group of people.",
     "Primary problem should be the pain, blocker, or job-to-be-done.",
     "Solution should explain how the person helps.",
@@ -547,25 +530,6 @@ function buildSuggestionPrompt() {
     .join("\n");
 }
 
-function buildBusinessInferencePrompt() {
-  return [
-    "You are ME3's offer-positioning helper.",
-    "Infer the derived fields for this positioning statement.",
-    "Return STRICT JSON only, with this exact shape:",
-    '{"suggestions":[{"positioningStatement":"string","audience":"string","primaryProblem":"string","solution":"string","targetMarket":"string","primaryOutcome":"string","rationale":"string","clarityScore":1,"confidence":"low|medium|high"}]}',
-    'Preserve the sentence in this format: "I help X with Y by Z."',
-    "Infer a tight target-market label agents can route on.",
-    "Infer the primary outcome the buyer gets.",
-    `Positioning statement: ${businessPositioningStatement.value}`,
-    `Audience: ${businessAudience.value}`,
-    `Primary problem: ${businessPrimaryProblem.value}`,
-    `Solution: ${businessSolution.value}`,
-    wizard.profile.bio ? `Bio: ${wizard.profile.bio}` : null,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-}
-
 function applyBusinessSuggestion(suggestion: BusinessSuggestion) {
   updateBusiness(
     {
@@ -593,7 +557,6 @@ function applyBusinessSuggestion(suggestion: BusinessSuggestion) {
     suggestion.clarityScore !== undefined
       ? `Saved a ${suggestion.clarityScore}/10 clarity positioning statement.`
       : "Saved the selected positioning statement.";
-  lastSavedBusinessSignature.value = getBusinessSignature();
 }
 
 function closeBusinessSuggestionsModal() {
@@ -647,53 +610,6 @@ async function suggestBusinessPositioning() {
       error instanceof Error ? error.message : "Failed to get ME3 suggestions";
   } finally {
     isSuggestingBusiness.value = false;
-  }
-}
-
-async function saveBusinessDetails() {
-  if (!canSaveBusiness.value || isSavingBusiness.value) return;
-
-  isSavingBusiness.value = true;
-  businessSuggestionError.value = "";
-
-  try {
-    const response = await api.post<{ replyText?: string; error?: string }>(
-      "/assistant/chat/turn",
-      {
-        requestId: crypto.randomUUID(),
-        messageText: buildBusinessInferencePrompt(),
-      },
-    );
-    const suggestions = extractSuggestionList(response.replyText?.trim() || "");
-    const bestSuggestion = suggestions[0];
-    if (!bestSuggestion) {
-      businessSuggestionError.value =
-        "ME3 couldn't infer your target market and outcome yet.";
-      return;
-    }
-    const nextTargetMarket = bestSuggestion.targetMarket || "";
-    const nextPrimaryOutcome = bestSuggestion.primaryOutcome || "";
-    if (!nextTargetMarket && !nextPrimaryOutcome) {
-      businessSuggestionError.value =
-        "ME3 couldn't infer your target market and outcome yet.";
-      return;
-    }
-
-    updateBusiness(
-      {
-        targetMarket: nextTargetMarket,
-        primaryOutcome: nextPrimaryOutcome,
-      },
-      {
-        preserveDerived: true,
-      },
-    );
-    lastSavedBusinessSignature.value = getBusinessSignature();
-  } catch (error) {
-    businessSuggestionError.value =
-      error instanceof Error ? error.message : "Failed to save offer clarity";
-  } finally {
-    isSavingBusiness.value = false;
   }
 }
 
@@ -902,100 +818,107 @@ defineExpose({
     <section v-if="!isEditingProduct" class="business-positioning-card">
       <div class="business-positioning-header">
         <div>
-          <h3>Offer clarity</h3>
+          <h3>Who you help and how</h3>
           <p>
-            Write a <strong>specific</strong> sentence about who you help, the
-            problem they have, and how you help solve it. This helps ME3
-            understand your offer, positioning and target audience.
+            Answer three short questions. ME3 uses them to understand your
+            work, describe it clearly, and make more relevant suggestions.
           </p>
         </div>
       </div>
 
       <div class="positioning-builder">
-        <div class="positioning-sentence">
-          <div class="positioning-sentence-fields">
-            <span class="sentence-static">I help</span>
+        <div class="business-clarity-fields">
+          <label class="business-clarity-field" for="business-audience">
+            <span>Who do you help?</span>
             <input
               id="business-audience"
               v-model="businessAudience"
-              class="sentence-input sentence-input-audience"
               type="text"
-              placeholder="Conscious leaders"
+              placeholder="e.g. Women healing after trauma"
               maxlength="160"
-              aria-label="Audience you help"
             />
-            <span class="sentence-static">with</span>
+          </label>
+          <label class="business-clarity-field" for="business-primary-problem">
+            <span>What do they want help with?</span>
             <input
               id="business-primary-problem"
               v-model="businessPrimaryProblem"
-              class="sentence-input sentence-input-problem"
               type="text"
-              placeholder="fragmented tech, messaging and systems"
+              placeholder="e.g. Feeling safer, rebuilding confidence, and moving forward"
               maxlength="160"
-              aria-label="Primary problem you solve"
             />
-            <span class="sentence-static">by</span>
+          </label>
+          <label class="business-clarity-field" for="business-solution">
+            <span>How do you help?</span>
             <input
               id="business-solution"
               v-model="businessSolution"
-              class="sentence-input sentence-input-solution"
               type="text"
-              placeholder="offering consulting, guidance and building tools..."
+              placeholder="e.g. One-to-one healing sessions and practical guidance"
               maxlength="240"
-              aria-label="How you help"
             />
-            <span class="sentence-static">.</span>
-          </div>
-          <div class="positioning-sentence-actions">
-            <button
-              type="button"
-              class="save-business-btn"
-              :class="{ 'save-business-btn--saved': isBusinessSaved }"
-              :disabled="!canSaveBusiness || isSavingBusiness"
-              @click="saveBusinessDetails"
-            >
-              <UiIcon
-                v-if="isBusinessSaved"
-                name="Check"
-                :size="14"
-                aria-hidden="true"
-                class="save-business-icon"
-              />
-              {{
-                isSavingBusiness
-                  ? "Saving..."
-                  : isBusinessSaved
-                    ? "Saved"
-                    : "Save"
-              }}
-            </button>
-            <button
-              type="button"
-              class="suggest-btn suggest-btn--compact"
-              :disabled="isSuggestingBusiness"
-              @click="suggestBusinessPositioning"
-            >
-              <UiIcon name="Sparkles" :size="14" aria-hidden="true" />
-              {{ isSuggestingBusiness ? "Thinking..." : "Suggest" }}
-            </button>
-            <button
-              v-if="
-                businessSuggestions.length > 0 && !showBusinessSuggestionsModal
-              "
-              type="button"
-              class="review-suggestions-btn"
-              @click="openBusinessSuggestionsModal"
-            >
-              Review suggestions
-            </button>
+          </label>
+          <label class="business-clarity-field business-summary-field" for="business-summary">
+            <span>ME3 summary</span>
+            <textarea
+              id="business-summary"
+              v-model="businessPositioningStatement"
+              rows="3"
+              maxlength="320"
+              aria-describedby="business-summary-help"
+              placeholder="Write this in your own words, or ask ME3 to improve your answers."
+            ></textarea>
+            <small id="business-summary-help">
+              This is the short description ME3 uses when it needs to explain
+              what you do. You can edit it at any time.
+            </small>
+          </label>
+          <div class="business-clarity-actions">
+            <span class="business-autosave-note">
+              <UiIcon name="Check" :size="14" aria-hidden="true" />
+              Answers save automatically
+            </span>
+            <div class="business-clarity-buttons">
+              <button
+                type="button"
+                class="suggest-btn suggest-btn--compact"
+                :disabled="isSuggestingBusiness"
+                @click="suggestBusinessPositioning"
+              >
+                <UiIcon name="Sparkles" :size="14" aria-hidden="true" />
+                {{
+                  isSuggestingBusiness ? "Improving..." : "Improve with ME3"
+                }}
+              </button>
+              <button
+                v-if="
+                  businessSuggestions.length > 0 &&
+                  !showBusinessSuggestionsModal
+                "
+                type="button"
+                class="review-suggestions-btn"
+                @click="openBusinessSuggestionsModal"
+              >
+                Review suggestions
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      <p v-if="businessSuggestionSummary" class="business-suggestion-summary">
+      <p
+        v-if="businessSuggestionSummary"
+        class="business-suggestion-summary"
+        role="status"
+        aria-live="polite"
+      >
         {{ businessSuggestionSummary }}
       </p>
-      <p v-if="businessSuggestionError" class="business-suggestion-error">
+      <p
+        v-if="businessSuggestionError"
+        class="business-suggestion-error"
+        role="alert"
+      >
         {{ businessSuggestionError }}
       </p>
 
@@ -1215,9 +1138,11 @@ defineExpose({
           </div>
         </div>
 
-        <StripePaymentSetupCallout
-          v-if="selectedProductNeedsStripe"
-          compact
+        <PaymentCollectionFields
+          v-if="selectedProductIsPaid"
+          v-model="productPaymentMethod"
+          v-model:instructions="productPaymentInstructions"
+          :input-id="`product-${selectedProduct.slug}`"
         />
 
         <div class="form-group">
@@ -1239,17 +1164,26 @@ defineExpose({
         </div>
 
         <div class="confirmation-email-section">
-          <h3 class="confirmation-email-title">Purchase confirmation email</h3>
+          <h3 class="confirmation-email-title">Customer email</h3>
           <p class="confirmation-email-lead">
-            Optional. Use this only when you need to give the requester
-            specific next steps in your own words.
+            {{
+              productPaymentMethod === "manual"
+                ? "ME3 sends the payment instructions above after the request is confirmed. Add an optional message if you need to include other next steps."
+                : "Optional. Use this when you need to give the buyer specific next steps after payment."
+            }}
           </p>
           <div class="toggle-row">
             <label class="toggle">
               <input type="checkbox" v-model="confirmationEmailEnabled" />
               <span class="toggle-ui" />
             </label>
-            <span>Send buyers a confirmation email after payment</span>
+            <span>
+              {{
+                productPaymentMethod === "manual"
+                  ? "Add a message to the payment email"
+                  : "Send buyers a confirmation email after payment"
+              }}
+            </span>
           </div>
           <template v-if="confirmationEmailEnabled">
             <p
@@ -1445,57 +1379,14 @@ defineExpose({
   cursor: progress;
 }
 
-.positioning-sentence-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
-  align-self: flex-end;
-}
-
-.save-business-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg);
-  color: var(--color-text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 5px 10px;
-  cursor: pointer;
-  transition:
-    border-color 0.2s ease,
-    color 0.2s ease;
-}
-
-.save-business-btn:hover:not(:disabled) {
-  border-color: var(--color-text);
-}
-
-.save-business-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.save-business-btn--saved {
-  border-color: #22c55e;
-  color: #15803d;
-}
-
-.save-business-icon {
-  color: #16a34a;
-}
-
 .suggest-btn--compact {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 5px 9px;
-  font-size: 12px;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 9px 12px;
+  font-size: 13px;
   font-weight: 600;
   border-radius: 8px;
 }
@@ -1506,65 +1397,89 @@ defineExpose({
   gap: 10px;
 }
 
-.positioning-sentence {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
-  padding: 14px 16px;
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  background: var(--color-bg);
-  transition: border-color 0.2s ease;
+.business-clarity-fields {
+  display: grid;
+  gap: 14px;
 }
 
-.positioning-sentence-fields {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.positioning-sentence:focus-within {
-  border-color: var(--color-text);
-}
-
-.sentence-static {
-  font-size: 15px;
+.business-clarity-field {
+  display: grid;
+  gap: 7px;
+  color: var(--ui-text, var(--color-text));
+  font-size: 13px;
   font-weight: 600;
 }
 
-.sentence-input {
-  min-width: 160px;
-  flex: 1 1 180px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--color-text);
+.business-clarity-field input,
+.business-clarity-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-bg, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
   font: inherit;
-  font-size: 15px;
+  font-size: 14px;
+  font-weight: 400;
   line-height: 1.5;
+  padding: 11px 12px;
 }
 
-.sentence-input:focus {
-  outline: none;
+.business-clarity-field textarea {
+  min-height: 88px;
+  resize: vertical;
 }
 
-.sentence-input::placeholder {
-  color: var(--color-text-muted);
+.business-clarity-field input:focus-visible,
+.business-clarity-field textarea:focus-visible {
+  outline: 2px solid var(--ui-accent, var(--color-primary));
+  outline-offset: 1px;
+}
+
+.business-clarity-field input::placeholder,
+.business-clarity-field textarea::placeholder {
+  color: var(--ui-text-muted, var(--color-text-muted));
   opacity: 1;
 }
 
-.sentence-input-audience {
-  flex-basis: 180px;
+.business-summary-field {
+  padding-top: 4px;
+  border-top: 1px solid var(--ui-border, var(--color-border));
 }
 
-.sentence-input-problem {
-  flex-basis: 170px;
+.business-summary-field > span {
+  margin-top: 10px;
 }
 
-.sentence-input-solution {
-  flex-basis: 240px;
+.business-summary-field small {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.business-clarity-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.business-autosave-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+}
+
+.business-clarity-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .business-suggestion-summary,
@@ -1582,6 +1497,7 @@ defineExpose({
 }
 
 .review-suggestions-btn {
+  min-height: 44px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-bg);
@@ -1589,7 +1505,7 @@ defineExpose({
   font: inherit;
   font-size: 12px;
   font-weight: 600;
-  padding: 5px 9px;
+  padding: 9px 12px;
   cursor: pointer;
   transition:
     border-color 0.2s ease,

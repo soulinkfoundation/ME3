@@ -10,6 +10,7 @@ import {
 } from "./booking";
 import {
   getOwnerContact,
+  sendProductPaymentInstructionsEmail,
   sendProductPurchaseConfirmationEmail,
 } from "./transactional-emails";
 import type { DbCommerceOrder, DbSite, Env } from "./types";
@@ -40,6 +41,8 @@ type ProductRecord = {
   price?: number;
   currency?: string;
   available?: boolean;
+  paymentMethod?: "stripe" | "manual";
+  paymentInstructions?: string;
   confirmationEmail?: ProductPurchaseConfirmationEmail;
 };
 
@@ -59,7 +62,13 @@ export async function createProductCheckout(
   productSlug: string,
   body: ProductCheckoutBody,
   requestUrl: string,
-): Promise<{ url: string; sessionId: string; orderId: string }> {
+): Promise<{
+  paymentMethod: "stripe" | "manual";
+  orderId: string;
+  url?: string;
+  sessionId?: string;
+  message?: string;
+}> {
   const buyerName = normalizeShortText(body.buyerName, 120);
   const buyerEmail = normalizeEmail(body.buyerEmail);
   const buyerNote = normalizeLongText(body.buyerNote, 2000);
@@ -74,21 +83,93 @@ export async function createProductCheckout(
   if (!Number.isInteger(amount) || amount < 50 || !/^[a-z]{3}$/.test(currency)) {
     throw new CommerceOrderInputError("Product price is not ready for checkout.", 409);
   }
+  const paymentMethod = product.paymentMethod === "manual" ? "manual" : "stripe";
+  const paymentInstructions = normalizeLongText(product.paymentInstructions, 8000);
+  if (paymentMethod === "manual" && !paymentInstructions) {
+    throw new CommerceOrderInputError("Payment instructions are not configured for this product.", 409);
+  }
+  const orderId = crypto.randomUUID();
+  const pageId = normalizeShortText(body.pageId, 100) || null;
+  const actionId = normalizeShortText(body.actionId, 100) || null;
+  const campaign = normalizeShortText(body.campaign, 160) || null;
+
+  if (paymentMethod === "manual") {
+    await env.DB.prepare(
+      `INSERT INTO commerce_orders
+       (id, site_id, page_id, action_id, campaign, product_slug, product_title,
+        buyer_name, buyer_email, buyer_note, amount_paid, amount_due, currency,
+        provider, payment_method)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'me3_cloud', 'manual')`,
+    )
+      .bind(
+        orderId,
+        site.id,
+        pageId,
+        actionId,
+        campaign,
+        product.slug,
+        product.title || product.slug,
+        buyerName,
+        buyerEmail,
+        buyerNote || null,
+        amount,
+        currency,
+      )
+      .run();
+
+    const owner = await getOwnerContact(env, site.user_id);
+    const tokens = {
+      buyerName,
+      buyerNote,
+      productTitle: product.title || product.slug || "ME3 offer",
+      siteName: site.username,
+      supportEmail: owner.email || "",
+    };
+    const extraMessage = productSendsPurchaseConfirmation(product.confirmationEmail)
+      ? applyPurchaseEmailTokens(product.confirmationEmail.message, tokens)
+      : "";
+    const sent = await sendProductPaymentInstructionsEmail(env, {
+      ownerId: site.user_id,
+      hostName: owner.name || site.username,
+      hostEmail: owner.email,
+      buyerName,
+      buyerEmail,
+      productTitle: tokens.productTitle,
+      amountDue: amount,
+      currency,
+      paymentInstructions,
+      messageText: extraMessage,
+    });
+    if (sent.status !== "sent") {
+      await env.DB.prepare(
+        `UPDATE commerce_orders SET status = 'failed', updated_at = datetime('now') WHERE id = ?`,
+      )
+        .bind(orderId)
+        .run();
+      throw new CommerceOrderInputError(
+        sent.error || "Payment details could not be emailed right now.",
+        502,
+      );
+    }
+    return {
+      paymentMethod,
+      orderId,
+      message: "Your request is confirmed. Check your email for payment details.",
+    };
+  }
+
   const stripe = await getStripe(env, site.user_id);
   const managed = !stripe && await isCommerceReady(env, site.user_id);
   if (!stripe && !managed) {
     throw new CommerceOrderInputError(PAYMENTS_UNAVAILABLE_MESSAGE, 503);
   }
   const provider = stripe ? "stripe_direct" : "me3_cloud";
-  const orderId = crypto.randomUUID();
-  const pageId = normalizeShortText(body.pageId, 100) || null;
-  const actionId = normalizeShortText(body.actionId, 100) || null;
-  const campaign = normalizeShortText(body.campaign, 160) || null;
   await env.DB.prepare(
     `INSERT INTO commerce_orders
      (id, site_id, page_id, action_id, campaign, product_slug, product_title,
-      buyer_name, buyer_email, buyer_note, amount_paid, currency, provider)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      buyer_name, buyer_email, buyer_note, amount_paid, amount_due, currency,
+      provider, payment_method)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'stripe')`,
   )
     .bind(
       orderId,
@@ -147,7 +228,7 @@ export async function createProductCheckout(
     )
       .bind(checkout.sessionId, orderId)
       .run();
-    return { ...checkout, orderId };
+    return { ...checkout, paymentMethod, orderId };
   } catch (error) {
     await env.DB.prepare(
       `UPDATE commerce_orders SET status = 'failed', updated_at = datetime('now') WHERE id = ?`,
@@ -165,6 +246,9 @@ export async function completeProductCheckout(
 ): Promise<{ ok: true; order: DbCommerceOrder; alreadyCompleted?: true }> {
   const order = await getOrderBySession(env, site.id, sessionId);
   if (!order) throw new CommerceOrderInputError("Checkout session not found.", 404);
+  if (order.payment_method === "manual") {
+    throw new CommerceOrderInputError("This order does not use online checkout.", 409);
+  }
   if (order.status === "paid") return { ok: true, order, alreadyCompleted: true };
   if (order.provider === "me3_cloud") {
     const session = await retrieveManagedCheckout(env, sessionId);
@@ -266,8 +350,9 @@ async function getOrderBySession(
   return (
     (await env.DB.prepare(
       `SELECT id, site_id, page_id, action_id, campaign, product_slug, product_title,
-              buyer_name, buyer_email, buyer_note, amount_paid, currency, status,
-              provider, checkout_session_id, payment_intent_id, paid_at, created_at, updated_at
+              buyer_name, buyer_email, buyer_note, amount_paid, amount_due, currency, status,
+              provider, payment_method, checkout_session_id, payment_intent_id, paid_at,
+              created_at, updated_at
        FROM commerce_orders WHERE site_id = ? AND checkout_session_id = ?`,
     )
       .bind(siteId, sessionId)

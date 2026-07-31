@@ -112,7 +112,11 @@ export interface WizardBookingPricing {
   minimumAmount: 5;
   allowFlexiblePricing?: boolean;
   allowFree: boolean;
+  paymentMethod: WizardPaymentMethod;
+  paymentInstructions: string;
 }
+
+export type WizardPaymentMethod = "stripe" | "manual";
 
 export interface WizardBookingConfirmationEmail {
   message: string;
@@ -358,6 +362,8 @@ export interface WizardProduct {
   price: number;
   currency: "USD" | "GBP" | "EUR" | "CAD" | "AUD" | "CHF" | "SGD" | "INR" | "PKR";
   available: boolean;
+  paymentMethod: WizardPaymentMethod;
+  paymentInstructions: string;
   publishedAt?: string;
   excerpt?: string;
   confirmationEmail?: WizardProductConfirmationEmail;
@@ -578,6 +584,29 @@ function defaultWizardBookingPricing(): WizardBookingPricing {
     minimumAmount: 5,
     allowFlexiblePricing: true,
     allowFree: false,
+    paymentMethod: "stripe",
+    paymentInstructions: "",
+  };
+}
+
+function normalizeWizardPaymentMethod(value: unknown): WizardPaymentMethod {
+  return value === "manual" ? "manual" : "stripe";
+}
+
+function normalizeWizardPaymentInstructions(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function normalizeWizardBookingPricing(
+  input: Partial<WizardBookingPricing> | undefined,
+): WizardBookingPricing {
+  return {
+    ...defaultWizardBookingPricing(),
+    ...(input || {}),
+    paymentMethod: normalizeWizardPaymentMethod(input?.paymentMethod),
+    paymentInstructions: normalizeWizardPaymentInstructions(
+      input?.paymentInstructions,
+    ),
   };
 }
 
@@ -596,7 +625,7 @@ function createDefaultBookingOffer(
   const pricing =
     overrides.pricing === undefined
       ? undefined
-      : { ...defaultWizardBookingPricing(), ...overrides.pricing };
+      : normalizeWizardBookingPricing(overrides.pricing);
 
   return {
     id:
@@ -619,7 +648,7 @@ function createDefaultClassOffer(
   const pricing =
     overrides.pricing === undefined
       ? undefined
-      : { ...defaultWizardBookingPricing(), ...overrides.pricing };
+      : normalizeWizardBookingPricing(overrides.pricing);
   const recurrence =
     overrides.recurrence && typeof overrides.recurrence === "object"
       ? overrides.recurrence
@@ -680,7 +709,7 @@ function createDefaultRetreatOffer(
   const pricing =
     overrides.pricing === undefined
       ? undefined
-      : { ...defaultWizardBookingPricing(), ...overrides.pricing };
+      : normalizeWizardBookingPricing(overrides.pricing);
 
   const today = new Date();
   const y = today.getFullYear();
@@ -798,10 +827,7 @@ function normalizeWizardBookingOffers(input: unknown): WizardBookingOffer[] {
     duration: isWizardBookingDuration(offer.duration) ? offer.duration : 30,
       pricing:
         offer.pricing && typeof offer.pricing === "object"
-          ? {
-              ...defaultWizardBookingPricing(),
-              ...offer.pricing,
-            }
+          ? normalizeWizardBookingPricing(offer.pricing)
           : undefined,
     });
 
@@ -849,10 +875,7 @@ function normalizeWizardClassOffers(input: unknown): WizardClassOffer[] {
           : undefined,
       pricing:
         classOffer.pricing && typeof classOffer.pricing === "object"
-          ? {
-              ...defaultWizardBookingPricing(),
-              ...classOffer.pricing,
-            }
+          ? normalizeWizardBookingPricing(classOffer.pricing)
           : undefined,
       capacity:
         "capacity" in classOffer
@@ -905,10 +928,7 @@ function normalizeWizardRetreatOffers(input: unknown): WizardRetreatOffer[] {
       timezone: typeof retreat.timezone === "string" ? retreat.timezone : undefined,
       pricing:
         retreat.pricing && typeof retreat.pricing === "object"
-          ? {
-              ...defaultWizardBookingPricing(),
-              ...retreat.pricing,
-            }
+          ? normalizeWizardBookingPricing(retreat.pricing)
           : undefined,
       capacity:
         "capacity" in retreat
@@ -940,10 +960,9 @@ function legacyBookingToDefaultOffer(input: {
 }): WizardBookingOffer {
   const pricing =
     input.pricing && typeof input.pricing === "object"
-      ? {
-          ...defaultWizardBookingPricing(),
-          ...(input.pricing as Partial<WizardBookingPricing>),
-        }
+      ? normalizeWizardBookingPricing(
+          input.pricing as Partial<WizardBookingPricing>,
+        )
       : undefined;
 
   return createDefaultBookingOffer({
@@ -1153,27 +1172,6 @@ function normalizeBusinessField(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function buildPositioningStatement(input: {
-  audience?: string;
-  primaryProblem?: string;
-  solution?: string;
-}): string {
-  const audience = normalizeBusinessField(input.audience).trim();
-  const primaryProblem = normalizeBusinessField(input.primaryProblem).trim();
-  const solution = normalizeBusinessField(input.solution).trim();
-
-  if (!audience) return "";
-
-  const parts = [`I help ${audience}`];
-  if (primaryProblem) {
-    parts.push(`with ${primaryProblem}`);
-  }
-  if (solution) {
-    parts.push(`by ${solution}`);
-  }
-  return `${parts.join(" ")}.`;
-}
-
 function normalizeBusinessConfig(input: unknown): WizardBusinessConfig {
   const record =
     input && typeof input === "object" ? (input as Record<string, unknown>) : {};
@@ -1182,13 +1180,9 @@ function normalizeBusinessConfig(input: unknown): WizardBusinessConfig {
     normalizeBusinessField(record.whoIServe).trim();
   const primaryProblem = normalizeBusinessField(record.primaryProblem).trim();
   const solution = normalizeBusinessField(record.solution).trim();
-  const positioningStatement =
-    normalizeBusinessField(record.positioningStatement).trim() ||
-    buildPositioningStatement({
-      audience,
-      primaryProblem,
-      solution,
-    });
+  const positioningStatement = normalizeBusinessField(
+    record.positioningStatement,
+  ).trim();
 
   return {
     positioningStatement,
@@ -2718,6 +2712,8 @@ export const useWizardStore = defineStore("wizard", () => {
       price: 2500,
       currency: "USD",
       available: true,
+      paymentMethod: "stripe",
+      paymentInstructions: "",
     };
 
     products.value = [...products.value, newProduct];
@@ -3097,6 +3093,11 @@ export const useWizardStore = defineStore("wizard", () => {
             available: undefined,
             publishedAt: undefined,
             excerpt: undefined,
+            paymentMethod: p.paymentMethod,
+            paymentInstructions:
+              p.paymentMethod === "manual"
+                ? p.paymentInstructions.trim()
+                : undefined,
           };
           if (typeof p.available === "boolean") {
             product.available = p.available;
@@ -3293,6 +3294,8 @@ export const useWizardStore = defineStore("wizard", () => {
                   minimumAmount: offer.pricing.minimumAmount,
                   allowFlexiblePricing: offer.pricing.allowFlexiblePricing,
                   allowFree: offer.pricing.allowFree,
+                  paymentMethod: offer.pricing.paymentMethod,
+                  paymentInstructions: offer.pricing.paymentInstructions,
                 }
               : undefined,
           };
@@ -3317,6 +3320,8 @@ export const useWizardStore = defineStore("wizard", () => {
                   minimumAmount: offer.pricing.minimumAmount,
                   allowFlexiblePricing: offer.pricing.allowFlexiblePricing,
                   allowFree: offer.pricing.allowFree,
+                  paymentMethod: offer.pricing.paymentMethod,
+                  paymentInstructions: offer.pricing.paymentInstructions,
                 }
               : undefined,
             capacity: offer.capacity,
@@ -3345,6 +3350,8 @@ export const useWizardStore = defineStore("wizard", () => {
                   minimumAmount: offer.pricing.minimumAmount,
                   allowFlexiblePricing: offer.pricing.allowFlexiblePricing,
                   allowFree: offer.pricing.allowFree,
+                  paymentMethod: offer.pricing.paymentMethod,
+                  paymentInstructions: offer.pricing.paymentInstructions,
                 }
               : undefined,
             capacity: offer.capacity,
@@ -3422,6 +3429,8 @@ export const useWizardStore = defineStore("wizard", () => {
               minimumAmount: pricing.minimumAmount,
               allowFlexiblePricing: pricing.allowFlexiblePricing,
               allowFree: pricing.allowFree,
+              paymentMethod: pricing.paymentMethod,
+              paymentInstructions: pricing.paymentInstructions,
             };
           }
 
@@ -3568,8 +3577,10 @@ export const useWizardStore = defineStore("wizard", () => {
               },
             ];
       const requiresOfferId = bookingOffers.length > 1;
-      const hasPaidBookingOffer = bookingOffers.some(
-        (offer) => offer.pricing?.enabled,
+      const hasStripeBookingOffer = bookingOffers.some(
+        (offer) =>
+          offer.pricing?.enabled &&
+          offer.pricing.paymentMethod !== "manual",
       );
 
       for (const offer of bookingOffers) {
@@ -3634,6 +3645,7 @@ export const useWizardStore = defineStore("wizard", () => {
       if (
         bookingOffers.length === 1 &&
         bookingOffers[0]?.pricing?.enabled &&
+        bookingOffers[0].pricing.paymentMethod !== "manual" &&
         !bookingOffers[0].pricing.allowFree
       ) {
         bookingRequires.push("paymentIntentId");
@@ -3646,7 +3658,7 @@ export const useWizardStore = defineStore("wizard", () => {
         description: "Create a confirmed booking for a selected slot.",
       };
 
-      if (hasPaidBookingOffer) {
+      if (hasStripeBookingOffer) {
         const checkoutRequires = [
           "localDate",
           "localTime",
@@ -3796,6 +3808,10 @@ export const useWizardStore = defineStore("wizard", () => {
             typeof p.slug === "string" ? p.slug : "",
             "product",
             p.slugCustomized,
+          ),
+          paymentMethod: normalizeWizardPaymentMethod(p.paymentMethod),
+          paymentInstructions: normalizeWizardPaymentInstructions(
+            p.paymentInstructions,
           ),
           images: [],
         }));
@@ -4098,6 +4114,8 @@ export const useWizardStore = defineStore("wizard", () => {
       publishedAt?: string;
       excerpt?: string;
       confirmationEmail?: WizardProductConfirmationEmail;
+      paymentMethod?: WizardPaymentMethod;
+      paymentInstructions?: string;
     }>,
     siteUsername: string | null | undefined,
     sitePublishedAt?: string | null,
@@ -4489,6 +4507,10 @@ export const useWizardStore = defineStore("wizard", () => {
         price: normalizeProductPriceCents(p.price),
         currency: p.currency,
         available: p.available ?? true,
+        paymentMethod: normalizeWizardPaymentMethod(p.paymentMethod),
+        paymentInstructions: normalizeWizardPaymentInstructions(
+          p.paymentInstructions,
+        ),
         publishedAt: p.publishedAt,
         excerpt: p.excerpt,
         ...(confirmationEmail ? { confirmationEmail } : {}),

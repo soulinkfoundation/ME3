@@ -2,7 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { completeProductCheckout, createProductCheckout } from "./commerce-orders";
 import type { DbCommerceOrder, DbSite, Env } from "./types";
 
-afterEach(() => vi.unstubAllGlobals());
+const sendProductPaymentInstructionsEmail = vi.hoisted(() => vi.fn());
+vi.mock("./transactional-emails", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./transactional-emails")>()),
+  sendProductPaymentInstructionsEmail,
+}));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
 
 const site: DbSite = {
   id: "site-1",
@@ -18,16 +27,22 @@ const site: DbSite = {
   published_at: "2026-07-10T12:00:00Z",
 };
 
-function createEnv() {
+function createEnv(
+  product: Record<string, unknown> = {
+    slug: "clarity-kit",
+    title: "Clarity Kit",
+    price: 4900,
+    currency: "EUR",
+    available: true,
+  },
+) {
   const orders: DbCommerceOrder[] = [];
   const profile = new TextEncoder().encode(
     JSON.stringify({
       version: "0.1",
       handle: "owner",
       name: "Owner",
-      products: [
-        { slug: "clarity-kit", title: "Clarity Kit", price: 4900, currency: "EUR", available: true },
-      ],
+      products: [product],
     }),
   );
   const DB = {
@@ -70,10 +85,14 @@ function createEnv() {
               buyer_name: values[7] as string,
               buyer_email: values[8] as string,
               buyer_note: values[9] as string | null,
-              amount_paid: values[10] as number,
+              amount_paid: null,
+              amount_due: values[10] as number,
               currency: values[11] as string,
               status: "pending",
-              provider: values[12] as "me3_cloud",
+              provider: sql.includes("'manual'")
+                ? "me3_cloud"
+                : (values[12] as "me3_cloud"),
+              payment_method: sql.includes("'manual'") ? "manual" : "stripe",
               checkout_session_id: null,
               payment_intent_id: null,
               paid_at: null,
@@ -179,5 +198,54 @@ describe("managed commerce orders", () => {
     );
     const completed = await completeProductCheckout(env, site, "cs_managed");
     expect(completed.order).toMatchObject({ status: "paid", payment_intent_id: "pi_managed" });
+  });
+
+  it("creates a pending manual order and emails payment instructions without Stripe", async () => {
+    sendProductPaymentInstructionsEmail.mockResolvedValueOnce({
+      status: "sent",
+      providerMessageId: "manual-email-1",
+    });
+    const { env, orders } = createEnv({
+      slug: "clarity-kit",
+      title: "Clarity Kit",
+      price: 4900,
+      currency: "EUR",
+      available: true,
+      paymentMethod: "manual",
+      paymentInstructions: "Pay at https://pay.example/clarity",
+    });
+
+    const result = await createProductCheckout(
+      env,
+      site,
+      "clarity-kit",
+      {
+        buyerName: "Buyer",
+        buyerEmail: "buyer@example.com",
+        returnUrl: "https://owner.example/clarity",
+      },
+      "https://owner.example/api/shop/owner/clarity-kit/order",
+    );
+
+    expect(result).toMatchObject({
+      paymentMethod: "manual",
+      message: "Your request is confirmed. Check your email for payment details.",
+    });
+    expect(result.url).toBeUndefined();
+    expect(orders[0]).toMatchObject({
+      status: "pending",
+      amount_paid: null,
+      amount_due: 4900,
+      payment_method: "manual",
+    });
+    expect(sendProductPaymentInstructionsEmail).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        buyerEmail: "buyer@example.com",
+        amountDue: 4900,
+        currency: "eur",
+        paymentInstructions: "Pay at https://pay.example/clarity",
+      }),
+    );
   });
 });

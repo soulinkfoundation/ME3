@@ -26,6 +26,8 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("site_pages")).toBe(true);
     expect(db.tables.has("site_page_revisions")).toBe(true);
     expect(db.tables.has("commerce_orders")).toBe(true);
+    expect(db.columns.get("commerce_orders")?.has("amount_due")).toBe(true);
+    expect(db.columns.get("commerce_orders")?.has("payment_method")).toBe(true);
     expect(db.columns.get("subscribers")?.has("page_id")).toBe(true);
     expect(db.columns.get("subscribers")?.has("action_id")).toBe(true);
     expect(db.columns.get("subscribers")?.has("campaign")).toBe(true);
@@ -135,6 +137,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0032_social_version_publishing_settings")).toBe(
       "2026-07-29-social-version-publishing-settings-v1",
+    );
+    expect(db.migrations.get("0033_manual_payments")).toBe(
+      "2026-07-31-manual-payments-v1",
     );
     expect(
       db.statements.some(
@@ -442,6 +447,9 @@ class RuntimeMigrationStatement {
     const createdTable = this.sql.match(/CREATE TABLE IF NOT EXISTS (\w+)/)?.[1];
     if (createdTable) {
       this.db.tables.add(createdTable);
+      if (createdTable === "commerce_orders" && !this.db.columns.has(createdTable)) {
+        this.db.columns.set(createdTable, new Set(["id", "site_id", "amount_paid"]));
+      }
       if (
         createdTable === "managed_runtime_control_requests" &&
         this.sql.includes("expected_generation")
@@ -522,7 +530,8 @@ class RuntimeMigrationStatement {
     }
     if (
       this.sql.includes("ALTER TABLE subscribers") ||
-      this.sql.includes("ALTER TABLE bookings")
+      this.sql.includes("ALTER TABLE bookings") ||
+      this.sql.includes("ALTER TABLE commerce_orders")
     ) {
       const match = this.sql.match(/ALTER TABLE (\w+) ADD COLUMN (\w+)/);
       if (!match) throw new Error("invalid site commerce alter statement");

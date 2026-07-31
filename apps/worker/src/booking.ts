@@ -18,7 +18,7 @@ export type PaidBookingCheckoutBody = {
   actionId?: unknown;
   campaign?: unknown;
 };
-export type FreeBookingBody = Omit<PaidBookingCheckoutBody, "amount" | "returnUrl">;
+export type FreeBookingBody = Omit<PaidBookingCheckoutBody, "returnUrl">;
 export type PublicBookingConfirmBody = {
   offerId?: unknown;
   slotStart?: unknown;
@@ -42,6 +42,8 @@ export type CoreBookingPricing = {
   allowFree?: boolean;
   allowFlexiblePricing?: boolean;
   minimumAmount?: number;
+  paymentMethod?: "stripe" | "manual";
+  paymentInstructions?: string;
 };
 export type CoreBookingOffer = {
   id?: string;
@@ -287,6 +289,7 @@ export function resolvePaidOneToOneOffer(
 ): ResolvedPaidBookingOffer | null {
   const selected = resolveOneToOneBookingOffer(book, offerId);
   if (!selected?.pricing?.enabled) return null;
+  if (selected.pricing.paymentMethod === "manual") return null;
   if (
     typeof selected.pricing.suggestedAmount !== "number" ||
     !Number.isFinite(selected.pricing.suggestedAmount) ||
@@ -541,12 +544,14 @@ export function serializePublicBookingOffer(offer: ResolvedOneToOneBookingOffer)
           enabled: true,
           suggestedAmount: offer.pricing.suggestedAmount,
           currency: offer.pricing.currency,
+          paymentMethod:
+            offer.pricing.paymentMethod === "manual" ? "manual" : "stripe",
         }
       : { enabled: false },
   };
 }
 
-export async function createConfirmedFreeOneToOneBooking(
+export async function createConfirmedOneToOneBooking(
   env: Env,
   input: {
     site: DbSite;
@@ -559,8 +564,22 @@ export async function createConfirmedFreeOneToOneBooking(
     pageId?: string;
     actionId?: string;
     campaign?: string;
+    amountDueCents?: number;
+    paymentCurrency?: string;
   },
 ): Promise<DbBooking | null> {
+  const manualPayment =
+    input.offer.pricing?.enabled === true &&
+    input.offer.pricing.paymentMethod === "manual";
+  const suggestedAmount = manualPayment
+    ? input.amountDueCents ??
+      Math.round(Number(input.offer.pricing?.suggestedAmount || 0) * 100)
+    : null;
+  const currency = manualPayment
+    ? String(
+        input.paymentCurrency || input.offer.pricing?.currency || "USD",
+      ).toLowerCase()
+    : null;
   const bookingId = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO bookings
@@ -569,7 +588,7 @@ export async function createConfirmedFreeOneToOneBooking(
       suggested_amount, currency, payment_status, is_free_booking, paid_at,
       page_id, action_id, campaign)
      VALUES (?, ?, ?, 'one_to_one', ?, ?, ?, ?, ?, 'confirmed', ?, datetime('now'),
-             NULL, NULL, NULL, NULL, 'not_required', 1, NULL, ?, ?, ?)`,
+             NULL, NULL, ?, ?, 'not_required', ?, NULL, ?, ?, ?)`,
   )
     .bind(
       bookingId,
@@ -581,6 +600,9 @@ export async function createConfirmedFreeOneToOneBooking(
       input.slot.endsAt,
       input.offer.duration,
       input.notes || null,
+      suggestedAmount,
+      currency,
+      manualPayment ? 0 : 1,
       input.pageId || null,
       input.actionId || null,
       input.campaign || null,

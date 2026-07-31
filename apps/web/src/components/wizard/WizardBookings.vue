@@ -9,12 +9,13 @@ import {
   type WizardBookingPricing,
   type WizardBookingType,
   type WizardClassOffer,
+  type WizardPaymentMethod,
   type WizardRetreatOffer,
 } from "../../stores/wizard";
 import { useSitesStore } from "../../stores/sites";
 import { useAuthStore } from "../../stores/auth";
 import BookingOfferDescriptionEditor from "./BookingOfferDescriptionEditor.vue";
-import StripePaymentSetupCallout from "./StripePaymentSetupCallout.vue";
+import PaymentCollectionFields from "./PaymentCollectionFields.vue";
 import BookingAvailabilityEditor, {
   type BookingAvailability,
 } from "../booking/BookingAvailabilityEditor.vue";
@@ -233,6 +234,24 @@ const activeOfferPriceCurrency = computed({
   },
 });
 
+const activeOfferPaymentMethod = computed({
+  get: () => activeOffer.value?.pricing?.paymentMethod ?? "stripe",
+  set: (val: WizardPaymentMethod) => {
+    if (!activeOffer.value) return;
+    wizard.setBookingOfferPricing(activeOffer.value.id, { paymentMethod: val });
+  },
+});
+
+const activeOfferPaymentInstructions = computed({
+  get: () => activeOffer.value?.pricing?.paymentInstructions ?? "",
+  set: (val: string) => {
+    if (!activeOffer.value) return;
+    wizard.setBookingOfferPricing(activeOffer.value.id, {
+      paymentInstructions: val,
+    });
+  },
+});
+
 const activeClassOffer = computed(() => {
   if (!activeClassOfferId.value) return classOffers.value[0] || null;
   return (
@@ -346,6 +365,26 @@ const activeClassOfferPriceCurrency = computed({
   set: (val: WizardBookingPricing["currency"]) => {
     if (!activeClassOffer.value) return;
     wizard.setClassOfferPricing(activeClassOffer.value.id, { currency: val });
+  },
+});
+
+const activeClassOfferPaymentMethod = computed({
+  get: () => activeClassOffer.value?.pricing?.paymentMethod ?? "stripe",
+  set: (val: WizardPaymentMethod) => {
+    if (!activeClassOffer.value) return;
+    wizard.setClassOfferPricing(activeClassOffer.value.id, {
+      paymentMethod: val,
+    });
+  },
+});
+
+const activeClassOfferPaymentInstructions = computed({
+  get: () => activeClassOffer.value?.pricing?.paymentInstructions ?? "",
+  set: (val: string) => {
+    if (!activeClassOffer.value) return;
+    wizard.setClassOfferPricing(activeClassOffer.value.id, {
+      paymentInstructions: val,
+    });
   },
 });
 
@@ -464,6 +503,26 @@ const activeRetreatOfferPriceCurrency = computed({
   },
 });
 
+const activeRetreatOfferPaymentMethod = computed({
+  get: () => activeRetreatOffer.value?.pricing?.paymentMethod ?? "stripe",
+  set: (val: WizardPaymentMethod) => {
+    if (!activeRetreatOffer.value) return;
+    wizard.setRetreatOfferPricing(activeRetreatOffer.value.id, {
+      paymentMethod: val,
+    });
+  },
+});
+
+const activeRetreatOfferPaymentInstructions = computed({
+  get: () => activeRetreatOffer.value?.pricing?.paymentInstructions ?? "",
+  set: (val: string) => {
+    if (!activeRetreatOffer.value) return;
+    wizard.setRetreatOfferPricing(activeRetreatOffer.value.id, {
+      paymentInstructions: val,
+    });
+  },
+});
+
 const activeRetreatCapacityEnabled = computed({
   get: () => activeRetreatOffer.value?.capacity !== null,
   set: (val: boolean) => {
@@ -567,6 +626,7 @@ const bookingConfirmationTestDetails = computed(() => {
       title: activeClassOffer.value.title || "Class booking",
       durationMinutes: activeClassOffer.value.duration || 60,
       timezone: activeClassOffer.value.timezone || bookingTimezone.value,
+      pricing: activeClassOffer.value.pricing,
     };
   }
   if (activeBookingType.value === "retreat" && activeRetreatOffer.value) {
@@ -574,12 +634,14 @@ const bookingConfirmationTestDetails = computed(() => {
       title: activeRetreatOffer.value.title || "Retreat booking",
       durationMinutes: activeRetreatDurationDays.value * 24 * 60,
       timezone: activeRetreatOffer.value.timezone || bookingTimezone.value,
+      pricing: activeRetreatOffer.value.pricing,
     };
   }
   return {
     title: activeOffer.value?.title || "Book a session",
     durationMinutes: activeOffer.value?.duration || 60,
     timezone: bookingTimezone.value,
+    pricing: activeOffer.value?.pricing,
   };
 });
 
@@ -639,6 +701,10 @@ async function sendBookingConfirmationTest() {
       timezone: details.timezone,
       siteName: profile.value.name || siteUsername,
       message: bookingConfirmationMessage.value,
+      paymentMethod: details.pricing?.paymentMethod,
+      amountDue: details.pricing?.suggestedAmount,
+      currency: details.pricing?.currency,
+      paymentInstructions: details.pricing?.paymentInstructions,
     });
     toastSuccess(`Test email sent to ${response.sentTo}.`);
   } catch (error) {
@@ -956,7 +1022,11 @@ onMounted(() => {
                     </select>
                   </div>
                 </div>
-                <StripePaymentSetupCallout compact />
+                <PaymentCollectionFields
+                  v-model="activeOfferPaymentMethod"
+                  v-model:instructions="activeOfferPaymentInstructions"
+                  :input-id="`booking-offer-${activeOffer.id}`"
+                />
               </div>
             </div>
           </div>
@@ -1203,7 +1273,11 @@ onMounted(() => {
                     </select>
                   </div>
                 </div>
-                <StripePaymentSetupCallout compact />
+                <PaymentCollectionFields
+                  v-model="activeClassOfferPaymentMethod"
+                  v-model:instructions="activeClassOfferPaymentInstructions"
+                  :input-id="`class-offer-${activeClassOffer.id}`"
+                />
               </div>
             </div>
           </div>
@@ -1453,7 +1527,11 @@ onMounted(() => {
                     </select>
                   </div>
                 </div>
-                <StripePaymentSetupCallout compact />
+                <PaymentCollectionFields
+                  v-model="activeRetreatOfferPaymentMethod"
+                  v-model:instructions="activeRetreatOfferPaymentInstructions"
+                  :input-id="`retreat-offer-${activeRetreatOffer.id}`"
+                />
               </div>
             </div>
           </div>

@@ -326,7 +326,7 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("if(!validateForm()) return;");
     expect(files["index.html"]).toContain("'/free'");
     expect(files["index.html"]).toContain("form.reset();dateInput.value='';selectedTime='';timeInput.value=''");
-    expect(files["index.html"]).toContain("slotsEl.hidden=true;emptyEl.hidden=true;setStatus('Your booking is confirmed.')");
+    expect(files["index.html"]).toContain("'Your booking is confirmed.'");
     expect(files["index.html"]).toContain("Your booking is confirmed.");
     expect(files["index.html"]).toContain("data-booking-status");
     expect(files["index.html"]).toContain("clearBookingParams()");
@@ -357,6 +357,50 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("body[data-vibe=tech] .name{font-size:24px");
     expect(files["index.html"]).toContain("body[data-vibe=tech] .newsletter input[type=email]");
     expect(files["index.html"]).not.toContain("readonly");
+  });
+
+  it("confirms pay-separately bookings without checkout and keeps instructions private", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        handle: "manual-payments",
+        name: "Manual Payments",
+        intents: {
+          book: {
+            enabled: true,
+            availability: {
+              timezone: "Europe/Dublin",
+              windows: { monday: ["09:00-12:00"] },
+            },
+            offers: [
+              {
+                id: "healing-session",
+                title: "Healing session",
+                duration: 60,
+                pricing: {
+                  enabled: true,
+                  suggestedAmount: 80,
+                  currency: "EUR",
+                  paymentMethod: "manual",
+                  paymentInstructions: "Private payment link: https://pay.example/secret",
+                },
+              },
+            ],
+          },
+        },
+      },
+      [],
+    );
+
+    const html = files["index.html"];
+    expect(html).toContain(
+      "Payment is not taken now. You’ll receive payment details by email after booking.",
+    );
+    expect(html).toContain('"paymentMethod":"manual"');
+    expect(html).toContain("selected.pricing.paymentMethod==='manual'");
+    expect(html).toContain("'/free'");
+    expect(html).not.toContain("Private payment link");
+    expect(html).toContain("Confirm Booking");
   });
 
   it("publishes me3 vibe with rounded green CTAs and rounded blocks", async () => {

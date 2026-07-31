@@ -30,6 +30,28 @@ describe("profile commerce readiness", () => {
     })).toBe(true);
   });
 
+  it("does not require Stripe for paid bookings collected separately", () => {
+    expect(profileRequiresCommerce({
+      version: "0.1",
+      handle: "owner",
+      name: "Owner",
+      intents: {
+        book: {
+          enabled: true,
+          offers: [
+            {
+              pricing: {
+                enabled: true,
+                paymentMethod: "manual",
+                paymentInstructions: "Pay at https://pay.example/owner",
+              },
+            },
+          ],
+        },
+      },
+    })).toBe(false);
+  });
+
   it("gates available products but ignores unavailable ones", () => {
     expect(profileRequiresCommerce({
       version: "0.1",
@@ -42,6 +64,19 @@ describe("profile commerce readiness", () => {
       handle: "owner",
       name: "Owner",
       products: [{ slug: "kit", available: false }],
+    })).toBe(false);
+    expect(profileRequiresCommerce({
+      version: "0.1",
+      handle: "owner",
+      name: "Owner",
+      products: [
+        {
+          slug: "manual-kit",
+          available: true,
+          paymentMethod: "manual",
+          paymentInstructions: "Pay by bank transfer.",
+        },
+      ],
     })).toBe(false);
   });
 });

@@ -73,8 +73,11 @@ export function registerCommerceRoutes(app: AppHono, deps: CommerceRouteDeps) {
   app.post("/api/commerce/connect/onboard", (c) => startStripeOnboarding(c, "onboard"));
   app.post("/api/commerce/connect/refresh", (c) => startStripeOnboarding(c, "refresh"));
 
-  app.post("/api/shop/:username/:productSlug/checkout-session", async (c) => {
-    const site = await getSiteByUsername(c.env, c.req.param("username"));
+  const startProductOrder = async (c: AppContext) => {
+    const site = await getSiteByUsername(
+      c.env,
+      c.req.param("username") || "",
+    );
     if (!site) return c.json({ error: "Site not found" }, 404);
     const body = await c.req.json<Record<string, unknown>>().catch(() => null);
     if (!body) return c.json({ error: "Invalid request body" }, 400);
@@ -83,7 +86,7 @@ export function registerCommerceRoutes(app: AppHono, deps: CommerceRouteDeps) {
         await createProductCheckout(
           c.env,
           site,
-          c.req.param("productSlug"),
+          c.req.param("productSlug") || "",
           body,
           c.req.url,
         ),
@@ -94,7 +97,13 @@ export function registerCommerceRoutes(app: AppHono, deps: CommerceRouteDeps) {
       }
       throw error;
     }
-  });
+  };
+
+  app.post("/api/shop/:username/:productSlug/order", startProductOrder);
+  app.post(
+    "/api/shop/:username/:productSlug/checkout-session",
+    startProductOrder,
+  );
 
   app.post("/api/shop/:username/complete-checkout", async (c) => {
     const site = await getSiteByUsername(c.env, c.req.param("username"));

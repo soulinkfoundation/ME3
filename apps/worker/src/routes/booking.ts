@@ -5,7 +5,7 @@ import {
   appendQueryParams,
   confirmBookingHold,
   createBookingHold,
-  createConfirmedFreeOneToOneBooking,
+  createConfirmedOneToOneBooking,
   findActiveBookingHoldByToken,
   findActiveBookingHoldOverlap,
   findConfirmedBookingOverlap,
@@ -119,7 +119,10 @@ export function registerBookingRoutes(app: AppHono) {
     if ("error" in resolved) return c.json({ error: resolved.error }, resolved.status);
 
     const offer = resolved.offer;
-    if (offer.pricing?.enabled) {
+    if (
+      offer.pricing?.enabled &&
+      offer.pricing.paymentMethod !== "manual"
+    ) {
       return c.json(
         {
           error: "Use checkout for paid booking offers",
@@ -129,7 +132,13 @@ export function registerBookingRoutes(app: AppHono) {
         402,
       );
     }
-
+    if (
+      offer.pricing?.enabled &&
+      offer.pricing.paymentMethod === "manual" &&
+      !normalizeLongText(offer.pricing.paymentInstructions, 8000)
+    ) {
+      return c.json({ error: "Payment instructions are not configured for this booking" }, 409);
+    }
     const timezone = resolveTimeZone(offer.availability.timezone);
     const slot = resolvePublicBookingSlot({
       slotStart,
@@ -168,7 +177,7 @@ export function registerBookingRoutes(app: AppHono) {
       return c.json({ error: "That time is being held for another checkout. Try another slot or check back shortly." }, 409);
     }
 
-    const booking = await createConfirmedFreeOneToOneBooking(c.env, {
+    const booking = await createConfirmedOneToOneBooking(c.env, {
       site,
       bookIntent,
       offer,
@@ -188,6 +197,10 @@ export function registerBookingRoutes(app: AppHono) {
         booking,
         bookingTitle: offer.title,
         timezone,
+        paymentInstructions:
+          offer.pricing?.paymentMethod === "manual"
+            ? offer.pricing.paymentInstructions
+            : null,
       });
     }
 
@@ -223,8 +236,25 @@ export function registerBookingRoutes(app: AppHono) {
 
     const offer = resolveOneToOneBookingOffer(bookIntent, normalizeShortText(body.offerId, 100));
     if (!offer) return c.json({ error: "Booking offer not found" }, 404);
-    if (offer.pricing?.enabled) {
+    if (
+      offer.pricing?.enabled &&
+      offer.pricing.paymentMethod !== "manual"
+    ) {
       return c.json({ error: "Use checkout for paid booking offers" }, 400);
+    }
+    if (
+      offer.pricing?.enabled &&
+      offer.pricing.paymentMethod === "manual" &&
+      !normalizeLongText(offer.pricing.paymentInstructions, 8000)
+    ) {
+      return c.json({ error: "Payment instructions are not configured for this booking" }, 409);
+    }
+    const manualAmount =
+      offer.pricing?.enabled && offer.pricing.paymentMethod === "manual"
+        ? normalizeBookingAmount(body.amount, offer.pricing)
+        : null;
+    if (manualAmount && !manualAmount.ok) {
+      return c.json({ error: manualAmount.error }, 400);
     }
 
     const slot = resolveBookingSlot({
@@ -264,62 +294,36 @@ export function registerBookingRoutes(app: AppHono) {
       return c.json({ error: "That time is being held for another checkout. Try another slot or check back shortly." }, 409);
     }
 
-    const bookingId = crypto.randomUUID();
-    await c.env.DB.prepare(
-      `INSERT INTO bookings
-       (id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
-        duration_minutes, status, notes, created_at, payment_intent_id, amount_paid,
-        suggested_amount, currency, payment_status, is_free_booking, paid_at,
-        page_id, action_id, campaign)
-       VALUES (?, ?, ?, 'one_to_one', ?, ?, ?, ?, ?, 'confirmed', ?, datetime('now'),
-               NULL, NULL, NULL, NULL, 'not_required', 1, NULL, ?, ?, ?)`,
-    )
-      .bind(
-        bookingId,
-        site.id,
-        offer.id,
-        guestName,
-        guestEmail,
-        slot.startsAt,
-        slot.endsAt,
-        offer.duration,
-        notes || null,
-        pageId || null,
-        actionId || null,
-        campaign || null,
-      )
-      .run();
-
-    const booking = await c.env.DB.prepare(
-      `SELECT id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
-              duration_minutes, calendar_event_id, status, notes, created_at, cancelled_at,
-              payment_intent_id, amount_paid, suggested_amount, currency, payment_status,
-              is_free_booking, paid_at
-       FROM bookings
-       WHERE id = ?`,
-    )
-      .bind(bookingId)
-      .first<DbBooking>();
+    const booking = await createConfirmedOneToOneBooking(c.env, {
+      site,
+      bookIntent,
+      offer,
+      guestName,
+      guestEmail,
+      notes,
+      slot,
+      pageId,
+      actionId,
+      campaign,
+      amountDueCents: manualAmount?.amountCents,
+      paymentCurrency: manualAmount?.currency,
+    });
 
     if (booking) {
-      scheduleBookingRemindersForBooking(c.env, {
-        booking,
-        bookingTitle: offer.title,
-        timezone: resolveTimeZone(offer.availability.timezone),
-        reminders: bookIntent.reminders,
-      }).catch((error) => {
-        console.error("Failed to schedule booking reminders:", error);
-      });
       await sendConfirmationEmailsForBooking(c.env, {
         site,
         profile,
         booking,
         bookingTitle: offer.title,
         timezone: resolveTimeZone(offer.availability.timezone),
+        paymentInstructions:
+          offer.pricing?.paymentMethod === "manual"
+            ? offer.pricing.paymentInstructions
+            : null,
       });
     }
 
-    return c.json({ ok: true, booking: booking ? serializeBooking(booking) : { id: bookingId } });
+    return c.json({ ok: true, booking: booking ? serializeBooking(booking) : null });
   });
 
   app.post("/api/book/:username/checkout-session", async (c) => {
@@ -680,6 +684,7 @@ async function sendConfirmationEmailsForBooking(
     booking: DbBooking;
     bookingTitle: string;
     timezone: string;
+    paymentInstructions?: string | null;
   },
 ) {
   const owner = await getOwnerContact(env, input.site.user_id);
@@ -697,6 +702,7 @@ async function sendConfirmationEmailsForBooking(
       bookingTitle: input.bookingTitle,
       timezone: input.timezone,
       guestMessageText: normalizeLongText(confirmationEmail?.message, 8000),
+      paymentInstructions: normalizeLongText(input.paymentInstructions, 8000),
       sendHostCopy: confirmationEmail?.sendHostCopy !== false,
     }),
   );

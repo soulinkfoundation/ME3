@@ -226,6 +226,7 @@ export async function publishSitePage(
     slug: page.slug,
     campaign: page.slug,
     actionUsername: site.username,
+    ...(await getPagePaymentMethods(env, site)),
   });
   await env.DB.prepare(
     `INSERT INTO site_page_revisions (id, page_id, document_json, rendered_html)
@@ -372,24 +373,41 @@ async function validatePageResources(
     (await getSiteFileText(env, site.id, "public/me.json"));
   if (!raw) return ["Publish the main site before using booking or product actions."];
   const profile = parseSiteProfile(raw, site.username);
-  const bookingIds = new Map<string, boolean>();
+  const bookingIds = new Map<string, "free" | "stripe" | "manual">();
   const book = profile.intents?.book as
     | {
-        offers?: Array<{ id?: string; pricing?: { enabled?: boolean } }>;
+        offers?: Array<{
+          id?: string;
+          pricing?: {
+            enabled?: boolean;
+            paymentMethod?: "stripe" | "manual";
+          };
+        }>;
         bookingTypes?: Array<{
-          offers?: Array<{ id?: string; pricing?: { enabled?: boolean } }>;
+          offers?: Array<{
+            id?: string;
+            pricing?: {
+              enabled?: boolean;
+              paymentMethod?: "stripe" | "manual";
+            };
+          }>;
         }>;
       }
     | undefined;
   for (const offer of book?.offers || []) {
-    if (offer.id) bookingIds.set(offer.id, offer.pricing?.enabled === true);
+    if (offer.id) bookingIds.set(offer.id, resourcePaymentMethod(offer.pricing));
   }
   for (const type of book?.bookingTypes || []) {
     for (const offer of type.offers || []) {
-      if (offer.id) bookingIds.set(offer.id, offer.pricing?.enabled === true);
+      if (offer.id) bookingIds.set(offer.id, resourcePaymentMethod(offer.pricing));
     }
   }
-  const productIds = new Set((profile.products || []).map((product) => product.slug));
+  const productIds = new Map(
+    (profile.products || []).map((product) => [
+      product.slug,
+      product.paymentMethod === "manual" ? "manual" : "stripe",
+    ]),
+  );
   const paymentsReady = await isCommerceReady(env, site.user_id);
   const errors: string[] = [];
   for (const action of page.actions) {
@@ -398,7 +416,7 @@ async function validatePageResources(
     }
     if (
       action.kind === "booking" &&
-      bookingIds.get(action.resourceId || "") === true &&
+      bookingIds.get(action.resourceId || "") === "stripe" &&
       !paymentsReady
     ) {
       errors.push("Connect Stripe before publishing a paid booking action.");
@@ -406,11 +424,54 @@ async function validatePageResources(
     if (action.kind === "product" && !productIds.has(action.resourceId || "")) {
       errors.push(`Product ${action.resourceId || action.label} is not available on this site.`);
     }
-    if (action.kind === "product" && !paymentsReady) {
+    if (
+      action.kind === "product" &&
+      productIds.get(action.resourceId || "") === "stripe" &&
+      !paymentsReady
+    ) {
       errors.push("Connect Stripe before publishing a product payment action.");
     }
   }
   return errors;
+}
+
+function resourcePaymentMethod(pricing?: {
+  enabled?: boolean;
+  paymentMethod?: "stripe" | "manual";
+}): "free" | "stripe" | "manual" {
+  if (!pricing?.enabled) return "free";
+  return pricing.paymentMethod === "manual" ? "manual" : "stripe";
+}
+
+async function getPagePaymentMethods(env: Env, site: DbSite) {
+  const raw =
+    (await getSiteFileText(env, site.id, "src/me.json")) ||
+    (await getSiteFileText(env, site.id, "public/me.json"));
+  if (!raw) return {};
+  const profile = parseSiteProfile(raw, site.username);
+  const bookingPaymentMethods: Record<string, "free" | "stripe" | "manual"> = {};
+  const book = profile.intents?.book as
+    | {
+        offers?: Array<{ id?: string; pricing?: { enabled?: boolean; paymentMethod?: "stripe" | "manual" } }>;
+        bookingTypes?: Array<{
+          offers?: Array<{ id?: string; pricing?: { enabled?: boolean; paymentMethod?: "stripe" | "manual" } }>;
+        }>;
+      }
+    | undefined;
+  for (const offer of [
+    ...(book?.offers || []),
+    ...(book?.bookingTypes || []).flatMap((type) => type.offers || []),
+  ]) {
+    if (offer.id) bookingPaymentMethods[offer.id] = resourcePaymentMethod(offer.pricing);
+  }
+  const productPaymentMethods: Record<string, "stripe" | "manual"> = {};
+  for (const product of profile.products || []) {
+    if (product.slug) {
+      productPaymentMethods[product.slug] =
+        product.paymentMethod === "manual" ? "manual" : "stripe";
+    }
+  }
+  return { bookingPaymentMethods, productPaymentMethods };
 }
 
 async function copyLegacyAsset(
