@@ -3522,9 +3522,12 @@ onBeforeUnmount(() => {
                       </div>
 
                       <fieldset
-                        v-if="managedAiBilling.eligible"
+                        v-if="
+                          managedAiBilling.eligible &&
+                          managedAiOveragesEnabledInput
+                        "
                         class="managed-ai-limit"
-                        :disabled="aiSettingsSaving || !managedAiOveragesEnabledInput"
+                        :disabled="aiSettingsSaving"
                       >
                         <legend>Monthly maximum</legend>
                         <div class="managed-ai-limit__options">
@@ -3581,7 +3584,10 @@ onBeforeUnmount(() => {
                               "Additional usage is not available for this subscription."
                         }}
                       </p>
-                      <p v-else class="managed-ai-help">
+                      <p
+                        v-else-if="managedAiOveragesEnabledInput"
+                        class="managed-ai-help"
+                      >
                         Only additional usage is billed through Stripe. You’ll
                         never be charged above your selected limit.
                       </p>
