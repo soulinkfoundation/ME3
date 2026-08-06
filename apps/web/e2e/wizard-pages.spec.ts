@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures/test";
+import { test } from "./fixtures/test";
 import { WizardPage } from "./helpers/wizard";
 
 test.describe("Wizard Pages Step", () => {
@@ -15,16 +15,7 @@ test.describe("Wizard Pages Step", () => {
       });
     });
 
-    await wizard.goto();
-
-    // Navigate to pages step
-    await wizard.fillBasics("Pages Test", "pagestest", "Testing pages");
-    await wizard.waitForUsernameCheck();
-    await wizard.nextStep(); // Avatar
-    await wizard.nextStep(); // Banner
-    await wizard.nextStep(); // Links
-    await wizard.nextStep(); // CTA
-    await wizard.nextStep(); // Pages
+    await wizard.gotoStep("pages");
   });
 
   test("should display pages step", async ({ page }) => {
@@ -35,8 +26,7 @@ test.describe("Wizard Pages Step", () => {
     await wizard.expectCanProceed(true);
     await wizard.nextStep();
 
-    // Should go to Additional Features
-    await wizard.expectStepName("Additional Features");
+    await wizard.expectStepName("Publish");
   });
 
   test("should allow adding a page", async ({ page }) => {

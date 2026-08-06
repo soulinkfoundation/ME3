@@ -32,7 +32,7 @@ describe("login redirects", () => {
         hasProfileSite: false,
         defaultPath: "/mission-control",
       }),
-    ).toBe("/start");
+    ).toBe("/create");
   });
 
   it("preserves an explicit setup path only for confirmed incomplete setup", () => {
@@ -62,7 +62,7 @@ describe("login redirects", () => {
         onboardingStartStep: 2,
         defaultPath: "/mission-control",
       }),
-    ).toBe("/start");
+    ).toBe("/create");
   });
 
   it("sends first ME3.app claims to start setup", () => {
@@ -71,13 +71,13 @@ describe("login redirects", () => {
         ...options,
         setupIncomplete: true,
       }),
-    ).toBe("/start");
+    ).toBe("/create");
     expect(
       resolveMe3OAuthRedirect("/mission-control", {
         ...options,
         setupIncomplete: true,
       }),
-    ).toBe("/start");
+    ).toBe("/create");
   });
 
   it("returns to root for ME3.app OAuth when setup state should decide", () => {

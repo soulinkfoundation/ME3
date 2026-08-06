@@ -9,6 +9,7 @@ import {
 import { getUtcMsForLocalTime, normalizeTimeZone } from "./calendar";
 import { hasConfiguredAiProvider } from "./ai-providers";
 import { isCorePluginEnabled, listCorePluginRecords } from "./plugins";
+import { getSiteFileText } from "./sites";
 import {
   createLocalExecutorPolicy,
   createLocalExecutorRun,
@@ -455,7 +456,9 @@ const DEFAULT_MISSION_WHEEL_SEGMENTS: MissionWheelSegment[] = [
 const DASHBOARD_CARD_COMPONENT_KEYS = new Set([
   "DailyBriefingCard",
   "MissionStatementCard",
+  "GoalsCard",
   "WheelSnapshotCard",
+  "Me3ProfileCard",
   "QuickProjectTaskCard",
   "ProjectsSummaryCard",
   "AiUsageCard",
@@ -475,7 +478,9 @@ const DASHBOARD_DESTINATIONS: Record<string, { path: string; requiresPluginId?: 
 };
 const DASHBOARD_CONTRIBUTION_ORDER = [
   "mission.daily-briefing",
+  "mission.me3-profile",
   "mission.mission-statement",
+  "mission.goals",
   "mission.wheel-latest-snapshot",
   "mission.quick-task-add",
   "mission.projects-summary",
@@ -1439,12 +1444,80 @@ export async function getMissionDailyBriefing(env: Env, userId: string, briefing
   return { briefing };
 }
 
+type MissionProfileSnapshot = {
+  name: string;
+  handle: string;
+  bio: string;
+  missionStatement: string;
+};
+
+function missionStatementFromBusiness(
+  business: Record<string, unknown>,
+): string {
+  const explicit = normalizeContextMissionStatement(
+    business.positioningStatement,
+  );
+  if (explicit) return explicit;
+
+  const audience = normalizeNullableText(business.audience);
+  if (!audience) return "";
+  const primaryProblem = normalizeNullableText(business.primaryProblem);
+  const solution = normalizeNullableText(business.solution);
+  const parts = [`I help ${audience}`];
+  if (primaryProblem) parts.push(`with ${primaryProblem}`);
+  if (solution) parts.push(`by ${solution}`);
+  return `${parts.join(" ")}.`;
+}
+
+async function loadMissionProfileSnapshot(
+  env: Env,
+  userId: string,
+): Promise<MissionProfileSnapshot | null> {
+  const site = await env.DB.prepare(
+    `SELECT id, username
+     FROM sites
+     WHERE user_id = ? AND COALESCE(site_type, 'profile') = 'profile'
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+  )
+    .bind(userId)
+    .first<{ id: string; username: string }>();
+  if (!site) return null;
+
+  const text =
+    (await getSiteFileText(env, site.id, "src/me.json")) ||
+    (await getSiteFileText(env, site.id, "public/me.json")) ||
+    (await getSiteFileText(env, site.id, "me.json"));
+  if (!text) return null;
+
+  try {
+    const profile = JSON.parse(text) as unknown;
+    if (!isRecord(profile)) return null;
+    const business = isRecord(profile.business) ? profile.business : {};
+    return {
+      name: normalizeNullableText(profile.name) || site.username,
+      handle: normalizeNullableText(profile.handle) || site.username,
+      bio: normalizeNullableText(profile.bio) || "",
+      missionStatement: missionStatementFromBusiness(business),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function getMissionDashboard(env: Env, userId: string) {
-  const [row, pluginRecords, latestDailyBriefing, latestWheelSnapshot] = await Promise.all([
+  const [
+    row,
+    pluginRecords,
+    latestDailyBriefing,
+    latestWheelSnapshot,
+    profileSnapshot,
+  ] = await Promise.all([
     getOrCreateMissionDashboardSettingsRow(env, userId),
     listCorePluginRecords(env),
     getLatestMissionDailyBriefing(env, userId),
     getLatestMissionWheelSnapshot(env, userId),
+    loadMissionProfileSnapshot(env, userId),
   ]);
   const allCardContributions = dashboardCardContributionsFromPlugins(pluginRecords);
   const allQuickActionContributions =
@@ -1461,7 +1534,9 @@ export async function getMissionDashboard(env: Env, userId: string) {
     allQuickActionContributions,
     enabledPlugins,
   );
-  const missionStatement = row.mission_statement || DEFAULT_MISSION_STATEMENT;
+  const missionStatement = profileSnapshot
+    ? profileSnapshot.missionStatement || DEFAULT_MISSION_STATEMENT
+    : row.mission_statement || DEFAULT_MISSION_STATEMENT;
   const cards = resolveDashboardCards(
     parseJsonArray(row.cards_json),
     allCardContributions,
@@ -1474,7 +1549,7 @@ export async function getMissionDashboard(env: Env, userId: string) {
   );
   const settings = normalizeDashboardSettings(parseJsonRecord(row.settings_json));
   const mainGoal =
-    settings.mainGoal || latestWheelSnapshotMainGoal(latestWheelSnapshot);
+    settings.goals.find((goal) => goal.status === "active")?.title || "";
 
   return {
     availableCards: cardContributions,
@@ -1489,15 +1564,17 @@ export async function getMissionDashboard(env: Env, userId: string) {
       "mission.daily-briefing": latestDailyBriefing,
       "mission.mission-statement": {
         missionStatement,
-        mainGoal,
         placeholder: DEFAULT_MISSION_STATEMENT,
-        mainGoalPlaceholder:
-          "Set your current objectives and goals here for yourself and for your assistant.",
+        source: profileSnapshot ? "profile" : "legacy",
+      },
+      "mission.goals": {
+        goals: settings.goals,
       },
       "mission.wheel-latest-snapshot": {
         snapshot: latestWheelSnapshot,
         source: "server",
       },
+      "mission.me3-profile": profileSnapshot,
     },
     updatedAt: normalizeDbDateTime(row.updated_at),
   };
@@ -1609,10 +1686,10 @@ export async function updateMissionDashboard(
 ) {
   const body = isRecord(input) ? input : {};
   const existing = await getMissionDashboard(env, userId);
-  const missionStatement =
-    body.missionStatement === undefined
-      ? existing.missionStatement
-      : normalizeMissionStatement(body.missionStatement);
+  const existingRow = await getOrCreateMissionDashboardSettingsRow(env, userId);
+  const existingPersistedSettings = parseJsonRecord(existingRow.settings_json);
+  const hasStructuredGoals = Array.isArray(existingPersistedSettings.goals);
+  const missionStatement = existingRow.mission_statement;
   const cards =
     body.cards === undefined
       ? existing.cards
@@ -1631,12 +1708,34 @@ export async function updateMissionDashboard(
           existing.availableQuickActions,
           { includeMissingDefaults: false },
         );
+  const legacyGoalUpdate =
+    body.goals === undefined &&
+    body.mainGoal !== undefined &&
+    (!hasStructuredGoals || existing.settings.goals.length === 0)
+      ? normalizeMainGoal(body.mainGoal)
+        ? [
+            {
+              id: existing.settings.goals.find((goal) => goal.status === "active")?.id ||
+                "legacy-main-goal",
+              title: body.mainGoal,
+              status: "active",
+            },
+          ]
+        : []
+      : undefined;
   const settings = normalizeDashboardSettings({
     ...existing.settings,
     ...(isRecord(body.settings) ? body.settings : {}),
     ...(body.kanbanEnabled === undefined ? {} : { kanbanEnabled: body.kanbanEnabled }),
-    ...(body.mainGoal === undefined ? {} : { mainGoal: body.mainGoal }),
+    ...(body.goals === undefined && legacyGoalUpdate === undefined
+      ? {}
+      : { goals: body.goals ?? legacyGoalUpdate }),
   });
+  const persistedSettings = {
+    kanbanEnabled: settings.kanbanEnabled,
+    goals: settings.goals,
+    setupChecklistDismissed: settings.setupChecklistDismissed,
+  };
 
   await env.DB.prepare(
     `INSERT INTO mission_dashboard_settings
@@ -1653,7 +1752,7 @@ export async function updateMissionDashboard(
       userId,
       JSON.stringify(cards),
       JSON.stringify(quickLinks),
-      JSON.stringify(settings),
+      JSON.stringify(persistedSettings),
       missionStatement,
     )
     .run();
@@ -2750,7 +2849,11 @@ async function getOrCreateMissionDashboardSettingsRow(env: Env, userId: string) 
       userId,
       JSON.stringify(cards),
       JSON.stringify(quickLinks),
-      JSON.stringify(settings),
+      JSON.stringify({
+        kanbanEnabled: settings.kanbanEnabled,
+        goals: settings.goals,
+        setupChecklistDismissed: settings.setupChecklistDismissed,
+      }),
       DEFAULT_MISSION_STATEMENT,
     )
     .run();
@@ -2869,28 +2972,31 @@ async function ensureProjectExists(env: Env, userId: string, projectId: string) 
 }
 
 async function ensureBaselineContextSources(env: Env, userId: string) {
-  const [dashboardRow, latestWheelSnapshot] = await Promise.all([
+  const [dashboardRow, latestWheelSnapshot, profileSnapshot] = await Promise.all([
     getOrCreateMissionDashboardSettingsRow(env, userId).catch(() => null),
     getLatestMissionWheelSnapshot(env, userId).catch(() => null),
+    loadMissionProfileSnapshot(env, userId).catch(() => null),
   ]);
-  const missionStatement = normalizeContextMissionStatement(
-    dashboardRow?.mission_statement || null,
-  );
+  const missionStatement = profileSnapshot
+    ? profileSnapshot.missionStatement
+    : normalizeContextMissionStatement(dashboardRow?.mission_statement || null);
   const dashboardSettings = normalizeDashboardSettings(
     parseJsonRecord(dashboardRow?.settings_json || "{}"),
   );
-  const hasMissionContext = Boolean(missionStatement || dashboardSettings.mainGoal);
+  const hasMissionContext = Boolean(
+    missionStatement || dashboardSettings.goals.length,
+  );
   const baselines = [
     {
       id: `mission-source-mission-statement-${userId}`,
       kind: "mission_statement",
-      label: "Mission statement",
+      label: "Mission",
       description: hasMissionContext
-        ? "The owner's main intent, direction, and current goal for assistant help."
-        : "Missing: write a mission statement or main goal so ME3 understands the owner's main intent.",
+        ? "The owner's Mission and active goals for assistant help."
+        : "Missing: define a Mission or active goal so ME3 understands the owner's direction.",
       visibility: "private",
       status: hasMissionContext ? "active" : "setup_required",
-      sourceRef: "/mission-control",
+      sourceRef: "/create?step=mission",
     },
     {
       id: `mission-source-wheel-of-life-${userId}`,
@@ -2901,7 +3007,7 @@ async function ensureBaselineContextSources(env: Env, userId: string) {
         : "Missing: save a Wheel of Life snapshot so ME3 can see the owner's current balance.",
       visibility: "private",
       status: latestWheelSnapshot ? "active" : "setup_required",
-      sourceRef: "/mission-control/wheel-of-life",
+      sourceRef: "/create?step=wheel-of-life",
     },
     {
       id: `mission-source-public-profile-${userId}`,
@@ -3714,15 +3820,51 @@ function normalizeDashboardIcon(value: unknown): string | null {
   return text;
 }
 
-function normalizeMissionStatement(value: unknown): string {
-  if (typeof value !== "string") return DEFAULT_MISSION_STATEMENT;
-  const trimmed = value.trim();
-  return trimmed ? trimmed.slice(0, 2000) : DEFAULT_MISSION_STATEMENT;
-}
-
 function normalizeMainGoal(value: unknown): string {
   if (typeof value !== "string") return "";
   return value.trim().slice(0, 600);
+}
+
+function normalizeMissionGoals(value: unknown, legacyMainGoal: string) {
+  const incoming = Array.isArray(value) ? value : [];
+  const seen = new Set<string>();
+  const goals = incoming.slice(0, 20).flatMap((item, index) => {
+    const input: Record<string, unknown> = isRecord(item)
+      ? item
+      : { title: item };
+    const title = normalizeMainGoal(input.title);
+    if (!title) return [];
+    const candidateId = normalizeNullableText(input.id) || `goal-${index + 1}`;
+    const baseId = candidateId
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || `goal-${index + 1}`;
+    let id = baseId;
+    let suffix = 2;
+    while (seen.has(id)) {
+      const suffixText = `-${suffix}`;
+      id = `${baseId.slice(0, 80 - suffixText.length)}${suffixText}`;
+      suffix += 1;
+    }
+    seen.add(id);
+    return [
+      {
+        id,
+        title,
+        status: input.status === "completed" ? ("completed" as const) : ("active" as const),
+      },
+    ];
+  });
+
+  if (!Array.isArray(value) && goals.length === 0 && legacyMainGoal) {
+    goals.push({
+      id: "legacy-main-goal",
+      title: legacyMainGoal,
+      status: "active",
+    });
+  }
+  return goals;
 }
 
 function normalizeContextMissionStatement(value: unknown): string | null {
@@ -3796,25 +3938,17 @@ function normalizeIsoDateTime(value: unknown): string | null {
 }
 
 function normalizeDashboardSettings(value: Record<string, unknown>) {
+  const legacyMainGoal = normalizeMainGoal(value.mainGoal);
+  const goals = normalizeMissionGoals(value.goals, legacyMainGoal);
   return {
     kanbanEnabled: value.kanbanEnabled === true,
-    mainGoal: normalizeMainGoal(value.mainGoal),
+    mainGoal: goals.find((goal) => goal.status === "active")?.title || "",
+    goals,
     setupChecklistDismissed:
       value.setupChecklistDismissed === undefined
         ? DEFAULT_SETUP_CHECKLIST_DISMISSED
         : value.setupChecklistDismissed === true,
   };
-}
-
-function latestWheelSnapshotMainGoal(
-  snapshot: ReturnType<typeof serializeMissionWheelSnapshot> | null,
-): string {
-  if (!snapshot) return "";
-  for (const segment of snapshot.segments) {
-    const note = normalizeMainGoal(segment.notes);
-    if (note) return note;
-  }
-  return "";
 }
 
 function activeTaskSortValue(row: MissionTaskRow): string {

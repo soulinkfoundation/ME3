@@ -7,6 +7,17 @@ import UiIcon from "../UiIcon.vue";
 import { api } from "../../api";
 import { isUiIconName, type UiIconName } from "../../utils/icons";
 
+const props = withDefaults(
+  defineProps<{
+    labelledBy?: string;
+    embedded?: boolean;
+  }>(),
+  {
+    labelledBy: "",
+    embedded: false,
+  },
+);
+
 type WheelSegment = {
   id: string;
   label: string;
@@ -467,8 +478,18 @@ watch(snapshots, persistState, { deep: true });
 </script>
 
 <template>
-  <section class="life-wheel" aria-labelledby="life-wheel-title">
-    <h1 id="life-wheel-title" class="life-wheel__sr-only">Wheel of Life</h1>
+  <section
+    class="life-wheel"
+    :class="{ 'life-wheel--embedded': props.embedded }"
+    :aria-labelledby="props.labelledBy || 'life-wheel-title'"
+  >
+    <h1
+      v-if="!props.labelledBy"
+      id="life-wheel-title"
+      class="life-wheel__sr-only"
+    >
+      Wheel of Life
+    </h1>
 
     <div class="life-wheel__actions" aria-label="Wheel of Life actions">
       <Button color="ghost" shape="soft" size="compact" icon-only type="button"
@@ -761,6 +782,11 @@ watch(snapshots, persistState, { deep: true });
   min-height: 0;
   margin: 0 auto;
   color: var(--ui-text);
+}
+
+.life-wheel--embedded,
+.life-wheel--embedded .life-wheel__stage {
+  height: auto;
 }
 
 .life-wheel-modal__dialog {

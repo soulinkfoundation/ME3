@@ -25,6 +25,22 @@ test.describe("Wizard Full Flow", () => {
         });
       }
     });
+
+    await page.route("**/api/mission-control/dashboard", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ settings: { goals: [] } }),
+      });
+    });
+
+    await page.route("**/api/mission-control/wheel", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ settings: { segments: [] }, snapshots: [] }),
+      });
+    });
   });
 
   test("should complete full wizard journey from start to publish", async ({
@@ -51,32 +67,23 @@ test.describe("Wizard Full Flow", () => {
     await wizard.expectStepName("Banner");
     await wizard.nextStep();
 
-    // Step 4: Links
-    await wizard.expectStepName("Links");
-    // Add a link if there's an input visible
-    const linkInputs = page.locator('input[type="text"], input[type="url"]');
-    if ((await linkInputs.count()) > 0) {
-      await linkInputs.first().fill("https://github.com/johndoe");
-    }
+    // Step 4: Mission
+    await wizard.expectStepName("Mission");
     await wizard.nextStep();
 
-    // Step 5: Call-to-action
-    await wizard.expectStepName("Call-to-action");
+    // Step 5: Goals
+    await wizard.expectStepName("Goals");
     await wizard.nextStep();
 
-    // Step 6: Pages
-    await wizard.expectStepName("Pages");
+    // Step 6: Wheel of Life
+    await wizard.expectStepName("Wheel of Life");
     await wizard.nextStep();
 
     // Step 7: Additional Features
     await wizard.expectStepName("Additional Features");
     await wizard.nextStep();
 
-    // Step 8: Offerings
-    await wizard.expectStepName("Offerings");
-    await wizard.nextStep();
-
-    // Final step: Publish
+    // Final step: Publish (all public website features are optional)
     await wizard.expectStepName("Publish");
 
     // Verify we're on the publish step
@@ -150,7 +157,7 @@ test.describe("Wizard Full Flow", () => {
     await wizard.expectStepShortcutEnabled("Basics", true);
     await wizard.expectStepShortcutEnabled("Avatar", true);
     await wizard.expectStepShortcutEnabled("Banner", true);
-    await wizard.expectStepShortcutEnabled("Links", false);
+    await wizard.expectStepShortcutEnabled("Mission", false);
 
     await wizard.clickStepShortcut("Basics");
     await wizard.expectStepName("Basics");
@@ -159,27 +166,30 @@ test.describe("Wizard Full Flow", () => {
     await wizard.expectStepName("Banner");
   });
 
-  test("should handle optional features (blog/shop)", async ({ page }) => {
+  test("should append enabled optional features after the selector", async ({
+    page,
+  }) => {
     await wizard.goto();
 
     // Go through required steps
     await wizard.fillBasics("Feature Test", "featuretest", "Testing features");
     await wizard.waitForUsernameCheck();
 
-    // Navigate through all required steps
-    for (let i = 0; i < 5; i++) {
-      await wizard.nextStep();
-      await page.waitForTimeout(300);
+    await wizard.gotoStep("additional-features");
+    await wizard.expectStepName("Additional Features");
+
+    for (const feature of ["Blog", "Products"]) {
+      const toggle = page.locator(
+        `.feature-card:has(.feature-name:has-text("${feature}")) .feature-toggle`,
+      );
+      await toggle.click();
+      await expect(toggle.locator('input[type="checkbox"]')).toBeChecked();
     }
 
-    // Should be on Pages step (before optional blog/shop)
-    await wizard.expectStepName("Pages");
-
-    // Continue to publish (blog/shop disabled by default)
     await wizard.nextStep();
-    await wizard.expectStepName("Additional Features");
+    await wizard.expectStepName("Blog");
     await wizard.nextStep();
-    await wizard.expectStepName("Offerings");
+    await wizard.expectStepName("Products");
     await wizard.nextStep();
     await wizard.expectStepName("Publish");
   });
@@ -212,18 +222,8 @@ test.describe("Wizard Full Flow", () => {
     await wizard.waitForUsernameCheck();
     await wizard.nextStep();
 
-    // Click exit (but cancel)
-    page.once("dialog", (dialog) => dialog.dismiss());
+    // With no existing site, the site route returns to the unified create flow.
     await page.click(".exit-btn");
-
-    // Should still be on wizard
-    await wizard.expectStepName("Avatar");
-
-    // Actually exit
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.click(".exit-btn");
-
-    // The mocked site list is empty, so the site route resolves to setup.
-    await page.waitForURL(/\/(?:start|calendar)(?:\/|\?|$)/, { timeout: 3000 });
+    await page.waitForURL(/\/create(?:\/|\?|$)/, { timeout: 3000 });
   });
 });

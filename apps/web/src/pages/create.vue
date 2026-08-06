@@ -10,6 +10,9 @@ import GeneratedSitePreview from "../components/GeneratedSitePreview.vue";
 import WizardBasics from "../components/wizard/WizardBasics.vue";
 import WizardAvatar from "../components/wizard/WizardAvatar.vue";
 import WizardBanner from "../components/wizard/WizardBanner.vue";
+import WizardMission from "../components/wizard/WizardMission.vue";
+import WizardGoals from "../components/wizard/WizardGoals.vue";
+import WizardWheelOfLife from "../components/wizard/WizardWheelOfLife.vue";
 import WizardLinks from "../components/wizard/WizardLinks.vue";
 import WizardCallToAction from "../components/wizard/WizardCallToAction.vue";
 import WizardPages from "../components/wizard/WizardPages.vue";
@@ -41,6 +44,9 @@ const stepComponentById = {
   basics: WizardBasics,
   avatar: WizardAvatar,
   banner: WizardBanner,
+  mission: WizardMission,
+  goals: WizardGoals,
+  "wheel-of-life": WizardWheelOfLife,
   links: WizardLinks,
   "call-to-action": WizardCallToAction,
   pages: WizardPages,
@@ -148,7 +154,11 @@ const progressSteps = computed(() =>
 
 // Show preview on larger screens
 const showPreview = computed(
-  () => !showIntroScreen.value && wizard.currentStep < wizard.totalSteps,
+  () =>
+    !showIntroScreen.value &&
+    wizard.currentStep < wizard.totalSteps &&
+    wizard.currentStepId !== "goals" &&
+    wizard.currentStepId !== "wheel-of-life",
 );
 
 // Check if WizardPages/Blog/Offerings/Bookings is in editing mode
@@ -210,6 +220,11 @@ function handleProgressStepClick(stepNumber: number, isVisited: boolean) {
 }
 
 function exitWizardDestination(): string {
+  const returnPath =
+    typeof route.query.return === "string" ? route.query.return.trim() : "";
+  if (returnPath.startsWith("/") && !returnPath.startsWith("//")) {
+    return returnPath;
+  }
   const site = (wizard.username || wizard.profile.handle || "")
     .trim()
     .toLowerCase();
@@ -264,6 +279,7 @@ watch(() => wizard.currentStepId, syncRouteStep);
       <div class="header-right">
         <button
           class="exit-btn"
+          type="button"
           @click="handleExit"
           :title="
             (wizard.username || wizard.profile.handle || '').trim().length >= 3
@@ -306,8 +322,7 @@ watch(() => wizard.currentStepId, syncRouteStep);
           :data-step-name="step.name"
           :aria-label="step.ariaLabel"
           :aria-current="step.isCurrent ? 'step' : undefined"
-          :aria-disabled="step.isVisited ? undefined : 'true'"
-          :tabindex="step.isVisited ? undefined : -1"
+          :disabled="!step.isVisited"
           @click="handleProgressStepClick(step.number, step.isVisited)"
         >
           <span class="progress-step-dot" aria-hidden="true">
@@ -379,7 +394,7 @@ watch(() => wizard.currentStepId, syncRouteStep);
 
         <!-- Navigation -->
         <div v-if="!isEditingPage" class="step-nav">
-          <button class="nav-btn back" @click="handleBack">
+          <button class="nav-btn back" type="button" @click="handleBack">
             {{ wizard.currentStep === 1 ? "← Exit" : "← Back" }}
           </button>
 
@@ -392,6 +407,7 @@ watch(() => wizard.currentStepId, syncRouteStep);
                 wizard.currentStep < wizard.totalSteps
               "
               class="nav-btn publish-quick"
+              type="button"
               :disabled="isQuickPublishing"
               @click="handleQuickPublish"
             >
@@ -401,6 +417,7 @@ watch(() => wizard.currentStepId, syncRouteStep);
             <button
               v-if="wizard.currentStep < wizard.totalSteps"
               class="nav-btn next"
+              type="button"
               :disabled="!wizard.canProceed"
               @click="handleNext"
             >
@@ -559,7 +576,7 @@ watch(() => wizard.currentStepId, syncRouteStep);
   cursor: pointer;
 }
 
-.progress-step[aria-disabled="true"] {
+.progress-step:disabled {
   cursor: default;
 }
 

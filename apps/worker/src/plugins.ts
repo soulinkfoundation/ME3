@@ -658,8 +658,15 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
     },
     {
       id: "mission.mission-statement",
-      label: "Mission Statement",
+      label: "Mission",
       componentKey: "MissionStatementCard",
+      defaultEnabled: true,
+      defaultSize: "medium",
+    },
+    {
+      id: "mission.goals",
+      label: "Goals",
+      componentKey: "GoalsCard",
       defaultEnabled: true,
       defaultSize: "medium",
     },
@@ -670,6 +677,13 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
       defaultEnabled: true,
       defaultSize: "medium",
       dataEndpoint: "/api/mission-control/dashboard/cards/mission.wheel-latest-snapshot",
+    },
+    {
+      id: "mission.me3-profile",
+      label: "ME3 Profile",
+      componentKey: "Me3ProfileCard",
+      defaultEnabled: true,
+      defaultSize: "medium",
     },
     {
       id: "mission.quick-task-add",

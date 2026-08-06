@@ -41,8 +41,10 @@ type MissionSnapshotRow = {
 };
 
 type WheelSnapshotRow = {
+  id: string;
   segments_json: string | null;
   notes_json: string | null;
+  created_at: string | null;
 };
 
 type ProjectSnapshotRow = {
@@ -73,17 +75,22 @@ export async function loadOwnerSnapshotContext(input: {
   owner: OwnerSnapshotProfile | null;
   meJsonUrl: string | null;
 }): Promise<OwnerSnapshotContext> {
-  const [missionRow, wheelRow, projectRows, meJsonRow] = await Promise.all([
+  const [missionRow, wheelRow, projectRows, privateMeJsonRow, publicMeJsonRow] = await Promise.all([
     loadMissionSnapshot(input.db, input.ownerId),
     loadWheelSnapshot(input.db, input.ownerId),
     loadProjectSnapshots(input.db, input.ownerId),
-    loadMeJsonSnapshot(input.db, input.ownerId),
+    loadPrivateMeJsonSnapshot(input.db, input.ownerId),
+    loadPublicMeJsonSnapshot(input.db, input.ownerId),
   ]);
 
-  const missionStatement = normalizeMissionStatement(missionRow?.mission_statement);
-  const goals = resolveGoals(missionRow?.settings_json, wheelRow);
-  const meJson = parseMeJson(meJsonRow?.content);
+  const privateMeJson = parseMeJson(privateMeJsonRow?.content);
+  const missionStatement = privateMeJson
+    ? missionStatementFromMeJson(privateMeJson)
+    : normalizeMissionStatement(missionRow?.mission_statement);
+  const goals = resolveGoals(missionRow?.settings_json);
+  const meJson = parseMeJson(publicMeJsonRow?.content);
   const compactMeJson = compactMeJsonForPrompt(meJson);
+  const lifeSnapshot = resolveLifeSnapshot(wheelRow);
   const projects = projectRows.map(toContextProject);
   const prompt = buildOwnerSnapshotPrompt({
     owner: input.owner,
@@ -91,6 +98,7 @@ export async function loadOwnerSnapshotContext(input: {
     goals,
     meJson: compactMeJson,
     meJsonUrl: input.meJsonUrl,
+    lifeSnapshot,
     projects: projectRows,
   });
   const budget = ownerSnapshotBudget(prompt);
@@ -120,14 +128,15 @@ export async function loadOwnerSnapshotContext(input: {
           source: source({
             id: "mission-statement",
             kind: "mission_statement",
-            label: "Mission statement and goals",
+            label: "Mission and goals",
             visibility: "private",
-            reason: "Stable Mission Control orientation for every Assistant turn.",
-            sourceRef: "/mission-control",
-            updatedAt: missionRow?.updated_at || null,
+            reason: "Stable owner Mission and goals for every Assistant turn.",
+            sourceRef: "/create?step=mission",
+            updatedAt: privateMeJsonRow?.updated_at || missionRow?.updated_at || null,
           }),
         }
       : null,
+    lifeSnapshot,
     publicIdentity: meJson
       ? {
           summary: "The bounded public me.json profile is included in the owner snapshot.",
@@ -138,8 +147,8 @@ export async function loadOwnerSnapshotContext(input: {
             label: "Public me.json",
             visibility: "public",
             reason: "Public profile facts for every Assistant turn.",
-            sourceRef: meJsonRow?.path || "/.well-known/me.json",
-            updatedAt: meJsonRow?.updated_at || null,
+            sourceRef: publicMeJsonRow?.path || "/.well-known/me.json",
+            updatedAt: publicMeJsonRow?.updated_at || null,
           }),
         }
       : null,
@@ -174,7 +183,7 @@ async function loadWheelSnapshot(
   ownerId: string,
 ): Promise<WheelSnapshotRow | null> {
   return db.prepare(
-    `SELECT segments_json, notes_json
+    `SELECT id, segments_json, notes_json, created_at
      FROM mission_wheel_snapshots
      WHERE user_id = ?
      ORDER BY created_at DESC, id ASC
@@ -207,7 +216,26 @@ async function loadProjectSnapshots(
   return rows.results || [];
 }
 
-async function loadMeJsonSnapshot(
+async function loadPrivateMeJsonSnapshot(
+  db: OwnerSnapshotDb,
+  ownerId: string,
+): Promise<MeJsonSnapshotRow | null> {
+  return db.prepare(
+    `SELECT sf.content, sf.path, sf.updated_at
+     FROM sites s
+     JOIN site_files sf ON sf.site_id = s.id
+     WHERE s.user_id = ?
+       AND COALESCE(s.site_type, 'profile') = 'profile'
+       AND sf.path IN ('src/me.json', 'me.json')
+     ORDER BY s.updated_at DESC,
+              CASE WHEN sf.path = 'src/me.json' THEN 0 ELSE 1 END
+     LIMIT 1`,
+  )
+    .bind(ownerId)
+    .first<MeJsonSnapshotRow>();
+}
+
+async function loadPublicMeJsonSnapshot(
   db: OwnerSnapshotDb,
   ownerId: string,
 ): Promise<MeJsonSnapshotRow | null> {
@@ -232,6 +260,7 @@ function buildOwnerSnapshotPrompt(input: {
   goals: string[];
   meJson: Record<string, unknown> | null;
   meJsonUrl: string | null;
+  lifeSnapshot: ReturnType<typeof resolveLifeSnapshot>;
   projects: ProjectSnapshotRow[];
 }): string {
   const lines = [
@@ -246,6 +275,14 @@ function buildOwnerSnapshotPrompt(input: {
     "",
     "Goals:",
     ...(input.goals.length ? input.goals.map((goal) => `- ${goal}`) : ["- Not set"]),
+    "",
+    "Wheel of Life:",
+    ...(input.lifeSnapshot
+      ? input.lifeSnapshot.areas.map(
+          (area) =>
+            `- ${area.label}: ${area.score ?? "Not set"}/10${area.note ? ` — ${area.note}` : ""}`,
+        )
+      : ["- No snapshot saved"]),
     "",
     "Public me.json:",
     input.meJsonUrl ? `- URL: ${input.meJsonUrl}` : "- URL: Not configured",
@@ -268,22 +305,84 @@ function buildOwnerSnapshotPrompt(input: {
   return `${text.slice(0, OWNER_SNAPSHOT_PROMPT_BUDGET_CHARS - suffix.length)}${suffix}`;
 }
 
-function resolveGoals(
-  settingsJson: string | null | undefined,
-  wheel: WheelSnapshotRow | null,
-): string[] {
+function missionStatementFromMeJson(
+  profile: Record<string, unknown> | null,
+): string | null {
+  if (!profile || !isRecord(profile.business)) return null;
+  const explicit = normalizeMissionStatement(
+    profile.business.positioningStatement,
+  );
+  if (explicit) return explicit;
+
+  const audience = normalizeText(profile.business.audience, 160);
+  if (!audience) return null;
+  const primaryProblem = normalizeText(
+    profile.business.primaryProblem,
+    160,
+  );
+  const solution = normalizeText(profile.business.solution, 240);
+  const parts = [`I help ${audience}`];
+  if (primaryProblem) parts.push(`with ${primaryProblem}`);
+  if (solution) parts.push(`by ${solution}`);
+  return `${parts.join(" ")}.`;
+}
+
+function resolveGoals(settingsJson: string | null | undefined): string[] {
   const settings = parseJsonRecord(settingsJson);
+  if (Array.isArray(settings.goals)) {
+    return settings.goals
+      .filter(isRecord)
+      .filter((goal) => goal.status !== "completed")
+      .map((goal) => normalizeText(goal.title, 600))
+      .filter((goal): goal is string => Boolean(goal))
+      .slice(0, 20);
+  }
+
   const mainGoal = normalizeText(settings.mainGoal, 600);
   if (mainGoal) return [mainGoal];
-
-  const notes = parseJsonRecord(wheel?.notes_json);
-  const segments = parseJsonRecordArray(wheel?.segments_json);
-  for (const segment of segments) {
-    const id = normalizeText(segment.id, 100);
-    const note = id ? normalizeText(notes[id], 600) : null;
-    if (note) return [note];
-  }
   return [];
+}
+
+function resolveLifeSnapshot(wheel: WheelSnapshotRow | null) {
+  if (!wheel) return null;
+  const notes = parseJsonRecord(wheel.notes_json);
+  const areas = parseJsonRecordArray(wheel.segments_json)
+    .flatMap((segment) => {
+      const id = normalizeText(segment.id, 100);
+      const label = normalizeText(segment.label, 100);
+      if (!id || !label) return [];
+      const rawScore = Number(segment.value);
+      const score =
+        segment.value === null ||
+        segment.value === undefined ||
+        !Number.isFinite(rawScore)
+          ? null
+          : Math.max(1, Math.min(10, rawScore));
+      return [
+        {
+          label,
+          score,
+          note: normalizeText(notes[id], 160),
+        },
+      ];
+    })
+    .slice(0, 8);
+  if (!areas.length) return null;
+
+  return {
+    id: wheel.id,
+    createdAt: wheel.created_at,
+    areas,
+    source: source({
+      id: wheel.id,
+      kind: "wheel_of_life",
+      label: "Wheel of Life snapshot",
+      visibility: "private",
+      reason: "Current life snapshot for balancing advice.",
+      sourceRef: "/create?step=wheel-of-life",
+      updatedAt: wheel.created_at,
+    }),
+  };
 }
 
 function normalizeMissionStatement(value: unknown): string | null {

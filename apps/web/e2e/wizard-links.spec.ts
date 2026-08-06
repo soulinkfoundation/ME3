@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures/test";
+import { test } from "./fixtures/test";
 import { WizardPage } from "./helpers/wizard";
 
 test.describe("Wizard Links Step", () => {
@@ -15,14 +15,7 @@ test.describe("Wizard Links Step", () => {
       });
     });
 
-    await wizard.goto();
-
-    // Navigate to links step
-    await wizard.fillBasics("Links Test", "linkstest", "Testing links");
-    await wizard.waitForUsernameCheck();
-    await wizard.nextStep(); // Avatar
-    await wizard.nextStep(); // Banner
-    await wizard.nextStep(); // Links
+    await wizard.gotoStep("links");
   });
 
   test("should display links step", async ({ page }) => {
@@ -33,7 +26,7 @@ test.describe("Wizard Links Step", () => {
     await wizard.expectCanProceed(true);
     await wizard.nextStep();
 
-    await wizard.expectStepName("Call-to-action");
+    await wizard.expectStepName("Publish");
   });
 
   test("should allow adding links", async ({ page }) => {

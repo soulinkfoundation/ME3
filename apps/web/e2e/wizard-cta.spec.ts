@@ -15,15 +15,7 @@ test.describe("Wizard Call-to-Action Step", () => {
       });
     });
 
-    await wizard.goto();
-
-    // Navigate to CTA step
-    await wizard.fillBasics("CTA Test", "ctatest", "Testing CTA");
-    await wizard.waitForUsernameCheck();
-    await wizard.nextStep(); // Avatar
-    await wizard.nextStep(); // Banner
-    await wizard.nextStep(); // Links
-    await wizard.nextStep(); // CTA
+    await wizard.gotoStep("call-to-action");
   });
 
   test("should display call-to-action step", async ({ page }) => {
@@ -34,23 +26,15 @@ test.describe("Wizard Call-to-Action Step", () => {
     await wizard.expectCanProceed(true);
     await wizard.nextStep();
 
-    await wizard.expectStepName("Pages");
+    await wizard.expectStepName("Publish");
   });
 
   test("should allow adding buttons", async ({ page }) => {
-    // Look for add button button
-    const addButton = page
-      .locator('button:has-text("Add"), button:has-text("Add Button")')
-      .first();
-
-    if ((await addButton.count()) > 0) {
-      await addButton.click();
-      await page.waitForTimeout(300);
-
-      // Should show button form fields
-      const textInputs = page.locator('input[type="text"]');
-      expect(await textInputs.count()).toBeGreaterThan(0);
-    }
+    await page.getByRole("button", { name: "Custom", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "Add a button", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator('input[placeholder="e.g. Shop"]')).toBeVisible();
 
     // Should still be able to proceed
     await wizard.expectCanProceed(true);

@@ -6,6 +6,33 @@ import UiIcon from "../UiIcon.vue";
 const wizard = useWizardStore();
 
 // Feature toggles
+const linksEnabled = computed({
+  get: () => wizard.linksEnabled,
+  set: (val: boolean) => {
+    wizard.linksEnabled = val;
+  },
+});
+
+const callToActionEnabled = computed({
+  get: () => wizard.callToActionEnabled,
+  set: (val: boolean) => {
+    wizard.callToActionEnabled = val;
+  },
+});
+
+const pagesEnabled = computed({
+  get: () => wizard.pagesEnabled,
+  set: (val: boolean) => {
+    if (!val && wizard.pages.length > 0) {
+      const confirmDisable = confirm(
+        "Disable pages? This will hide the pages step and remove pages from publish.",
+      );
+      if (!confirmDisable) return;
+    }
+    wizard.pagesEnabled = val;
+  },
+});
+
 const newsletterEnabled = computed({
   get: () => wizard.newsletterEnabled,
   set: (val: boolean) => {
@@ -52,13 +79,87 @@ const testimonialsEnabled = computed({
     wizard.testimonialsEnabled = val;
   },
 });
+
+const productsEnabled = computed({
+  get: () => wizard.shopEnabled,
+  set: (val: boolean) => {
+    if (!val && wizard.products.length > 0) {
+      const confirmDisable = confirm(
+        "Disable products? This will hide the products step and remove products from publish.",
+      );
+      if (!confirmDisable) return;
+    }
+    wizard.shopEnabled = val;
+  },
+});
 </script>
 
 <template>
   <div class="step-additional-features">
     <h2>Enable additional features</h2>
+    <p class="section-desc">
+      Your ME3 profile can also work as a fully functional website. Enable any
+      features you want to add.
+    </p>
 
     <div class="feature-cards">
+      <!-- Links -->
+      <div class="feature-card">
+        <div class="feature-card-main">
+          <span class="feature-icon" aria-hidden="true">
+            <UiIcon name="Link" :size="18" />
+          </span>
+          <div class="feature-text">
+            <span class="feature-name">Links</span>
+            <span class="feature-desc">
+              Add social profiles and other places people can find you online.
+            </span>
+          </div>
+        </div>
+        <label class="feature-toggle">
+          <input v-model="linksEnabled" type="checkbox" />
+          <span class="feature-toggle-ui" />
+        </label>
+      </div>
+
+      <!-- Call to action -->
+      <div class="feature-card">
+        <div class="feature-card-main">
+          <span class="feature-icon" aria-hidden="true">
+            <UiIcon name="ExternalLink" :size="18" />
+          </span>
+          <div class="feature-text">
+            <span class="feature-name">Call-to-action</span>
+            <span class="feature-desc">
+              Give visitors a clear next step with a prominent button.
+            </span>
+          </div>
+        </div>
+        <label class="feature-toggle">
+          <input v-model="callToActionEnabled" type="checkbox" />
+          <span class="feature-toggle-ui" />
+        </label>
+      </div>
+
+      <!-- Pages -->
+      <div class="feature-card">
+        <div class="feature-card-main">
+          <span class="feature-icon" aria-hidden="true">
+            <UiIcon name="FileText" :size="18" />
+          </span>
+          <div class="feature-text">
+            <span class="feature-name">Pages</span>
+            <span class="feature-desc">
+              Build extra pages for information that needs more room.
+            </span>
+          </div>
+        </div>
+        <label class="feature-toggle">
+          <input v-model="pagesEnabled" type="checkbox" />
+          <span class="feature-toggle-ui" />
+        </label>
+      </div>
+
       <!-- Newsletter -->
       <div class="feature-card">
         <div class="feature-card-main">
@@ -129,6 +230,26 @@ const testimonialsEnabled = computed({
         </div>
         <label class="feature-toggle">
           <input type="checkbox" v-model="blogEnabled" />
+          <span class="feature-toggle-ui" />
+        </label>
+      </div>
+
+      <!-- Products -->
+      <div class="feature-card">
+        <div class="feature-card-main">
+          <span class="feature-icon" aria-hidden="true">
+            <UiIcon name="ShoppingCart" :size="18" />
+          </span>
+          <div class="feature-text">
+            <span class="feature-name">Products</span>
+            <span class="feature-desc">
+              List and sell digital or physical products. Use Bookings for
+              services and appointments.
+            </span>
+          </div>
+        </div>
+        <label class="feature-toggle">
+          <input v-model="productsEnabled" type="checkbox" />
           <span class="feature-toggle-ui" />
         </label>
       </div>

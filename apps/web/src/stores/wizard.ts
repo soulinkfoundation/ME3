@@ -373,6 +373,9 @@ export type WizardStepId =
   | "basics"
   | "avatar"
   | "banner"
+  | "mission"
+  | "goals"
+  | "wheel-of-life"
   | "links"
   | "call-to-action"
   | "pages"
@@ -393,6 +396,9 @@ const WIZARD_STEP_IDS: readonly WizardStepId[] = [
   "basics",
   "avatar",
   "banner",
+  "mission",
+  "goals",
+  "wheel-of-life",
   "links",
   "call-to-action",
   "pages",
@@ -412,7 +418,10 @@ const WIZARD_STEP_ID_ALIASES: Partial<Record<string, WizardStepId>> = {
   shop: "offerings",
   store: "offerings",
   offering: "offerings",
+  product: "offerings",
+  products: "offerings",
   cta: "call-to-action",
+  wheel: "wheel-of-life",
 };
 
 export function normalizeWizardStepId(value: string): WizardStepId | null {
@@ -420,6 +429,45 @@ export function normalizeWizardStepId(value: string): WizardStepId | null {
   if (!normalized) return null;
   if (WIZARD_STEP_ID_SET.has(normalized)) return normalized as WizardStepId;
   return WIZARD_STEP_ID_ALIASES[normalized] ?? null;
+}
+
+function legacyWizardStepIds(state: Record<string, unknown>): WizardStepId[] {
+  const ids: WizardStepId[] = [
+    "basics",
+    "avatar",
+    "banner",
+    "links",
+    "call-to-action",
+    "pages",
+    "additional-features",
+  ];
+  if (state.newsletterEnabled === true) ids.push("newsletter");
+  if (state.bookingsEnabled === true) ids.push("bookings");
+  if (state.blogEnabled === true) ids.push("blog");
+  ids.push("offerings");
+  if (state.testimonialsEnabled === true) ids.push("testimonials");
+  ids.push("publish");
+  return ids;
+}
+
+function legacyWizardStepId(
+  state: Record<string, unknown>,
+  storedProfile: Record<string, unknown>,
+  value: unknown,
+): WizardStepId | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+
+  // Preserve the previous release's one-time migration for drafts saved before
+  // Offerings was inserted into the old wizard.
+  const hasBusinessContext =
+    !!storedProfile.business && typeof storedProfile.business === "object";
+  const shouldMigrateOfferingsStep =
+    !hasBusinessContext && state.shopEnabled === false;
+  const migratedValue =
+    shouldMigrateOfferingsStep && value >= 11 ? value + 1 : value;
+  const ids = legacyWizardStepIds(state);
+  const index = Math.min(Math.max(Math.trunc(migratedValue), 1), ids.length) - 1;
+  return ids[index] ?? null;
 }
 
 function normalizeProductPriceCents(value: unknown): number {
@@ -518,7 +566,7 @@ type ExtendedMe3IntentBook = Me3IntentBook & {
 };
 
 const DEFAULT_BLOG_TITLE = "Blog";
-const DEFAULT_SHOP_TITLE = "Offerings";
+const DEFAULT_SHOP_TITLE = "Products";
 const DEFAULT_TESTIMONIALS_TITLE = "Testimonials";
 
 const STORAGE_KEY = "me3_wizard_state";
@@ -1350,10 +1398,13 @@ export const useWizardStore = defineStore("wizard", () => {
   const testimonials = ref<WizardTestimonial[]>([]);
 
   // Optional step visibility
+  const linksEnabled = ref(false);
+  const callToActionEnabled = ref(false);
+  const pagesEnabled = ref(false);
   const newsletterEnabled = ref(false);
   const blogEnabled = ref(false);
   const bookingsEnabled = ref(false);
-  const shopEnabled = ref(true);
+  const shopEnabled = ref(false);
   const testimonialsEnabled = ref(false);
   const blogTitle = ref<string>(DEFAULT_BLOG_TITLE);
   const shopTitle = ref<string>(DEFAULT_SHOP_TITLE);
@@ -1363,7 +1414,7 @@ export const useWizardStore = defineStore("wizard", () => {
   const testimonialsTitle = ref<string>(DEFAULT_TESTIMONIALS_TITLE);
   const sectionPaths = computed(() =>
     resolveSiteSectionPaths({
-      pages: pages.value,
+      pages: pagesEnabled.value ? pages.value : [],
       blogTitle: blogTitle.value,
       shopTitle: shopTitle.value,
       testimonialsTitle: testimonialsTitle.value,
@@ -1397,13 +1448,18 @@ export const useWizardStore = defineStore("wizard", () => {
       { id: "basics", name: "Basics" },
       { id: "avatar", name: "Avatar" },
       { id: "banner", name: "Banner" },
-      { id: "links", name: "Links" },
-      { id: "call-to-action", name: "Call-to-action" },
-      { id: "pages", name: "Pages" },
+      { id: "mission", name: "Mission" },
+      { id: "goals", name: "Goals" },
+      { id: "wheel-of-life", name: "Wheel of Life" },
       { id: "additional-features", name: "Additional Features" },
     ];
 
-    // Add conditional steps in order: Newsletter, Bookings, Blog, Offerings, Testimonials
+    // Website features are selected on Additional Features, then appended here.
+    if (linksEnabled.value) visibleSteps.push({ id: "links", name: "Links" });
+    if (callToActionEnabled.value) {
+      visibleSteps.push({ id: "call-to-action", name: "Call-to-action" });
+    }
+    if (pagesEnabled.value) visibleSteps.push({ id: "pages", name: "Pages" });
     if (newsletterEnabled.value) {
       visibleSteps.push({ id: "newsletter", name: "Newsletter" });
     }
@@ -1411,7 +1467,9 @@ export const useWizardStore = defineStore("wizard", () => {
       visibleSteps.push({ id: "bookings", name: "Bookings" });
     }
     if (blogEnabled.value) visibleSteps.push({ id: "blog", name: "Blog" });
-    visibleSteps.push({ id: "offerings", name: "Offerings" });
+    if (shopEnabled.value) {
+      visibleSteps.push({ id: "offerings", name: "Products" });
+    }
     if (testimonialsEnabled.value) {
       visibleSteps.push({ id: "testimonials", name: "Testimonials" });
     }
@@ -1430,6 +1488,34 @@ export const useWizardStore = defineStore("wizard", () => {
   const currentStepId = computed(() => currentStepDefinition.value?.id ?? null);
   const currentStepName = computed(() => currentStepDefinition.value?.name ?? "");
 
+  watch(
+    stepIds,
+    (nextStepIds, previousStepIds) => {
+      if (!previousStepIds?.length) return;
+
+      const previousCurrentId = previousStepIds[currentStep.value - 1];
+      const previousFurthestId = previousStepIds[furthestStep.value - 1];
+      const nextCurrentIndex = previousCurrentId
+        ? nextStepIds.indexOf(previousCurrentId)
+        : -1;
+      const nextFurthestIndex = previousFurthestId
+        ? nextStepIds.indexOf(previousFurthestId)
+        : -1;
+
+      currentStep.value =
+        nextCurrentIndex >= 0
+          ? nextCurrentIndex + 1
+          : Math.min(currentStep.value, nextStepIds.length);
+      furthestStep.value = Math.max(
+        currentStep.value,
+        nextFurthestIndex >= 0
+          ? nextFurthestIndex + 1
+          : Math.min(furthestStep.value, nextStepIds.length),
+      );
+    },
+    { flush: "sync" },
+  );
+
   // Check if site needs publishing
   const needsPublish = computed(() => {
     // If never published, definitely needs publish
@@ -1443,7 +1529,7 @@ export const useWizardStore = defineStore("wizard", () => {
 
   // Can proceed to next step?
   const canProceed = computed(() => {
-    if (currentStepName.value === "Basics") {
+    if (currentStepId.value === "basics") {
       return (
         profile.value.name.trim().length >= 2 &&
         profile.value.handle.trim().length >= 3 &&
@@ -1456,6 +1542,9 @@ export const useWizardStore = defineStore("wizard", () => {
 
   watch(
     [
+      linksEnabled,
+      callToActionEnabled,
+      pagesEnabled,
       newsletterEnabled,
       blogEnabled,
       bookingsEnabled,
@@ -1476,6 +1565,7 @@ export const useWizardStore = defineStore("wizard", () => {
       if (furthestStep.value < currentStep.value) {
         furthestStep.value = currentStep.value;
       }
+      markAsEdited();
       saveToStorage();
     },
     { flush: "sync" },
@@ -1498,14 +1588,14 @@ export const useWizardStore = defineStore("wizard", () => {
   );
 
   watch(
-    [pages, blogEnabled, shopEnabled, products],
+    [pages, pagesEnabled, blogEnabled, shopEnabled, products],
     () => {
       const normalizedPlacement = normalizeTestimonialPlacement(
         testimonialsPlacement.value,
         {
           blogEnabled: blogEnabled.value,
           shopEnabled: shopEnabled.value && products.value.length > 0,
-          pages: pages.value,
+          pages: pagesEnabled.value ? pages.value : [],
         },
       );
 
@@ -1567,9 +1657,13 @@ export const useWizardStore = defineStore("wizard", () => {
   }
 
   function enableStep(stepId: WizardStepId) {
+    if (stepId === "links") linksEnabled.value = true;
+    if (stepId === "call-to-action") callToActionEnabled.value = true;
+    if (stepId === "pages") pagesEnabled.value = true;
     if (stepId === "newsletter") newsletterEnabled.value = true;
     if (stepId === "bookings") bookingsEnabled.value = true;
     if (stepId === "blog") blogEnabled.value = true;
+    if (stepId === "offerings") shopEnabled.value = true;
     if (stepId === "testimonials") testimonialsEnabled.value = true;
   }
 
@@ -3029,15 +3123,15 @@ export const useWizardStore = defineStore("wizard", () => {
       .filter(([_, value]) => value && value.trim())
       .reduce((acc, [key, value]) => ({ ...acc, [key]: value.trim() }), {});
 
-    if (Object.keys(validLinks).length > 0) {
+    if (linksEnabled.value && Object.keys(validLinks).length > 0) {
       me3.links = validLinks;
     }
 
-    if (profile.value.buttons.length > 0) {
+    if (callToActionEnabled.value && profile.value.buttons.length > 0) {
       me3.buttons = profile.value.buttons;
     }
 
-    if (pages.value.length > 0) {
+    if (pagesEnabled.value && pages.value.length > 0) {
       me3.pages = pages.value.map((p) => ({
         slug: p.slug,
         title: p.title,
@@ -3114,7 +3208,7 @@ export const useWizardStore = defineStore("wizard", () => {
           return product;
         }) as SiteSourceProduct[];
       const cleanedShopTitle = shopTitle.value.trim();
-      if (cleanedShopTitle && cleanedShopTitle !== DEFAULT_SHOP_TITLE) {
+      if (cleanedShopTitle) {
         me3.shopTitle = cleanedShopTitle;
       }
     }
@@ -3155,7 +3249,7 @@ export const useWizardStore = defineStore("wizard", () => {
           {
             blogEnabled: blogEnabled.value,
             shopEnabled: shopEnabled.value && products.value.length > 0,
-            pages: pages.value,
+            pages: pagesEnabled.value ? pages.value : [],
           },
         );
         if (normalizedPlacement !== "homepage") {
@@ -3695,9 +3789,12 @@ export const useWizardStore = defineStore("wizard", () => {
     try {
       // Don't save blobs to localStorage
       const state = {
+        optionalWebsiteFeaturesVersion: 1,
         ownerUserId: sessionUserId.value,
         currentStep: currentStep.value,
         furthestStep: furthestStep.value,
+        currentStepId: currentStepId.value,
+        furthestStepId: stepIds.value[furthestStep.value - 1] || null,
         profile: {
           ...profile.value,
           avatarBlob: null,
@@ -3731,6 +3828,9 @@ export const useWizardStore = defineStore("wizard", () => {
         username: username.value,
         vibe: vibe.value,
         accentOverride: accentOverride.value,
+        linksEnabled: linksEnabled.value,
+        callToActionEnabled: callToActionEnabled.value,
+        pagesEnabled: pagesEnabled.value,
         newsletterEnabled: newsletterEnabled.value,
         blogEnabled: blogEnabled.value,
         bookingsEnabled: bookingsEnabled.value,
@@ -3831,6 +3931,20 @@ export const useWizardStore = defineStore("wizard", () => {
         username.value = storedUsername || "";
         vibe.value = state.vibe || defaultVibe;
         accentOverride.value = state.accentOverride || null;
+        const hasOptionalWebsiteFeatureState =
+          state.optionalWebsiteFeaturesVersion === 1;
+        linksEnabled.value = hasOptionalWebsiteFeatureState
+          ? state.linksEnabled === true
+          : Object.values(storedProfile.links || {}).some(
+              (value) => typeof value === "string" && value.trim().length > 0,
+            );
+        callToActionEnabled.value = hasOptionalWebsiteFeatureState
+          ? state.callToActionEnabled === true
+          : Array.isArray(storedProfile.buttons) &&
+            storedProfile.buttons.length > 0;
+        pagesEnabled.value = hasOptionalWebsiteFeatureState
+          ? state.pagesEnabled === true
+          : pages.value.length > 0;
         newsletterEnabled.value =
           typeof state.newsletterEnabled === "boolean"
             ? state.newsletterEnabled
@@ -3843,7 +3957,9 @@ export const useWizardStore = defineStore("wizard", () => {
           typeof state.bookingsEnabled === "boolean"
             ? state.bookingsEnabled
             : false;
-        shopEnabled.value = true;
+        shopEnabled.value = hasOptionalWebsiteFeatureState
+          ? state.shopEnabled === true
+          : products.value.length > 0;
         testimonialsEnabled.value =
           typeof state.testimonialsEnabled === "boolean"
             ? state.testimonialsEnabled
@@ -3866,7 +3982,7 @@ export const useWizardStore = defineStore("wizard", () => {
           {
             blogEnabled: blogEnabled.value,
             shopEnabled: shopEnabled.value && products.value.length > 0,
-            pages: pages.value,
+            pages: pagesEnabled.value ? pages.value : [],
           },
         );
         lastPublishedAt.value = state.lastPublishedAt || null;
@@ -3879,30 +3995,54 @@ export const useWizardStore = defineStore("wizard", () => {
             ? state.draftSourceUrl
             : null;
 
-        const hasBusinessContext =
-          !!storedProfile.business &&
-          typeof storedProfile.business === "object";
-        const shouldMigrateOfferingsStep =
-          !hasBusinessContext && state.shopEnabled === false;
-        const migrateStepIndex = (step: number) =>
-          shouldMigrateOfferingsStep && step >= 11 ? step + 1 : step;
-
-        const savedCurrentStep =
-          typeof state.currentStep === "number" ? state.currentStep : 1;
-        currentStep.value = Math.min(
-          Math.max(migrateStepIndex(savedCurrentStep), 1),
-          totalSteps.value,
+        const explicitCurrentStepId = normalizeWizardStepId(
+          typeof state.currentStepId === "string" ? state.currentStepId : "",
         );
+        const savedCurrentStepId =
+          explicitCurrentStepId ||
+          (!hasOptionalWebsiteFeatureState
+            ? legacyWizardStepId(state, storedProfile, state.currentStep)
+            : null);
+        const explicitFurthestStepId = normalizeWizardStepId(
+          typeof state.furthestStepId === "string" ? state.furthestStepId : "",
+        );
+        const savedFurthestStepId =
+          explicitFurthestStepId ||
+          (!hasOptionalWebsiteFeatureState
+            ? legacyWizardStepId(
+                state,
+                storedProfile,
+                state.furthestStep ?? state.currentStep,
+              )
+            : null);
+
+        // A saved draft can be sitting on an editor that is optional now. Keep
+        // that editor visible so upgrading never silently changes its identity.
+        if (savedCurrentStepId) enableStep(savedCurrentStepId);
+        if (savedFurthestStepId) enableStep(savedFurthestStepId);
+
+        const savedCurrentStepIndex = savedCurrentStepId
+          ? stepIds.value.indexOf(savedCurrentStepId)
+          : -1;
+        const savedCurrentStep =
+          savedCurrentStepIndex >= 0
+            ? savedCurrentStepIndex + 1
+            : typeof state.currentStep === "number"
+              ? state.currentStep
+              : 1;
+        currentStep.value = Math.min(Math.max(savedCurrentStep, 1), totalSteps.value);
+
+        const savedFurthestStepIndex = savedFurthestStepId
+          ? stepIds.value.indexOf(savedFurthestStepId)
+          : -1;
         const savedFurthestStep =
-          typeof state.furthestStep === "number"
-            ? state.furthestStep
-            : currentStep.value;
+          savedFurthestStepIndex >= 0
+            ? savedFurthestStepIndex + 1
+            : typeof state.furthestStep === "number"
+              ? state.furthestStep
+              : currentStep.value;
         furthestStep.value = Math.min(
-          Math.max(
-            migrateStepIndex(savedFurthestStep),
-            currentStep.value,
-            1,
-          ),
+          Math.max(savedFurthestStep, currentStep.value, 1),
           totalSteps.value,
         );
 
@@ -3983,10 +4123,13 @@ export const useWizardStore = defineStore("wizard", () => {
     lastLocalEditAt.value = new Date().toISOString();
     lastSiteEditAt.value = lastLocalEditAt.value;
     draftSourceUrl.value = null;
+    linksEnabled.value = false;
+    callToActionEnabled.value = false;
+    pagesEnabled.value = false;
     newsletterEnabled.value = false;
     blogEnabled.value = false;
     bookingsEnabled.value = false;
-    shopEnabled.value = true;
+    shopEnabled.value = false;
     testimonialsEnabled.value = false;
     blogTitle.value = DEFAULT_BLOG_TITLE;
     shopTitle.value = DEFAULT_SHOP_TITLE;
@@ -4542,10 +4685,15 @@ export const useWizardStore = defineStore("wizard", () => {
         : DEFAULT_TESTIMONIALS_TITLE;
 
     // Restore enabled states from site content
+    linksEnabled.value = Object.values(filteredLinks).some(
+      (value) => typeof value === "string" && value.trim().length > 0,
+    );
+    callToActionEnabled.value = buttons.length > 0;
+    pagesEnabled.value = pages.value.length > 0;
     newsletterEnabled.value = Boolean(siteProfile.intents?.subscribe?.enabled);
     blogEnabled.value = Boolean(siteProfile.blogEnabled) || siteBlogPosts.length > 0;
     bookingsEnabled.value = Boolean(siteProfile.intents?.book?.enabled);
-    shopEnabled.value = true;
+    shopEnabled.value = products.value.length > 0;
     testimonialsEnabled.value = (siteProfile.testimonials || []).length > 0;
     testimonialsPlacement.value = normalizeTestimonialPlacement(
       getStoredTestimonialPlacement(siteProfile as {
@@ -4555,7 +4703,7 @@ export const useWizardStore = defineStore("wizard", () => {
       {
         blogEnabled: blogEnabled.value,
         shopEnabled: shopEnabled.value && products.value.length > 0,
-        pages: pages.value,
+        pages: pagesEnabled.value ? pages.value : [],
       },
     );
     furthestStep.value = totalSteps.value;
@@ -4603,6 +4751,9 @@ export const useWizardStore = defineStore("wizard", () => {
     draftSourceUrl,
     vibe,
     accentOverride,
+    linksEnabled,
+    callToActionEnabled,
+    pagesEnabled,
     newsletterEnabled,
     blogEnabled,
     bookingsEnabled,

@@ -1,11 +1,41 @@
 import { Page, expect } from "@playwright/test";
 
+const wizardStepNames: Record<string, string> = {
+  basics: "Basics",
+  avatar: "Avatar",
+  banner: "Banner",
+  mission: "Mission",
+  goals: "Goals",
+  "wheel-of-life": "Wheel of Life",
+  "additional-features": "Additional Features",
+  links: "Links",
+  "call-to-action": "Call-to-action",
+  pages: "Pages",
+  newsletter: "Newsletter",
+  bookings: "Bookings",
+  blog: "Blog",
+  offerings: "Products",
+  products: "Products",
+  testimonials: "Testimonials",
+  publish: "Publish",
+};
+
 export class WizardPage {
   constructor(private page: Page) {}
 
   async goto() {
     await this.page.goto("/create?step=basics");
     await this.page.locator("#name").waitFor({ state: "visible" });
+  }
+
+  async gotoStep(stepId: string) {
+    await this.page.goto(`/create?step=${encodeURIComponent(stepId)}`);
+    const stepName = wizardStepNames[stepId];
+    if (stepName) {
+      await expect(this.page.locator(".step-name")).toContainText(stepName);
+      return;
+    }
+    await this.page.locator(".step-name").waitFor({ state: "visible" });
   }
 
   async fillBasics(name: string, handle: string, bio?: string) {
@@ -39,9 +69,9 @@ export class WizardPage {
       `.progress-step[data-step-name="${name}"]`,
     );
     if (enabled) {
-      await expect(shortcut).not.toHaveAttribute("aria-disabled", "true");
+      await expect(shortcut).toBeEnabled();
     } else {
-      await expect(shortcut).toHaveAttribute("aria-disabled", "true");
+      await expect(shortcut).toBeDisabled();
     }
   }
 

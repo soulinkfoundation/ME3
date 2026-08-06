@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
+import { useRouter } from "vue-router";
 import { api } from "../api";
 import Button from "../components/Button.vue";
 import IconPicker from "../components/IconPicker.vue";
@@ -11,6 +12,7 @@ import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { useWizardStore, type WizardStepId } from "../stores/wizard";
 import { resolveUiIconName, type UiIconName } from "../utils/icons";
 
 definePage({
@@ -80,9 +82,25 @@ type DailyBriefingCardData = {
 
 type MissionStatementCardData = {
   missionStatement: string;
-  mainGoal: string;
   placeholder: string;
-  mainGoalPlaceholder: string;
+  source: "profile" | "legacy";
+};
+
+type MissionGoal = {
+  id: string;
+  title: string;
+  status: "active" | "completed";
+};
+
+type GoalsCardData = {
+  goals: MissionGoal[];
+};
+
+type Me3ProfileCardData = {
+  name: string;
+  handle: string;
+  bio: string;
+  missionStatement: string;
 };
 
 type WheelSnapshotCardData = {
@@ -179,12 +197,15 @@ type MissionDashboardResponse = {
   settings: {
     kanbanEnabled: boolean;
     mainGoal: string;
+    goals: MissionGoal[];
     setupChecklistDismissed: boolean;
   };
   data: {
     "mission.daily-briefing": DailyBriefingCardData;
     "mission.mission-statement": MissionStatementCardData;
+    "mission.goals": GoalsCardData;
     "mission.wheel-latest-snapshot": WheelSnapshotCardData;
+    "mission.me3-profile": Me3ProfileCardData | null;
     [cardId: string]: unknown;
   };
 };
@@ -192,7 +213,9 @@ type MissionDashboardResponse = {
 const dashboardCardRegistry = new Set([
   "DailyBriefingCard",
   "MissionStatementCard",
+  "GoalsCard",
   "WheelSnapshotCard",
+  "Me3ProfileCard",
   "AiUsageCard",
   "ProjectsSummaryCard",
   "AccountsSummaryCard",
@@ -205,15 +228,13 @@ const dashboardCardRegistry = new Set([
 const { toastFromUnknown, toastSuccess } = useAppToast();
 const auth = useAuthStore();
 const sites = useSitesStore();
+const wizard = useWizardStore();
+const router = useRouter();
 const dashboard = ref<MissionDashboardResponse | null>(null);
 const liveDailyBriefing = ref<DailyBriefingCardData>(null);
 const dailyBriefingLoading = ref(false);
 const loading = ref(true);
 const error = ref("");
-const missionStatementDraft = ref("");
-const mainGoalDraft = ref("");
-const missionStatementEditing = ref(false);
-const missionStatementSaving = ref(false);
 const dashboardEditing = ref(false);
 const cardDrafts = ref<DashboardCardInstance[]>([]);
 const quickActionDrafts = ref<DashboardQuickLink[]>([]);
@@ -341,17 +362,15 @@ function dailyBriefingTaskPath(taskId: string): string {
 const missionStatement = computed(
   () => dashboard.value?.data["mission.mission-statement"] || null,
 );
+const missionGoals = computed(
+  () => dashboard.value?.data["mission.goals"]?.goals || [],
+);
+const me3Profile = computed(
+  () => dashboard.value?.data["mission.me3-profile"] || null,
+);
 const wheelSnapshot = computed(
   () => dashboard.value?.data["mission.wheel-latest-snapshot"] || null,
 );
-const setupProfilePath = computed(() => {
-  const profileSite = sites.sites.find(
-    (site) => (site.site_type || "profile") === "profile",
-  );
-  return profileSite?.username
-    ? `/sites/${encodeURIComponent(profileSite.username)}`
-    : "/create";
-});
 const projectTaskProjects = computed(() =>
   Array.from(
     new Map(
@@ -437,20 +456,8 @@ function quickActionDestinationLabel(link: DashboardQuickLink): string {
 
 function missionStatementDisplayText(): string {
   return (
-    missionStatementDraft.value.trim() ||
     missionStatement.value?.missionStatement.trim() ||
     missionStatement.value?.placeholder ||
-    ""
-  );
-}
-
-const mainGoalHasValue = computed(() => Boolean(mainGoalDisplayText().trim()));
-
-function mainGoalDisplayText(): string {
-  return (
-    mainGoalDraft.value.trim() ||
-    dashboard.value?.mainGoal?.trim() ||
-    missionStatement.value?.mainGoal?.trim() ||
     ""
   );
 }
@@ -513,10 +520,42 @@ function closeDashboardEditor() {
   syncDashboardDrafts();
 }
 
-function startMissionStatementEdit() {
-  missionStatementDraft.value = dashboard.value?.missionStatement || "";
-  mainGoalDraft.value = dashboard.value?.mainGoal || "";
-  missionStatementEditing.value = true;
+async function openWizardEditor(step: WizardStepId) {
+  try {
+    await sites.ensureSites();
+    const profileSite = sites.sites.find(
+      (site) => (site.site_type || "profile") === "profile",
+    );
+    if (profileSite?.username) {
+      const localHandle = (wizard.username || wizard.profile.handle)
+        .trim()
+        .toLowerCase();
+      const preserveLocalDraft =
+        wizard.needsPublish &&
+        localHandle === profileSite.username.trim().toLowerCase() &&
+        Boolean(wizard.profile.name.trim());
+      if (!preserveLocalDraft) {
+        const content = await sites.getSiteContent(profileSite.username);
+        if (content?.ok && content.profile) {
+          wizard.loadFromSiteContent(
+            content.profile,
+            content.pages,
+            content.posts,
+            content.products || [],
+            profileSite.username,
+            profileSite.published_at || null,
+          );
+        }
+      }
+    }
+    wizard.goToStepId(step, { enableOptional: true });
+    await router.push({
+      path: "/create",
+      query: { step, return: "/mission-control" },
+    });
+  } catch (err) {
+    toastFromUnknown(err, "The ME3 profile editor could not be opened");
+  }
 }
 
 function updateCardDraft(
@@ -681,8 +720,6 @@ async function loadDashboard() {
       dashboard.value.settings.setupChecklistDismissed ||
       localStorage.getItem("me3:mission-control:setup-checklist-dismissed") ===
         "true";
-    missionStatementDraft.value = dashboard.value.missionStatement;
-    mainGoalDraft.value = dashboard.value.mainGoal;
     syncDashboardDrafts();
     if (visibleCardEnabled("mission.ai-usage")) {
       void loadAiUsage();
@@ -769,28 +806,6 @@ function closeOpenDashboardModals() {
   aiUsageConfigureOpen.value = false;
   cardPickerOpen.value = false;
   quickActionPickerOpen.value = false;
-}
-
-async function saveMissionStatement() {
-  if (missionStatementSaving.value) return;
-  missionStatementSaving.value = true;
-  try {
-    dashboard.value = await api.patch<MissionDashboardResponse>(
-      "/mission-control/dashboard",
-      {
-        missionStatement: missionStatementDraft.value,
-        mainGoal: mainGoalDraft.value,
-      },
-    );
-    missionStatementDraft.value = dashboard.value.missionStatement;
-    mainGoalDraft.value = dashboard.value.mainGoal;
-    missionStatementEditing.value = false;
-    toastSuccess("Mission context saved");
-  } catch (err) {
-    toastFromUnknown(err, "Mission context could not be saved");
-  } finally {
-    missionStatementSaving.value = false;
-  }
 }
 
 async function saveDashboardLayout() {
@@ -980,9 +995,13 @@ onBeforeUnmount(() => {
           <ul class="setup-checklist-card__list">
             <li>
               <UiIcon name="CircleCheck" :size="15" aria-hidden="true" />
-              <RouterLink :to="setupProfilePath">
+              <button
+                class="setup-checklist-card__link"
+                type="button"
+                @click="openWizardEditor('basics')"
+              >
                 Complete your profile
-              </RouterLink>
+              </button>
             </li>
             <li>
               <UiIcon name="CircleCheck" :size="15" aria-hidden="true" />
@@ -1112,95 +1131,110 @@ onBeforeUnmount(() => {
           >
             <header class="dashboard-card__header">
               <h2 class="dashboard-card__title">
-                <span>🚀 Mission Statement</span>
+                <span>🚀 Mission</span>
               </h2>
-              <div
+              <Button
                 v-if="!dashboardEditing"
-                class="dashboard-card__actions dashboard-card__actions--inline"
-                :class="{ 'is-active': missionStatementEditing }"
+                class="dashboard-card__action-button"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                aria-label="Edit Mission"
+                title="Edit Mission"
+                @click="openWizardEditor('mission')"
               >
-                <Button
-                  v-if="!missionStatementEditing"
-                  class="dashboard-card__action-button"
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  icon-only
-                  aria-label="Edit mission context"
-                  title="Edit mission context"
-                  @click="startMissionStatementEdit"
-                >
-                  <UiIcon name="Pencil" :size="16" />
-                </Button>
-                <Button
-                  v-else
-                  class="dashboard-card__action-button is-saving"
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  icon-only
-                  aria-label="Save mission context"
-                  title="Save mission context"
-                  :disabled="missionStatementSaving"
-                  @click="saveMissionStatement"
-                >
-                  <UiIcon name="Save" :size="16" />
-                </Button>
-              </div>
+                <UiIcon name="Pencil" :size="16" />
+              </Button>
             </header>
-            <form
-              v-if="missionStatementEditing"
-              class="mission-statement-form"
-              @submit.prevent="saveMissionStatement"
-            >
-              <label class="mission-statement-form__field">
-                <span>Mission statement</span>
-                <textarea
-                  v-model="missionStatementDraft"
-                  :placeholder="missionStatement?.placeholder"
-                  rows="5"
-                />
-              </label>
-              <label class="mission-statement-form__field">
-                <span>Goals</span>
-                <textarea
-                  v-model="mainGoalDraft"
-                  :placeholder="missionStatement?.mainGoalPlaceholder"
-                  rows="3"
-                  maxlength="600"
-                />
-              </label>
-            </form>
-            <div v-else class="mission-context-display">
-              <p class="mission-statement-display">
-                {{ missionStatementDisplayText() }}
-              </p>
-              <div
-                class="mission-goal-display"
-                :class="{ 'is-empty': !mainGoalHasValue }"
+            <p class="mission-statement-display">
+              {{ missionStatementDisplayText() }}
+            </p>
+          </template>
+
+          <template v-else-if="cardComponentKey(card) === 'GoalsCard'">
+            <header class="dashboard-card__header">
+              <h2 class="dashboard-card__title"><span>🎯 Goals</span></h2>
+              <Button
+                v-if="!dashboardEditing"
+                class="dashboard-card__action-button"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                aria-label="Edit Goals"
+                title="Edit Goals"
+                @click="openWizardEditor('goals')"
               >
-                <h3 class="dashboard-card__title mission-goal-display__title">
-                  <span>🎯 Goals</span>
-                </h3>
-                <p>
-                  {{
-                    mainGoalHasValue
-                      ? mainGoalDisplayText()
-                      : "No current goals set yet."
-                  }}
-                </p>
-              </div>
+                <UiIcon name="Pencil" :size="16" />
+              </Button>
+            </header>
+            <div v-if="missionGoals.length" class="mission-context-display">
+              <p
+                v-for="goal in missionGoals"
+                :key="goal.id"
+                class="dashboard-card__body"
+              >
+                {{ goal.status === "completed" ? "✓" : "•" }} {{ goal.title }}
+              </p>
+            </div>
+            <div v-else class="dashboard-empty">
+              <p>No goals set yet.</p>
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                @click="openWizardEditor('goals')"
+              >
+                Add Goals
+              </Button>
+            </div>
+          </template>
+
+          <template v-else-if="cardComponentKey(card) === 'Me3ProfileCard'">
+            <header class="dashboard-card__header">
+              <h2 class="dashboard-card__title"><span>👤 ME3 Profile</span></h2>
+              <Button
+                v-if="!dashboardEditing"
+                class="dashboard-card__action-button"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                aria-label="Edit ME3 Profile"
+                title="Edit ME3 Profile"
+                @click="openWizardEditor('basics')"
+              >
+                <UiIcon name="Pencil" :size="16" />
+              </Button>
+            </header>
+            <div v-if="me3Profile" class="mission-context-display">
+              <p class="dashboard-card__body">
+                <strong>{{ me3Profile.name }}</strong>
+                <span v-if="me3Profile.handle"> @{{ me3Profile.handle }}</span>
+              </p>
+              <p v-if="me3Profile.bio" class="dashboard-card__body">
+                {{ me3Profile.bio }}
+              </p>
+            </div>
+            <div v-else class="dashboard-empty">
+              <p>Create your ME3 profile to give the agent its core context.</p>
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                @click="openWizardEditor('basics')"
+              >
+                Create Profile
+              </Button>
             </div>
           </template>
 
           <template v-else-if="cardComponentKey(card) === 'WheelSnapshotCard'">
             <header class="dashboard-card__header">
-              <RouterLink
-                class="dashboard-card__title dashboard-card__title-link"
-                to="/mission-control/wheel-of-life"
-              >
+              <h2 class="dashboard-card__title">
                 <span>🎡 Wheel of Life</span>
-              </RouterLink>
+              </h2>
               <div class="dashboard-card__header-actions">
                 <span v-if="wheelSnapshot?.snapshot">
                   Saved
@@ -1216,9 +1250,9 @@ onBeforeUnmount(() => {
                     shape="soft"
                     size="compact"
                     icon-only
-                    to="/mission-control/wheel-of-life"
                     aria-label="Open Wheel of Life"
                     title="Open Wheel of Life"
+                    @click="openWizardEditor('wheel-of-life')"
                   >
                     <UiIcon name="Eye" :size="16" />
                   </Button>
@@ -1242,7 +1276,7 @@ onBeforeUnmount(() => {
                 color="outline"
                 shape="soft"
                 size="compact"
-                to="/mission-control/wheel-of-life"
+                @click="openWizardEditor('wheel-of-life')"
               >
                 Open Wheel
               </Button>

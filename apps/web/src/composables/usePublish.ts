@@ -2,6 +2,8 @@ import { computed, ref } from "vue";
 import { useWizardStore, type WizardPageImage } from "../stores/wizard";
 import { productSendsPurchaseConfirmation } from "../../../../shared/product-purchase-confirmation";
 import { useSitesStore, type PublishManifest } from "../stores/sites";
+import { useAuthStore } from "../stores/auth";
+import { api } from "../api";
 import { createContentTurndownService } from "../utils/contentMarkdown";
 import { resolvePublicProfileUrl } from "../utils/publicSiteUrl";
 
@@ -153,22 +155,26 @@ function validateShopConfirmationEmails(
 function validateManualPaymentInstructions(
   wizard: ReturnType<typeof useWizardStore>,
 ): string | null {
-  const product = wizard.products.find(
-    (candidate) =>
-      candidate.available &&
-      candidate.price > 0 &&
-      candidate.paymentMethod === "manual" &&
-      !candidate.paymentInstructions.trim(),
-  );
+  const product = wizard.shopEnabled
+    ? wizard.products.find(
+        (candidate) =>
+          candidate.available &&
+          candidate.price > 0 &&
+          candidate.paymentMethod === "manual" &&
+          !candidate.paymentInstructions.trim(),
+      )
+    : undefined;
   if (product) {
     return `Offerings — "${product.title}": add payment instructions for pay separately.`;
   }
 
-  const bookingOffers = [
-    ...wizard.profile.booking.offers,
-    ...wizard.profile.booking.classOffers,
-    ...wizard.profile.booking.retreatOffers,
-  ];
+  const bookingOffers = wizard.bookingsEnabled
+    ? [
+        ...wizard.profile.booking.offers,
+        ...wizard.profile.booking.classOffers,
+        ...wizard.profile.booking.retreatOffers,
+      ]
+    : [];
   const booking = bookingOffers.find(
     (candidate) =>
       candidate.pricing?.enabled &&
@@ -184,6 +190,7 @@ function validateManualPaymentInstructions(
 export function usePublish() {
   const wizard = useWizardStore();
   const sites = useSitesStore();
+  const auth = useAuthStore();
 
   const isPublishing = ref(false);
   const publishProgress = ref<string | null>(null);
@@ -298,7 +305,9 @@ export function usePublish() {
         }
       }
 
-      const publishableT = wizard.publishableTestimonials();
+      const publishableT = wizard.testimonialsEnabled
+        ? wizard.publishableTestimonials()
+        : [];
       for (let i = 0; i < publishableT.length; i++) {
         const t = publishableT[i];
         if (!t.avatarBlob) continue;
@@ -321,15 +330,17 @@ export function usePublish() {
       }
 
       // Convert pages/posts/products to markdown and gather referenced images
-      const exportedPages = wizard.pages.map((p) => ({
-        page: p,
-        exported: exportContentToMarkdown(
-          p.content,
-          p.slug,
-          p.images || [],
-          "./",
-        ),
-      }));
+      const exportedPages = wizard.pagesEnabled
+        ? wizard.pages.map((p) => ({
+            page: p,
+            exported: exportContentToMarkdown(
+              p.content,
+              p.slug,
+              p.images || [],
+              "./",
+            ),
+          }))
+        : [];
 
       const exportedPosts = wizard.blogEnabled
         ? wizard.posts
@@ -395,9 +406,11 @@ export function usePublish() {
       }
 
       // Upload video posts to Cloudflare Stream (if any)
-      const videoPosts = wizard.posts
-        .map((post, index) => ({ post, index }))
-        .filter(({ post }) => post.type === "video" && post.mediaFile);
+      const videoPosts = wizard.blogEnabled
+        ? wizard.posts
+            .map((post, index) => ({ post, index }))
+            .filter(({ post }) => post.type === "video" && post.mediaFile)
+        : [];
 
       if (videoPosts.length > 0) {
         let done = 0;
@@ -506,6 +519,15 @@ export function usePublish() {
 
       // Mark as published in wizard store
       wizard.markAsPublished();
+
+      if (auth.sessionOnboardingStartStep) {
+        try {
+          await api.post<{ ok: boolean }>("/onboarding/complete", {});
+          auth.setSessionOnboardingStartStep(null);
+        } catch (error) {
+          console.warn("Profile published, but onboarding completion did not sync", error);
+        }
+      }
 
       const siteUrl = await resolvePublicProfileUrl(username);
 

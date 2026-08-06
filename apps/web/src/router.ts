@@ -280,8 +280,8 @@ router.beforeEach(async (to, _from, next) => {
       next({ path: "/login", query: { redirect: to.fullPath } });
       return;
     }
-    if (defaultAppPath === "/start") {
-      next({ path: "/start", replace: true });
+    if (defaultAppPath === "/start" || defaultAppPath === "/create") {
+      next({ path: "/create", replace: true });
       return;
     }
   }

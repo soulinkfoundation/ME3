@@ -17,12 +17,12 @@ export function resolveProfileSetupPath(
   options: ProfileSetupPathOptions,
 ): string {
   if (options.onboardingStartStep === 2 || options.onboardingStartStep === 3) {
-    return options.setupPath || "/start";
+    return options.setupPath || "/create";
   }
   if (!options.sitesLoaded || options.hasProfileSite) {
     return options.defaultPath;
   }
-  return options.setupPath || "/start";
+  return options.setupPath || "/create";
 }
 
 export function isStartRedirectPath(pathname: string): boolean {
@@ -67,7 +67,7 @@ export function resolveMe3OAuthRedirect(
   raw: unknown,
   options: LoginRedirectOptions,
 ): string {
-  if (options.setupIncomplete) return "/start";
+  if (options.setupIncomplete) return "/create";
 
   const redirect = normalizeSafeLoginRedirect(raw, options);
   if (!redirect || isStartLoginRedirect(redirect, options.origin)) {

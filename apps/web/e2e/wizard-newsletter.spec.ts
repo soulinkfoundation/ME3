@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures/test";
+import { test } from "./fixtures/test";
 import { WizardPage } from "./helpers/wizard";
 
 test.describe("Wizard Newsletter Step", () => {
@@ -15,32 +15,7 @@ test.describe("Wizard Newsletter Step", () => {
       });
     });
 
-    await wizard.goto();
-
-    // Navigate to Newsletter step (requires enabling newsletter first)
-    await wizard.fillBasics("Newsletter Test", "newslettertest", "Testing Newsletter");
-    await wizard.waitForUsernameCheck();
-    await wizard.nextStep(); // Avatar
-    await wizard.nextStep(); // Banner
-    await wizard.nextStep(); // Links
-    await wizard.nextStep(); // CTA
-    await wizard.nextStep(); // Pages
-    await wizard.nextStep(); // Additional Features
-    
-    // Enable newsletter feature
-    const newsletterToggle = page.locator(
-      '.feature-card:has(.feature-name:has-text("Newsletter")) .feature-toggle',
-    );
-    
-    if ((await newsletterToggle.count()) > 0) {
-      await newsletterToggle.click();
-      await page.waitForTimeout(300);
-      await expect(
-        newsletterToggle.locator('input[type="checkbox"]'),
-      ).toBeChecked();
-    }
-    
-    await wizard.nextStep(); // Newsletter
+    await wizard.gotoStep("newsletter");
   });
 
   test("should display newsletter step", async ({ page }) => {
@@ -64,8 +39,6 @@ test.describe("Wizard Newsletter Step", () => {
     await wizard.expectCanProceed(true);
     await wizard.nextStep();
 
-    // Should proceed to next step (Publish or next enabled feature)
-    const stepName = await page.locator(".step-name").textContent();
-    expect(stepName).toBeTruthy();
+    await wizard.expectStepName("Publish");
   });
 });

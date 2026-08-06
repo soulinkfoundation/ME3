@@ -15,17 +15,7 @@ test.describe("Wizard Additional Features Step", () => {
       });
     });
 
-    await wizard.goto();
-
-    // Navigate to Additional Features step
-    await wizard.fillBasics("Features Test", "featurestest", "Testing Features");
-    await wizard.waitForUsernameCheck();
-    await wizard.nextStep(); // Avatar
-    await wizard.nextStep(); // Banner
-    await wizard.nextStep(); // Links
-    await wizard.nextStep(); // CTA
-    await wizard.nextStep(); // Pages
-    await wizard.nextStep(); // Additional Features
+    await wizard.gotoStep("additional-features");
   });
 
   test("should display additional features step", async ({ page }) => {
@@ -33,24 +23,20 @@ test.describe("Wizard Additional Features Step", () => {
   });
 
   test("should display feature cards", async ({ page }) => {
-    // Check for feature cards
-    const newsletter = page.locator(".feature-card .feature-name", {
-      hasText: "Newsletter",
-    });
-    const blog = page.locator(".feature-card .feature-name", {
-      hasText: "Blog",
-    });
-    const bookings = page.locator(".feature-card .feature-name", {
-      hasText: "Bookings",
-    });
-    const shop = page.locator(".feature-card .feature-name", {
-      hasText: "Shop",
-    });
-
-    await expect(newsletter).toBeVisible();
-    await expect(blog).toBeVisible();
-    await expect(bookings).toBeVisible();
-    await expect(shop).toBeVisible();
+    for (const feature of [
+      "Links",
+      "Call-to-action",
+      "Pages",
+      "Newsletter",
+      "Bookings",
+      "Blog",
+      "Products",
+      "Testimonials",
+    ]) {
+      await expect(
+        page.locator(".feature-card .feature-name", { hasText: feature }),
+      ).toBeVisible();
+    }
   });
 
   test("should allow proceeding without enabling features", async ({ page }) => {
@@ -67,13 +53,8 @@ test.describe("Wizard Additional Features Step", () => {
       '.feature-card:has(.feature-name:has-text("Blog")) .feature-toggle',
     );
 
-    if ((await blogToggle.count()) > 0) {
-      await blogToggle.click();
-      await page.waitForTimeout(300);
-
-      // Should show enabled status
-      await expect(blogToggle.locator('input[type="checkbox"]')).toBeChecked();
-    }
+    await blogToggle.click();
+    await expect(blogToggle.locator('input[type="checkbox"]')).toBeChecked();
   });
 
   test("should proceed to conditional steps when enabled", async ({ page }) => {
@@ -82,14 +63,10 @@ test.describe("Wizard Additional Features Step", () => {
       '.feature-card:has(.feature-name:has-text("Blog")) .feature-toggle',
     );
 
-    if ((await blogToggle.count()) > 0) {
-      await blogToggle.click();
-      await page.waitForTimeout(300);
+    await blogToggle.click();
+    await expect(blogToggle.locator('input[type="checkbox"]')).toBeChecked();
 
-      await wizard.nextStep();
-
-      // Should go to Blog step
-      await wizard.expectStepName("Blog");
-    }
+    await wizard.nextStep();
+    await wizard.expectStepName("Blog");
   });
 });

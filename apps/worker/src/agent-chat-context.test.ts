@@ -241,15 +241,19 @@ function createEnv(state: Partial<FakeDbState> = {}) {
                 item.user_id === values[0] &&
                 (!item.site_type || item.site_type === "profile"),
             );
-            return (
-              dbState.siteFiles.find(
-                (file) =>
-                  file.site_id === site?.id &&
-                  (file.path === "public/me.json" ||
-                    file.path === "src/me.json" ||
-                    file.path === "me.json"),
-              ) || null
-            ) as T;
+            const preferredPaths = sql.includes(
+              "sf.path IN ('src/me.json', 'me.json')",
+            )
+              ? ["src/me.json", "me.json"]
+              : ["public/me.json", "src/me.json", "me.json"];
+            for (const path of preferredPaths) {
+              const file = dbState.siteFiles.find(
+                (candidate) =>
+                  candidate.site_id === site?.id && candidate.path === path,
+              );
+              if (file) return file as T;
+            }
+            return null as T;
           }
           if (sql.includes("FROM site_files")) {
             return (dbState.siteFiles.find(
@@ -816,12 +820,32 @@ describe("Core chat native context", () => {
         }),
       ],
       sites: [profileSiteRow("site-profile", "kieran", { published: true })],
+      missionDashboardSettings: {
+        ...missionDashboardSettingsRow("Legacy Mission"),
+        settings_json: JSON.stringify({
+          goals: [
+            { id: "goal-active", title: "Ship the calm workflow", status: "active" },
+            { id: "goal-done", title: "Finished already", status: "completed" },
+          ],
+        }),
+      },
       siteFiles: [
         siteMeJsonRow("site-profile", {
           business: {
             audience: "Founders building calmer agent products",
           },
         }),
+        siteMeJsonRow(
+          "site-profile",
+          {
+            business: {
+              audience: "founders building agent products",
+              primaryProblem: "overwhelming workflows",
+              solution: "designing calmer systems",
+            },
+          },
+          "src/me.json",
+        ),
       ],
       projects: [
         projectRow("project-analytics", "Analytics Workflow", "analytics-workflow"),
@@ -868,6 +892,11 @@ describe("Core chat native context", () => {
     const system = modelInput.messages[0]?.content || "";
 
     expect(system).toContain("ME3 owner snapshot:");
+    expect(system).toContain(
+      "Mission statement:\n- I help founders building agent products with overwhelming workflows by designing calmer systems.",
+    );
+    expect(system).toContain("Goals:\n- Ship the calm workflow");
+    expect(system).not.toContain("Finished already");
     expect(system).toContain('"audience":"Founders building calmer agent products"');
     expect(system).toContain(
       "Analytics Workflow: Analytics Workflow project context. Open tasks: 1.",
@@ -2316,8 +2345,9 @@ describe("Core chat native context", () => {
     expect(modelInput.messages[0]?.content).toContain(
       "Mission statement:\n- Help builders steer their work with calm, useful systems.",
     );
+    expect(modelInput.messages[0]?.content).toContain("Goals:\n- Not set");
     expect(modelInput.messages[0]?.content).toContain(
-      "Goals:\n- Keep useful systems calm and practical.",
+      "Work: 8/10 — Keep useful systems calm and practical.",
     );
     expect(modelInput.messages[0]?.content).not.toContain("Wheel of Life snapshot:");
     expect(modelInput.messages[0]?.content).toContain("Offer 2-4 useful test prompts");
@@ -3624,10 +3654,14 @@ function profileSiteRow(
   };
 }
 
-function siteMeJsonRow(siteId: string, profile: Record<string, unknown>): Record<string, unknown> {
+function siteMeJsonRow(
+  siteId: string,
+  profile: Record<string, unknown>,
+  path = "public/me.json",
+): Record<string, unknown> {
   return {
     site_id: siteId,
-    path: "public/me.json",
+    path,
     content: Array.from(new TextEncoder().encode(JSON.stringify(profile))),
     content_type: "application/json",
     updated_at: "2026-05-15T09:00:00Z",

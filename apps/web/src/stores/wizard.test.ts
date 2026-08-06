@@ -61,6 +61,58 @@ describe("wizard store", () => {
       expect(store.draftSourceUrl).toBe("https://example.com");
     });
 
+    it("keeps the active editor when migrating a legacy numeric wizard step", () => {
+      localStorage.setItem(
+        "me3_wizard_state",
+        JSON.stringify({
+          currentStep: 4,
+          furthestStep: 4,
+          profile: {
+            name: "Test User",
+            handle: "testuser",
+            links: {},
+            buttons: [],
+          },
+          pages: [],
+          products: [],
+        }),
+      );
+
+      const store = useWizardStore();
+
+      expect(store.linksEnabled).toBe(true);
+      expect(store.currentStepId).toBe("links");
+      expect(store.furthestStep).toBe(store.currentStep);
+    });
+
+    it("restores saved stable step ids after optional feature changes", () => {
+      localStorage.setItem(
+        "me3_wizard_state",
+        JSON.stringify({
+          optionalWebsiteFeaturesVersion: 1,
+          currentStep: 4,
+          furthestStep: 4,
+          currentStepId: "pages",
+          furthestStepId: "pages",
+          pagesEnabled: false,
+          profile: {
+            name: "Test User",
+            handle: "testuser",
+            links: {},
+            buttons: [],
+          },
+          pages: [],
+          products: [],
+        }),
+      );
+
+      const store = useWizardStore();
+
+      expect(store.pagesEnabled).toBe(true);
+      expect(store.currentStepId).toBe("pages");
+      expect(store.furthestStep).toBe(store.currentStep);
+    });
+
     it("repairs saved preview/undefined profile asset URLs", () => {
       localStorage.setItem(
         "me3_wizard_state",
@@ -220,7 +272,7 @@ describe("wizard store", () => {
     it("should go to a specific step id", () => {
       const store = useWizardStore();
 
-      expect(store.goToStepId("pages")).toBe(true);
+      expect(store.goToStepId("pages", { enableOptional: true })).toBe(true);
 
       expect(store.currentStepName).toBe("Pages");
       expect(store.currentStepId).toBe("pages");
@@ -645,6 +697,7 @@ describe("wizard store", () => {
     it("should include links", () => {
       const store = useWizardStore();
       store.profile.name = "Test User";
+      store.linksEnabled = true;
       store.setLink("github", "octocat");
       store.setLink("twitter", "user");
 
@@ -659,6 +712,7 @@ describe("wizard store", () => {
     it("should include buttons", () => {
       const store = useWizardStore();
       store.profile.name = "Test User";
+      store.callToActionEnabled = true;
       store.addButton({ text: "Click", url: "https://example.com" });
 
       const me3 = store.generateMe3Json() as any;
@@ -670,6 +724,7 @@ describe("wizard store", () => {
     it("should include pages", () => {
       const store = useWizardStore();
       store.profile.name = "Test User";
+      store.pagesEnabled = true;
       store.addPage("About");
 
       const me3 = store.generateMe3Json() as any;
@@ -713,6 +768,29 @@ describe("wizard store", () => {
       expect(me3.shopTitle).toBe("Services");
     });
 
+    it("publishes Products as the default product section title", () => {
+      const store = useWizardStore();
+      store.profile.name = "Test User";
+      store.shopEnabled = true;
+      store.products = [
+        {
+          title: "Guide",
+          slug: "guide",
+          content: "",
+          images: [],
+          price: 2000,
+          currency: "USD",
+          available: true,
+          paymentMethod: "stripe",
+          paymentInstructions: "",
+        },
+      ];
+
+      const me3 = store.generateMe3Json() as any;
+
+      expect(me3.shopTitle).toBe("Products");
+    });
+
     it("should include blogEnabled when blog is enabled without posts", () => {
       const store = useWizardStore();
       store.profile.name = "Test User";
@@ -729,6 +807,7 @@ describe("wizard store", () => {
     it("should derive blog and shop paths from the main menu titles", () => {
       const store = useWizardStore();
       store.addPage("Work With Me");
+      store.pagesEnabled = true;
       store.blogTitle = "Writing";
       store.shopTitle = "Work with me";
       store.testimonialsTitle = "Kind Words";
@@ -841,7 +920,7 @@ describe("wizard store", () => {
       expect(store.profile.name).toBe("");
       expect(store.currentStep).toBe(1);
       expect(store.blogTitle).toBe("Blog");
-      expect(store.shopTitle).toBe("Offerings");
+      expect(store.shopTitle).toBe("Products");
       expect(store.pages).toHaveLength(0);
       expect(localStorage.getItem("me3_wizard_state")).toBeNull();
       expect(store.draftSourceUrl).toBeNull();
@@ -1584,10 +1663,13 @@ describe("wizard store", () => {
     it("should initialize with expected feature toggles", () => {
       const store = useWizardStore();
 
+      expect(store.linksEnabled).toBe(false);
+      expect(store.callToActionEnabled).toBe(false);
+      expect(store.pagesEnabled).toBe(false);
       expect(store.newsletterEnabled).toBe(false);
       expect(store.blogEnabled).toBe(false);
       expect(store.bookingsEnabled).toBe(false);
-      expect(store.shopEnabled).toBe(true);
+      expect(store.shopEnabled).toBe(false);
       expect(store.testimonialsEnabled).toBe(false);
     });
 
@@ -1649,14 +1731,14 @@ describe("wizard store", () => {
       expect(store.bookingsEnabled).toBe(true);
     });
 
-    it("should keep offerings enabled when loading old localStorage state", () => {
+    it("should keep products optional when loading old localStorage state", () => {
       localStorage.setItem(
         "me3_wizard_state",
         JSON.stringify({ shopEnabled: false }),
       );
 
       const store = useWizardStore();
-      expect(store.shopEnabled).toBe(true);
+      expect(store.shopEnabled).toBe(false);
     });
 
     it("should load testimonialsEnabled from localStorage", () => {
@@ -1683,6 +1765,9 @@ describe("wizard store", () => {
     it("should reset all enabled flags on reset", () => {
       const store = useWizardStore();
       store.newsletterEnabled = true;
+      store.linksEnabled = true;
+      store.callToActionEnabled = true;
+      store.pagesEnabled = true;
       store.blogEnabled = true;
       store.bookingsEnabled = true;
       store.shopEnabled = true;
@@ -1692,13 +1777,16 @@ describe("wizard store", () => {
 
       store.reset();
 
+      expect(store.linksEnabled).toBe(false);
+      expect(store.callToActionEnabled).toBe(false);
+      expect(store.pagesEnabled).toBe(false);
       expect(store.newsletterEnabled).toBe(false);
       expect(store.blogEnabled).toBe(false);
       expect(store.bookingsEnabled).toBe(false);
-      expect(store.shopEnabled).toBe(true);
+      expect(store.shopEnabled).toBe(false);
       expect(store.testimonialsEnabled).toBe(false);
       expect(store.blogTitle).toBe("Blog");
-      expect(store.shopTitle).toBe("Offerings");
+      expect(store.shopTitle).toBe("Products");
     });
 
     it("should restore newsletterEnabled from site content", () => {
@@ -1753,11 +1841,10 @@ describe("wizard store", () => {
         "Basics",
         "Avatar",
         "Banner",
-        "Links",
-        "Call-to-action",
-        "Pages",
+        "Mission",
+        "Goals",
+        "Wheel of Life",
         "Additional Features",
-        "Offerings",
         "Publish",
       ]);
     });
@@ -1809,18 +1896,19 @@ describe("wizard store", () => {
       expect(testimonialsIndex).toBeGreaterThan(additionalIndex);
     });
 
-    it("should always include Offerings step", () => {
+    it("should include Products only when enabled", () => {
       const store = useWizardStore();
-      store.shopEnabled = false;
+      expect(store.stepNames).not.toContain("Products");
+      store.shopEnabled = true;
 
       const names = store.stepNames;
-      expect(names).toContain("Offerings");
-      const offeringsIndex = names.indexOf("Offerings");
+      expect(names).toContain("Products");
+      const offeringsIndex = names.indexOf("Products");
       const additionalIndex = names.indexOf("Additional Features");
       expect(offeringsIndex).toBeGreaterThan(additionalIndex);
     });
 
-    it("should order conditional steps correctly: Newsletter, Bookings, Blog, Offerings, Testimonials", () => {
+    it("should order conditional steps correctly: Newsletter, Bookings, Blog, Products, Testimonials", () => {
       const store = useWizardStore();
       store.newsletterEnabled = true;
       store.blogEnabled = true;
@@ -1832,7 +1920,7 @@ describe("wizard store", () => {
       const newsletterIndex = names.indexOf("Newsletter");
       const blogIndex = names.indexOf("Blog");
       const bookingsIndex = names.indexOf("Bookings");
-      const offeringsIndex = names.indexOf("Offerings");
+      const offeringsIndex = names.indexOf("Products");
       const testimonialsIndex = names.indexOf("Testimonials");
       const publishIndex = names.indexOf("Publish");
 

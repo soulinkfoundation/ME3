@@ -7,12 +7,17 @@ test.describe("Wizard Bookings Step", () => {
   test.beforeEach(async ({ page }) => {
     wizard = new WizardPage(page);
 
-    // Mock Stripe Connect status
-    await page.route("**/api/stripe-connect/status", async (route) => {
+    await page.route("**/api/commerce/status", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ status: "not_connected" }),
+        body: JSON.stringify({
+          stripe: {
+            configured: false,
+            mode: "managed",
+            connectionStatus: null,
+          },
+        }),
       });
     });
 
@@ -24,32 +29,7 @@ test.describe("Wizard Bookings Step", () => {
       });
     });
 
-    await wizard.goto();
-
-    // Navigate to Bookings step (requires enabling bookings first)
-    await wizard.fillBasics("Bookings Test", "bookingstest", "Testing Bookings");
-    await wizard.waitForUsernameCheck();
-    await wizard.nextStep(); // Avatar
-    await wizard.nextStep(); // Banner
-    await wizard.nextStep(); // Links
-    await wizard.nextStep(); // CTA
-    await wizard.nextStep(); // Pages
-    await wizard.nextStep(); // Additional Features
-    
-    // Enable bookings feature
-    const bookingsToggle = page.locator(
-      '.feature-card:has(.feature-name:has-text("Bookings")) .feature-toggle',
-    );
-    
-    if ((await bookingsToggle.count()) > 0) {
-      await bookingsToggle.click();
-      await page.waitForTimeout(300);
-      await expect(
-        bookingsToggle.locator('input[type="checkbox"]'),
-      ).toBeChecked();
-    }
-    
-    await wizard.nextStep(); // Bookings
+    await wizard.gotoStep("bookings");
   });
 
   test("should display bookings step", async ({ page }) => {
@@ -57,10 +37,13 @@ test.describe("Wizard Bookings Step", () => {
   });
 
   test("should show payments section with Stripe connect", async ({ page }) => {
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await page.getByRole("button", { name: "1:1", exact: true }).click();
+    await page.getByRole("button", { name: "Paid", exact: true }).click();
+
     await expect(
-      page.getByRole("heading", { name: /^Accept Bookings$/i }),
+      page.getByRole("link", { name: "Connect Stripe", exact: true }),
     ).toBeVisible();
-    await expect(page.getByText("Connect Stripe")).toBeVisible();
   });
 
   test("should allow configuring booking settings", async ({ page }) => {
@@ -77,6 +60,9 @@ test.describe("Wizard Bookings Step", () => {
   });
 
   test("should include Dublin and Pakistan timezone options", async ({ page }) => {
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await page.getByRole("button", { name: "1:1", exact: true }).click();
+
     const timezoneSelect = page.locator(
       'select:has(option[value="Asia/Karachi"])',
     );
@@ -93,8 +79,6 @@ test.describe("Wizard Bookings Step", () => {
     await wizard.expectCanProceed(true);
     await wizard.nextStep();
 
-    // Should proceed to next step (Publish or next enabled feature)
-    const stepName = await page.locator(".step-name").textContent();
-    expect(stepName).toBeTruthy();
+    await wizard.expectStepName("Publish");
   });
 });

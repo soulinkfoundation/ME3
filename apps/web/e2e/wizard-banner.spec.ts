@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures/test";
+import { test } from "./fixtures/test";
 import { WizardPage } from "./helpers/wizard";
 
 test.describe("Wizard Banner Step", () => {
@@ -31,7 +31,6 @@ test.describe("Wizard Banner Step", () => {
   test("should allow skipping banner step", async ({ page }) => {
     await wizard.nextStep();
 
-    // Should proceed to next step (Links)
-    await wizard.expectStepName("Links");
+    await wizard.expectStepName("Mission");
   });
 });

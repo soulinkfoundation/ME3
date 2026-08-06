@@ -264,7 +264,9 @@ async function downloadZip() {
             : "jpg";
     }
 
-    const publishableT = wizard.publishableTestimonials();
+    const publishableT = wizard.testimonialsEnabled
+      ? wizard.publishableTestimonials()
+      : [];
     for (let i = 0; i < publishableT.length; i++) {
       const t = publishableT[i];
       const slot = i + 1;
@@ -308,13 +310,15 @@ async function downloadZip() {
     }
 
     // Add pages (convert HTML to Markdown)
-    for (const page of wizard.pages) {
-      const exported = exportPageToMarkdown(page);
-      zip.file(`${page.slug}.md`, exported.markdown);
+    if (wizard.pagesEnabled) {
+      for (const page of wizard.pages) {
+        const exported = exportPageToMarkdown(page);
+        zip.file(`${page.slug}.md`, exported.markdown);
 
-      // Add any page images referenced in the editor content
-      for (const img of exported.images) {
-        zip.file(`files/${img.filename}`, img.blob);
+        // Add any page images referenced in the editor content
+        for (const img of exported.images) {
+          zip.file(`files/${img.filename}`, img.blob);
+        }
       }
     }
 
@@ -387,7 +391,7 @@ This folder contains your portable me3 site.
 - \`me.json\` - Your profile data (me3 protocol)
 - \`favicon.png\` - Your site favicon
 - \`files/\` - Your images
-${wizard.pages.length > 0 ? wizard.pages.map((p) => `- \`${p.slug}.md\` - ${p.title}`).join("\n") : ""}
+${wizard.pagesEnabled && wizard.pages.length > 0 ? wizard.pages.map((p) => `- \`${p.slug}.md\` - ${p.title}`).join("\n") : ""}
 ${wizard.blogEnabled && wizard.posts.length > 0 ? wizard.posts.map((p) => `- \`blog/${p.slug}.md\` - ${p.title}`).join("\n") : ""}
 ${wizard.shopEnabled && wizard.products.length > 0 ? wizard.products.map((p) => `- \`shop/${p.slug}.md\` - ${p.title}`).join("\n") : ""}
 
