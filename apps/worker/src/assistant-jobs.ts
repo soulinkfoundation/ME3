@@ -44,7 +44,10 @@ import { isCorePluginEnabled } from "./plugins";
 import { decodeMimeHeaderValue } from "../../../shared/email-headers";
 import { ensureDefaultCategories, getOrCreateCategoryByName } from "./accounts";
 import { getDefaultCommerceCurrency } from "./commerce-settings";
-import { notifyDailyBriefingReady } from "./push-notifications";
+import {
+  notifyDailyBriefingReady,
+  type DailyBriefingPushSummary,
+} from "./push-notifications";
 
 export class AssistantJobsInputError extends Error {
   constructor(
@@ -320,6 +323,7 @@ type DailyBriefingRenderContext = {
   calendarReminders: string;
   missionTasks: string;
   sections: DailyBriefingSection[];
+  notification: DailyBriefingPushSummary;
 };
 
 type DailyBriefingTask = Me3AgentContextTask & {
@@ -2093,7 +2097,12 @@ async function createAssistantJobOwnerNotification(
       (action) => action.capabilityId === "mission.review_packet.create",
     );
     const briefingId = missionOutputId(input.run, reviewAction || input.action, "activity");
-    const delivery = await notifyDailyBriefingReady(env, briefingId);
+    const summary = await loadDailyBriefingPushSummary(
+      env,
+      input.userId,
+      briefingId,
+    ).catch(() => null);
+    const delivery = await notifyDailyBriefingReady(env, briefingId, summary);
     return insertAssistantJobActionResult(env, {
       runId: input.run.id,
       actionId: input.action.id,
@@ -2225,6 +2234,50 @@ async function createAssistantJobOwnerNotification(
       errorMessage,
     });
   }
+}
+
+async function loadDailyBriefingPushSummary(
+  env: Env,
+  userId: string,
+  briefingId: string,
+): Promise<DailyBriefingPushSummary | null> {
+  const row = await env.DB.prepare(
+    `SELECT metadata_json
+     FROM mission_plugin_activity
+     WHERE id = ? AND user_id = ? AND activity_type = 'assistant_job.review_packet'
+     LIMIT 1`,
+  )
+    .bind(briefingId, userId)
+    .first<{ metadata_json: string }>();
+  if (!row) return null;
+
+  const metadata = parseJson<Record<string, unknown>>(row.metadata_json, {});
+  const dailyBriefing = isRecord(metadata.dailyBriefing)
+    ? metadata.dailyBriefing
+    : null;
+  const notification = dailyBriefing && isRecord(dailyBriefing.notification)
+    ? dailyBriefing.notification
+    : null;
+  const counts = notification && isRecord(notification.counts)
+    ? notification.counts
+    : null;
+  if (!notification || !counts) return null;
+
+  const reminders = normalizeDailyBriefingPushCount(counts.reminders);
+  const tasks = normalizeDailyBriefingPushCount(counts.tasks);
+  const bookings = normalizeDailyBriefingPushCount(counts.bookings);
+  if (reminders === null || tasks === null || bookings === null) return null;
+
+  return {
+    ownerName: normalizeNullableText(notification.ownerName),
+    counts: { reminders, tasks, bookings },
+  };
+}
+
+function normalizeDailyBriefingPushCount(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? Math.min(value, 9_999)
+    : null;
 }
 
 async function sendWeeklyReviewOwnerNotificationIfConnected(
@@ -2595,6 +2648,7 @@ async function buildGeneratedMissionActivity(
           message,
           plainText: message,
           sections: context.sections,
+          notification: context.notification,
           template,
         },
       },
@@ -4002,6 +4056,7 @@ async function buildDailyBriefingRenderContext(
     loadDailyBriefingTasks(env, userId),
   ]);
   const calendarEvents = [...events, ...bookings].sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+  const dueTaskCount = tasks.filter((task) => task.dueAt?.slice(0, 10) === dateKey).length;
 
   return {
     ownerName: owner?.name || owner?.username || "there",
@@ -4019,7 +4074,21 @@ async function buildDailyBriefingRenderContext(
       dateLabel,
       timezone,
     ),
+    notification: {
+      ownerName: dailyBriefingPushOwnerName(owner?.name),
+      counts: {
+        reminders: reminders.length,
+        tasks: dueTaskCount,
+        bookings: bookings.length,
+      },
+    },
   };
+}
+
+function dailyBriefingPushOwnerName(value: unknown) {
+  const name = normalizeNullableText(value);
+  if (!name || /^ME3(?:\s+Core)?\s+Owner$/i.test(name)) return null;
+  return name;
 }
 
 function buildDailyBriefingSections(

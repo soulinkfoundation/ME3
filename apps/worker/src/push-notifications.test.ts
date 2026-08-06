@@ -45,17 +45,27 @@ describe("push notification relay client", () => {
     );
   });
 
-  it("uses an opaque briefing ID and never fails the completed briefing", async () => {
+  it("forwards bounded briefing summary metadata and never fails the completed briefing", async () => {
     const fetchMock = vi.fn(async () => new Response("unavailable", { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
-    const result = await notifyDailyBriefingReady(envWithSecrets(linkedSecrets()), "briefing-123");
+    const result = await notifyDailyBriefingReady(
+      envWithSecrets(linkedSecrets()),
+      "briefing-123",
+      {
+        ownerName: "Kieran",
+        counts: { reminders: 1, tasks: 3, bookings: 2 },
+      },
+    );
     const calls = fetchMock.mock.calls as unknown as Array<[URL, RequestInit]>;
 
     expect(result).toEqual({ ok: false, skipped: true });
     expect(String(calls[0]?.[0])).toBe(
       "https://api.me3.app/api/push/daily-briefings/briefing-123",
     );
-    expect(calls[0]?.[1]?.body).toBeUndefined();
+    expect(JSON.parse(String(calls[0]?.[1]?.body))).toEqual({
+      ownerName: "Kieran",
+      counts: { reminders: 1, tasks: 3, bookings: 2 },
+    });
   });
 });
 

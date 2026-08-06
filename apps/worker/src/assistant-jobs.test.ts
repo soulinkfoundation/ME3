@@ -837,6 +837,10 @@ describe("assistant jobs persistence", () => {
           expect.objectContaining({ kind: "reminders", title: "Reminders" }),
           expect.objectContaining({ kind: "tasks", title: "Mission Control" }),
         ],
+        notification: {
+          ownerName: "Kieran",
+          counts: { reminders: 0, tasks: 0, bookings: 0 },
+        },
       },
     });
   });
@@ -844,7 +848,15 @@ describe("assistant jobs persistence", () => {
   it("runs daily briefing without a connected owner channel", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const env = createAssistantJobsEnv();
+    const env = createAssistantJobsEnv({
+      owner: {
+        id: "owner",
+        name: "ME3 Core Owner",
+        username: "owner",
+        bio: null,
+        timezone: "Europe/Dublin",
+      },
+    });
 
     const created = await createAssistantJob(env, "owner", { recipeId: "daily-briefing" });
     expect(created.job.status).toBe("active");
@@ -869,6 +881,10 @@ describe("assistant jobs persistence", () => {
     expect(JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)).toMatchObject({
       dailyBriefing: {
         message: expect.stringContaining("Your calendar is clear"),
+        notification: {
+          ownerName: null,
+          counts: { reminders: 0, tasks: 0, bookings: 0 },
+        },
       },
     });
   });
@@ -1007,8 +1023,14 @@ describe("assistant jobs persistence", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     const messageText = JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)
       .dailyBriefing.plainText;
+    const notification = JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)
+      .dailyBriefing.notification;
     expect(messageText).toContain("Morning Kieran.");
     expect(messageText).toContain("Booking with Ada Lovelace");
+    expect(notification).toEqual({
+      ownerName: "Kieran",
+      counts: { reminders: 0, tasks: 0, bookings: 1 },
+    });
   });
 
   it("updates scheduled job cadence and next run metadata", async () => {

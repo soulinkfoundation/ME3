@@ -41,12 +41,28 @@ export async function unregisterPushNotificationDevice(env: Env, deviceIdValue: 
   });
 }
 
-export async function notifyDailyBriefingReady(env: Env, briefingId: string) {
+export type DailyBriefingPushSummary = {
+  ownerName: string | null;
+  counts: {
+    reminders: number;
+    tasks: number;
+    bookings: number;
+  };
+};
+
+export async function notifyDailyBriefingReady(
+  env: Env,
+  briefingId: string,
+  summary?: DailyBriefingPushSummary | null,
+) {
   try {
     return await relayRequest(
       env,
       `/api/push/daily-briefings/${encodeURIComponent(briefingId)}`,
-      { method: "POST" },
+      {
+        method: "POST",
+        body: summary ? JSON.stringify(summary) : undefined,
+      },
     );
   } catch (error) {
     console.warn("Daily Briefing push was skipped", {
