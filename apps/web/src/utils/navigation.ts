@@ -1,1 +1,1 @@
-export const DEFAULT_APP_PATH = "/mission-control";
+export const DEFAULT_APP_PATH = "/journal";

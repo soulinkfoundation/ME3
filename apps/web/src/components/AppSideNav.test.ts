@@ -68,6 +68,38 @@ describe("AppSideNav optional plugin links", () => {
     wrapper.unmount();
   });
 
+  it("uses the approved navigation order, Tasks destination, and dog-head image", async () => {
+    const wrapper = await mountSideNav([
+      { id: "me3.journal", status: "installed", enabled: true },
+      { id: "me3.calendar", status: "installed", enabled: true },
+      { id: "me3.mission-control", status: "installed", enabled: true },
+      { id: "me3.social-publishing", status: "installed", enabled: true },
+      { id: "me3.accounts", status: "installed", enabled: true },
+    ]);
+
+    expect(
+      wrapper.findAll("nav a").map((link) => link.attributes("aria-label")),
+    ).toEqual([
+      "Journal",
+      "Assistant",
+      "Calendar",
+      "Tasks",
+      "Email",
+      "Sites",
+      "Files",
+      "Socials",
+      "Accounts",
+      "Settings",
+    ]);
+    expect(wrapper.get('[aria-label="Tasks"]').attributes("href")).toBe(
+      "/mission-control/projects",
+    );
+    expect(
+      wrapper.get('[aria-label="Assistant"] img').attributes("src"),
+    ).toBe("/me3-dog-head-emoji-smooth.png");
+    wrapper.unmount();
+  });
+
   it("hides Socials and Accounts when both plugins are disabled", async () => {
     const wrapper = await mountSideNav([
       {

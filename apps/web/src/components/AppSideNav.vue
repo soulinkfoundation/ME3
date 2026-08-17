@@ -155,18 +155,18 @@ watch(navDrawerOpen, (isOpen) => {
     >
       <nav class="app-side-nav__links" aria-label="Primary">
         <RouterLink
-          v-if="missionControlInstalled"
-          to="/mission-control"
+          v-if="journalInstalled"
+          to="/journal"
           class="app-side-nav__row app-side-nav-control"
-          :class="{ 'app-side-nav__row--active': rowActive('mission-control') }"
-          aria-label="Mission Control"
-          title="Mission Control"
+          :class="{ 'app-side-nav__row--active': rowActive('journal') }"
+          aria-label="Journal"
+          title="Journal"
           @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS["mission-control"]
+            APP_FEATURE_ICONS.journal
           }}</span>
-          <span class="sr-only">Mission Control</span>
+          <span class="sr-only">Journal</span>
         </RouterLink>
 
         <RouterLink
@@ -202,18 +202,60 @@ watch(navDrawerOpen, (isOpen) => {
         </RouterLink>
 
         <RouterLink
-          v-if="journalInstalled"
-          to="/journal"
+          v-if="missionControlInstalled"
+          to="/mission-control/projects"
           class="app-side-nav__row app-side-nav-control"
-          :class="{ 'app-side-nav__row--active': rowActive('journal') }"
-          aria-label="Journal"
-          title="Journal"
+          :class="{ 'app-side-nav__row--active': rowActive('mission-control') }"
+          aria-label="Tasks"
+          title="Tasks"
           @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS.journal
+            APP_FEATURE_ICONS["mission-control"]
           }}</span>
-          <span class="sr-only">Journal</span>
+          <span class="sr-only">Tasks</span>
+        </RouterLink>
+
+        <RouterLink
+          to="/email"
+          class="app-side-nav__row app-side-nav-control"
+          :class="{ 'app-side-nav__row--active': rowActive('email') }"
+          aria-label="Email"
+          title="Email"
+          @click="closeNavDrawer"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.email
+          }}</span>
+          <span class="sr-only">Email</span>
+        </RouterLink>
+
+        <RouterLink
+          :to="sitesPath"
+          class="app-side-nav__row app-side-nav-control"
+          :class="{ 'app-side-nav__row--active': rowActive('sites') }"
+          aria-label="Sites"
+          title="Sites"
+          @click="closeNavDrawer"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.sites
+          }}</span>
+          <span class="sr-only">Sites</span>
+        </RouterLink>
+
+        <RouterLink
+          to="/files"
+          class="app-side-nav__row app-side-nav-control"
+          :class="{ 'app-side-nav__row--active': rowActive('files') }"
+          aria-label="Files"
+          title="Files"
+          @click="closeNavDrawer"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.files
+          }}</span>
+          <span class="sr-only">Files</span>
         </RouterLink>
 
         <RouterLink
@@ -244,48 +286,6 @@ watch(navDrawerOpen, (isOpen) => {
             APP_FEATURE_ICONS.accounts
           }}</span>
           <span class="sr-only">Accounts</span>
-        </RouterLink>
-
-        <RouterLink
-          to="/email"
-          class="app-side-nav__row app-side-nav-control"
-          :class="{ 'app-side-nav__row--active': rowActive('email') }"
-          aria-label="Email"
-          title="Email"
-          @click="closeNavDrawer"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS.email
-          }}</span>
-          <span class="sr-only">Email</span>
-        </RouterLink>
-
-        <RouterLink
-          to="/files"
-          class="app-side-nav__row app-side-nav-control"
-          :class="{ 'app-side-nav__row--active': rowActive('files') }"
-          aria-label="Files"
-          title="Files"
-          @click="closeNavDrawer"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS.files
-          }}</span>
-          <span class="sr-only">Files</span>
-        </RouterLink>
-
-        <RouterLink
-          :to="sitesPath"
-          class="app-side-nav__row app-side-nav-control"
-          :class="{ 'app-side-nav__row--active': rowActive('sites') }"
-          aria-label="Sites"
-          title="Sites"
-          @click="closeNavDrawer"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS.sites
-          }}</span>
-          <span class="sr-only">Sites</span>
         </RouterLink>
 
         <RouterLink

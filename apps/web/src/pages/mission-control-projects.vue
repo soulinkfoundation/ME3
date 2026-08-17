@@ -58,8 +58,8 @@ definePage({
     requiresAuth: true,
     requiresWorkspace: true,
     requiresPlugin: "me3.mission-control",
-    title: "Mission Control Projects | ME3",
-    description: "ME3 Mission Control projects workspace.",
+    title: "Tasks | ME3",
+    description: "ME3 projects and tasks workspace.",
     robots: "noindex,follow",
   },
 });
@@ -686,7 +686,7 @@ async function loadMissionControlWorkspace() {
     if (projects.value.some(isLocalProject)) void loadLocalExecutorStatus();
   } catch (e) {
     error.value =
-      e instanceof ApiError ? e.message : "Mission Control could not load";
+      e instanceof ApiError ? e.message : "Tasks could not load";
   } finally {
     await projectTasksLoad;
     loading.value = false;
@@ -2857,7 +2857,7 @@ onBeforeUnmount(() => {
           shape="soft"
           size="compact"
           icon-only
-          to="/mission-control"
+          to="/journal"
           aria-label="Close projects"
           title="Close projects"
         >
