@@ -10,7 +10,6 @@ import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { DEFAULT_APP_PATH } from "../utils/navigation";
 import {
-  isStartLoginRedirect,
   normalizeSafeLoginRedirect,
   resolveMe3OAuthRedirect,
   resolveProfileSetupPath,
@@ -154,20 +153,6 @@ async function resolveDefaultPostLoginRedirect(): Promise<string> {
   }
 }
 
-async function resolveStartPostLoginRedirect(redirect: string): Promise<string> {
-  try {
-    await sites.fetchSites();
-    return resolveProfileSetupPath({
-      sitesLoaded: sites.loaded,
-      hasProfileSite: sites.hasProfileSite,
-      defaultPath: DEFAULT_APP_PATH,
-      setupPath: redirect,
-    });
-  } catch {
-    return DEFAULT_APP_PATH;
-  }
-}
-
 async function resolvePostLoginRedirect(raw: unknown): Promise<string> {
   const redirect = normalizeSafeLoginRedirect(raw, {
     origin: window.location.origin,
@@ -175,10 +160,6 @@ async function resolvePostLoginRedirect(raw: unknown): Promise<string> {
     dev: import.meta.env.DEV,
   });
   if (!redirect) return resolveDefaultPostLoginRedirect();
-
-  if (isStartLoginRedirect(redirect, window.location.origin)) {
-    return resolveStartPostLoginRedirect(redirect);
-  }
   return redirect;
 }
 

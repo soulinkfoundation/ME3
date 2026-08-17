@@ -28,9 +28,7 @@ test.describe("unified profile onboarding", () => {
     });
   });
 
-  test("redirects the legacy /start route into the single /create flow", async ({
-    page,
-  }) => {
+  test("opens the single profile onboarding flow at /create", async ({ page }) => {
     await page.route("**/api/sites", async (route) => {
       await route.fulfill({
         status: 200,
@@ -39,7 +37,7 @@ test.describe("unified profile onboarding", () => {
       });
     });
 
-    await page.goto("/start");
+    await page.goto("/create?step=basics");
 
     await expect(page).toHaveURL(/\/create\?step=basics$/);
     await expect(
@@ -48,7 +46,48 @@ test.describe("unified profile onboarding", () => {
     await expect(page.locator(".progress-step")).toHaveCount(8);
   });
 
-  test("hydrates an existing profile before opening the unified wizard", async ({
+  test("hydrates an existing profile directly in /create", async ({ page }) => {
+    const publishedAt = "2026-08-06T10:00:00.000Z";
+    await page.route("**/api/sites", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          sites: [
+            {
+              id: "site-owner",
+              username: "owner",
+              user_id: "owner-1",
+              site_type: "profile",
+              published_at: publishedAt,
+              created_at: publishedAt,
+              updated_at: publishedAt,
+            },
+          ],
+        }),
+      });
+    });
+    await page.route("**/api/sites/owner/content", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          profile: { name: "Existing Owner", handle: "owner" },
+          pages: [],
+          posts: [],
+          products: [],
+        }),
+      });
+    });
+
+    await page.goto("/create?step=basics");
+
+    await expect(page).toHaveURL(/\/create\?step=basics$/);
+    await expect(page.getByLabel("Your name *")).toHaveValue("Existing Owner");
+  });
+
+  test("opens the unified editor from an existing site's Edit Site action", async ({
     page,
   }) => {
     const publishedAt = "2026-08-06T10:00:00.000Z";
@@ -85,9 +124,10 @@ test.describe("unified profile onboarding", () => {
       });
     });
 
-    await page.goto("/start");
+    await page.goto("/sites/owner");
+    await page.getByRole("button", { name: /Edit Site/ }).click();
 
-    await expect(page).toHaveURL(/\/create\?step=basics$/);
+    await expect(page).toHaveURL(/\/create$/);
     await expect(page.getByLabel("Your name *")).toHaveValue("Existing Owner");
   });
 });

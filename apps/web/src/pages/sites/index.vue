@@ -67,7 +67,7 @@ const createLandingPagePath = computed(() =>
     ? `/assistant?prompt=${encodeURIComponent(
         `Help me create a landing page for @${profileSite.value.username}. Ask what the page is for, show me the available starter designs, and then build a draft with me.`,
       )}`
-    : "/start",
+    : "/create",
 );
 
 function statusLabel(published: boolean): string {
@@ -173,7 +173,7 @@ onBeforeUnmount(() => {
         </div>
         <h2>Set up your ME3 profile</h2>
         <p>Your profile site is the starting point for everything you build in ME3.</p>
-        <RouterLink class="sites-button" to="/start">Create profile</RouterLink>
+        <RouterLink class="sites-button" to="/create">Create profile</RouterLink>
       </section>
 
     </main>

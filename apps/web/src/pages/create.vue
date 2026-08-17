@@ -3,8 +3,10 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { computed, onMounted, ref, watch, type Component } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useWizardStore, type WizardStepId } from "../stores/wizard";
+import { useSitesStore } from "../stores/sites";
 import { usePublish } from "../composables/usePublish";
 import GeneratedSitePreview from "../components/GeneratedSitePreview.vue";
+import PageLoading from "../components/PageLoading.vue";
 
 // Step components
 import WizardBasics from "../components/wizard/WizardBasics.vue";
@@ -35,10 +37,12 @@ definePage({
 });
 
 const wizard = useWizardStore();
+const sites = useSitesStore();
 const route = useRoute();
 const router = useRouter();
 const { isPublishing: isQuickPublishing, publish } = usePublish();
 const showIntroScreen = ref(false);
+const isOpeningWizard = ref(true);
 
 const stepComponentById = {
   basics: WizardBasics,
@@ -249,13 +253,38 @@ function clearImportedDraft() {
   router.push("/calendar");
 }
 
-onMounted(() => {
-  showIntroScreen.value = !wizard.lastPublishedAt;
-  applyRouteStep();
-
-  // Check for saved progress
-  if (wizard.profile.name && wizard.currentStep > 1) {
-    // Show continue prompt could go here
+onMounted(async () => {
+  try {
+    await sites.ensureSites();
+    const profileSite = sites.sites.find(
+      (site) => (site.site_type || "profile") === "profile",
+    );
+    if (profileSite?.username) {
+      const localHandle = (wizard.username || wizard.profile.handle)
+        .trim()
+        .toLowerCase();
+      const preserveLocalDraft =
+        wizard.needsPublish &&
+        localHandle === profileSite.username.trim().toLowerCase() &&
+        Boolean(wizard.profile.name.trim());
+      if (!preserveLocalDraft) {
+        const content = await sites.getSiteContent(profileSite.username);
+        if (content?.ok && content.profile) {
+          wizard.loadFromSiteContent(
+            content.profile,
+            content.pages,
+            content.posts,
+            content.products || [],
+            profileSite.username,
+            profileSite.published_at || null,
+          );
+        }
+      }
+    }
+  } finally {
+    showIntroScreen.value = !wizard.lastPublishedAt;
+    applyRouteStep();
+    isOpeningWizard.value = false;
   }
 });
 
@@ -264,7 +293,8 @@ watch(() => wizard.currentStepId, syncRouteStep);
 </script>
 
 <template>
-  <div class="wizard-page">
+  <PageLoading v-if="isOpeningWizard" label="Opening your ME3 profile..." />
+  <div v-else class="wizard-page">
     <!-- Header -->
     <header v-if="!showIntroScreen" class="wizard-header">
       <div class="header-center">

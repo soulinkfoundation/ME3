@@ -8,9 +8,16 @@ import { useTheme } from './composables/useTheme'
 import { cleanupLegacyServiceWorker } from './serviceWorkerCleanup'
 
 const staleChunkReloadKey = 'me3:stale-chunk-reload'
+let latestPreloadError: unknown = null
 
 window.addEventListener('vite:preloadError', (event) => {
-  event.preventDefault()
+  // Let Vite reject the import so Vue Router can report which route failed.
+  latestPreloadError = event.payload
+})
+
+router.onError((error, to) => {
+  if (error !== latestPreloadError) return
+  latestPreloadError = null
 
   const previousReload = Number(
     window.sessionStorage.getItem(staleChunkReloadKey) || '0',
@@ -20,7 +27,9 @@ window.addEventListener('vite:preloadError', (event) => {
   }
 
   window.sessionStorage.setItem(staleChunkReloadKey, String(Date.now()))
-  window.location.reload()
+  // The browser URL still points at the route we are leaving because the
+  // failed lazy component prevented Vue Router from committing navigation.
+  window.location.assign(to.fullPath)
 })
 
 // Extend window interface for testing

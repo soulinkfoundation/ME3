@@ -10,23 +10,18 @@ export interface ProfileSetupPathOptions {
   hasProfileSite: boolean;
   onboardingStartStep?: 2 | 3 | null;
   defaultPath: string;
-  setupPath?: string;
 }
 
 export function resolveProfileSetupPath(
   options: ProfileSetupPathOptions,
 ): string {
   if (options.onboardingStartStep === 2 || options.onboardingStartStep === 3) {
-    return options.setupPath || "/create";
+    return "/create";
   }
   if (!options.sitesLoaded || options.hasProfileSite) {
     return options.defaultPath;
   }
-  return options.setupPath || "/create";
-}
-
-export function isStartRedirectPath(pathname: string): boolean {
-  return pathname === "/start" || pathname === "/start/";
+  return "/create";
 }
 
 export function normalizeSafeLoginRedirect(
@@ -59,19 +54,11 @@ export function normalizeSafeLoginRedirect(
   return null;
 }
 
-export function isStartLoginRedirect(redirect: string, origin: string): boolean {
-  return isStartRedirectPath(new URL(redirect, origin).pathname);
-}
-
 export function resolveMe3OAuthRedirect(
   raw: unknown,
   options: LoginRedirectOptions,
 ): string {
   if (options.setupIncomplete) return "/create";
 
-  const redirect = normalizeSafeLoginRedirect(raw, options);
-  if (!redirect || isStartLoginRedirect(redirect, options.origin)) {
-    return "/";
-  }
-  return redirect;
+  return normalizeSafeLoginRedirect(raw, options) || "/";
 }

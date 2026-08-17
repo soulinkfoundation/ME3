@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { api } from "../../api";
+import { useAppToast } from "../../composables/useAppToast";
 import Button from "../Button.vue";
 import UiIcon from "../UiIcon.vue";
 
@@ -25,7 +26,7 @@ const goals = ref<MissionGoal[]>([]);
 const loading = ref(true);
 const saving = ref(false);
 const error = ref("");
-const saved = ref(false);
+const { toastSuccess } = useAppToast();
 let saveQueued = false;
 
 function createGoalId() {
@@ -41,7 +42,6 @@ function addGoal() {
     title: "",
     status: "active",
   });
-  saved.value = false;
 }
 
 async function saveGoals() {
@@ -50,7 +50,6 @@ async function saveGoals() {
     return;
   }
   saving.value = true;
-  saved.value = false;
   error.value = "";
   try {
     const response = await api.patch<MissionDashboardResponse>(
@@ -66,7 +65,7 @@ async function saveGoals() {
         response.settings.goals ||
         response.data?.["mission.goals"]?.goals ||
         [];
-      saved.value = true;
+      toastSuccess("Goals saved");
     }
   } catch (err) {
     error.value =
@@ -107,8 +106,7 @@ onMounted(async () => {
   <div class="step-goals" :aria-busy="saving">
     <h2>Goals</h2>
     <p class="section-desc">
-      Keep the outcomes you are actively working towards here. Goals are
-      private context for you and ME3, and are not added to your public profile.
+      Keep the outcomes you are actively working towards here.
     </p>
 
     <p v-if="loading" class="section-desc" role="status">
@@ -144,7 +142,6 @@ onMounted(async () => {
           placeholder="e.g. Publish four useful videos this month"
           :aria-label="`Goal ${index + 1} title`"
           :class="{ 'is-completed': goal.status === 'completed' }"
-          @input="saved = false"
           @change="saveGoals"
         />
         <Button
@@ -175,7 +172,6 @@ onMounted(async () => {
     </Button>
 
     <p v-if="saving" class="save-status" role="status">Saving...</p>
-    <p v-else-if="saved" class="save-status" role="status">Goals saved</p>
     <p v-if="error" class="save-error" role="alert">{{ error }}</p>
   </div>
 </template>
