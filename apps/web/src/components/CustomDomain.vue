@@ -259,11 +259,11 @@ watch(
 
         <!-- DNS Instructions for pending status -->
         <div v-if="domainStatus?.status === 'pending'" class="dns-instructions">
-          <h4>DNS Configuration Required</h4>
+          <h4>{{ managed ? "Connect your www address" : "Complete domain setup" }}</h4>
           <p class="dns-hint">
             {{
               managed
-                ? "Add the DNS record below, then check the connection."
+                ? "Add this CNAME record, then click Check status."
                 : "Complete the Cloudflare setup for this ME3 install, then check the connection."
             }}
           </p>
@@ -335,6 +335,10 @@ watch(
             </div>
           </div>
 
+          <p v-if="managed" class="dns-warning">
+            This connects www only; redirect the root domain separately.
+          </p>
+
           <div class="registrar-guides">
             <span class="guides-label">Setup guides:</span>
             <a
@@ -363,7 +367,7 @@ watch(
             :disabled="domainLoading"
             @click="refreshStatus"
           >
-            {{ domainLoading ? "Checking..." : "Check Status" }}
+            {{ domainLoading ? "Checking..." : "Check status" }}
           </button>
         </div>
 

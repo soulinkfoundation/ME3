@@ -129,4 +129,41 @@ describe("CustomDomain", () => {
       "www.example.com",
     );
   });
+
+  it("shows only the essential managed DNS instruction and root redirect note", async () => {
+    sitesStore.getDomainStatus.mockResolvedValue({
+      connected: true,
+      domain: "www.example.com",
+      status: "pending",
+      verification_records: [
+        { type: "cname", name: "www.example.com", value: "sites.me3.app" },
+      ],
+      registrar_guides: [],
+      instructions: [],
+    });
+
+    const wrapper = mount(CustomDomain, {
+      props: {
+        username: "testuser",
+        managed: true,
+        showSettingsLink: false,
+        profilePublished: true,
+      },
+      global: {
+        stubs: {
+          RouterLink: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Connect your www address");
+    expect(wrapper.text()).toContain(
+      "Add this CNAME record, then click Check status.",
+    );
+    expect(wrapper.text()).toContain(
+      "This connects www only; redirect the root domain separately.",
+    );
+    expect(wrapper.text()).not.toContain("Keep your permanent me3.app address");
+  });
 });
