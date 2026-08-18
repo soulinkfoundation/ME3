@@ -29,7 +29,7 @@ export interface UploadImageResult {
   path: string;
   url: string;
   storage?: "d1" | "r2";
-  type: "avatar" | "banner" | "favicon" | "hero" | "section" | "testimonial";
+  type: "logo" | "avatar" | "banner" | "favicon" | "hero" | "section" | "testimonial";
 }
 
 export interface UploadPageImageResult {
@@ -539,7 +539,7 @@ export const useSitesStore = defineStore("sites", () => {
   async function uploadImage(
     username: string,
     file: Blob,
-    type: "avatar" | "banner" | "hero" | "section" | "testimonial",
+    type: "logo" | "avatar" | "banner" | "hero" | "section" | "testimonial",
     options: { variant?: number; testimonialIndex?: number } = {},
   ): Promise<UploadImageResult | null> {
     loading.value = true;

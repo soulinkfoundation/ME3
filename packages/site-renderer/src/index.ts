@@ -112,6 +112,8 @@ export type Me3SiteProfile = {
   location?: string;
   locationData?: PublicLocationData;
   bio?: string;
+  /** Site branding asset. Used for the favicon and available to future site layouts. */
+  logo?: string;
   avatar?: string;
   banner?: string;
   links?: Me3LinkMap;
@@ -382,9 +384,14 @@ function pageShell(
   const fontLinks = fontUrl
     ? `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="${escapeHtml(fontUrl)}">`
     : "";
-  const faviconPath = profile.avatar
-    ? filePathForHtml(profile.avatar, options.basePath)
-    : `${options.basePath}favicon.png`;
+  const faviconSource = profile.logo || profile.avatar;
+  const faviconPath = faviconSource
+    ? filePathForHtml(faviconSource, options.basePath)
+    : "";
+  const faviconLinks = faviconPath
+    ? `<link rel="icon" href="${escapeHtml(faviconPath)}">\n  <link rel="apple-touch-icon" href="${escapeHtml(faviconPath)}">`
+    : "";
+  const headLinks = [faviconLinks, fontLinks].filter(Boolean).join("\n  ");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -392,9 +399,7 @@ function pageShell(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(options.title)}</title>
   <meta name="description" content="${escapeHtml(options.description)}">
-  <link rel="icon" href="${escapeHtml(faviconPath)}">
-  <link rel="apple-touch-icon" href="${escapeHtml(faviconPath)}">
-  ${fontLinks}
+  ${headLinks}
   <style>${siteCss(options.vibe, profile.links?._accent)}${siteCssOverrides(options.vibe)}${contentImageCss()}.main.no-banner .profile-header{margin-top:0}</style>
 </head>
 <body data-vibe="${escapeHtml(options.vibe)}">
@@ -1257,7 +1262,7 @@ function currencySymbol(currency: string): string {
 function filePathForHtml(url: string, basePath = "./"): string {
   if (/^https?:\/\//i.test(url) || url.startsWith("data:")) return url;
   const previewAsset = url.match(
-    /^\.?\/?preview\/[^/]+\/(files\/(?:avatar|banner|testimonial-\d+)\.[a-z0-9]+)$/i,
+    /^\.?\/?preview\/[^/]+\/(files\/(?:logo|avatar|banner|testimonial-\d+)\.[a-z0-9]+)$/i,
   );
   if (previewAsset) return `${basePath}${previewAsset[1]}`;
   if (url.startsWith("./")) return `${basePath}${url.slice(2)}`;

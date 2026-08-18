@@ -203,19 +203,6 @@ type ActivityViewItem = {
   canRetryLocalRun?: boolean;
 };
 
-type JournalProjectLink = {
-  id: string;
-  journalEntryId: string;
-  projectId: string;
-  sourceText: string | null;
-  createdTaskId: string | null;
-  createdReminderId: string | null;
-  createdAt: string;
-  entryDate: string;
-  entryTitle: string | null;
-  taskTitle: string | null;
-};
-
 const route = useRoute();
 const router = useRouter();
 const { toastFromUnknown, toastSuccess } = useAppToast();
@@ -274,11 +261,6 @@ const projectDeleteCandidateId = ref("");
 const projectDeleteSaving = ref(false);
 const projectDeleteError = ref("");
 const projectTasks = ref<MissionTask[]>([]);
-const projectJournalLinks = ref<JournalProjectLink[]>([]);
-const projectJournalLinksLoading = ref(false);
-const projectJournalLinksError = ref("");
-const projectJournalLinkActionId = ref("");
-const projectLogOpen = ref(false);
 const projectActionsMenuOpen = ref(false);
 const projectTasksLoading = ref(false);
 const projectTasksLoadingMore = ref(false);
@@ -570,36 +552,6 @@ const projectTaskListGroups = computed<ProjectTaskListGroup[]>(() => {
     selectedProjectDetail.value,
   );
 });
-const projectJournalLogGroups = computed(() => {
-  const journalOnlyLinks = projectJournalLinks.value.filter(
-    (link) => !link.createdTaskId,
-  );
-  if (selectedProjectDetail.value) {
-    return [
-      {
-        id: selectedProjectDetail.value.id,
-        label: selectedProjectDetail.value.name,
-        links: journalOnlyLinks,
-      },
-    ];
-  }
-
-  return projects.value
-    .map((project) => ({
-      id: project.id,
-      label: project.name,
-      links: journalOnlyLinks.filter(
-        (link) => link.projectId === project.id,
-      ),
-    }))
-    .filter((group) => group.links.length > 0);
-});
-const visibleProjectJournalLinksCount = computed(() =>
-  projectJournalLogGroups.value.reduce(
-    (total, group) => total + group.links.length,
-    0,
-  ),
-);
 const selectedProjectDetailLabel = computed(
   () =>
     selectedProjectDetail.value
@@ -621,7 +573,6 @@ const projectViewToggleLabel = computed(() =>
 const projectViewToggleIcon = computed<UiIconName>(() =>
   projectTaskViewMode.value === "kanban" ? "List" : "SquareKanban",
 );
-const projectLogToggleLabel = computed(() => "Project journal");
 const projectTaskDetailSaveStatusText = computed(() => {
   if (projectTaskDetailSaveState.value === "saving") return "Saving";
   if (projectTaskDetailSaveState.value === "saved") return "Saved";
@@ -719,7 +670,7 @@ async function loadActivityReview() {
 async function clearActivity() {
   if (activityItems.value.length === 0 || clearingActivity.value) return;
   const confirmed = window.confirm(
-    "Clear Mission Control Activity? This removes run and plugin activity history from this view.",
+    "Clear Assistant activity? This removes run and plugin activity history from this view.",
   );
   if (!confirmed) return;
 
@@ -1093,40 +1044,6 @@ async function loadProjectTasks(
   }
 }
 
-async function loadProjectJournalLinks(projectId = selectedProjectTaskScopeId.value) {
-  const scopeId = projectId || "";
-  projectJournalLinksLoading.value = true;
-  projectJournalLinksError.value = "";
-  try {
-    if (scopeId) {
-      const response = await api.get<{ links: JournalProjectLink[] }>(
-        `/mission-control/projects/${encodeURIComponent(scopeId)}/journal-links`,
-      );
-      if (selectedProjectTaskScopeId.value !== scopeId) return;
-      projectJournalLinks.value = response.links || [];
-      return;
-    }
-
-    const response = await api.get<{ links: JournalProjectLink[] }>(
-      "/mission-control/journal/links",
-    );
-    if (selectedProjectTaskScopeId.value !== scopeId) return;
-    projectJournalLinks.value = (response.links || []).sort((a, b) =>
-      b.createdAt.localeCompare(a.createdAt),
-    );
-  } catch (e) {
-    projectJournalLinksError.value =
-      e instanceof ApiError && e.status === 404
-        ? ""
-        : e instanceof ApiError
-          ? e.message
-          : "Project journal could not load";
-    projectJournalLinks.value = [];
-  } finally {
-    projectJournalLinksLoading.value = false;
-  }
-}
-
 async function loadCompletedProjectTasks(
   projectId = selectedProjectTaskScopeId.value,
 ) {
@@ -1434,9 +1351,6 @@ async function deleteProject() {
     completedProjectTasks.value = completedProjectTasks.value.filter(
       (task) => task.projectId !== project.id,
     );
-    projectJournalLinks.value = projectJournalLinks.value.filter(
-      (link) => link.projectId !== project.id,
-    );
     if (selectedProjectTaskDetail.value?.projectId === project.id) {
       closeProjectTaskDetail({ force: true });
     }
@@ -1468,7 +1382,6 @@ function resetProjectTaskComposer() {
 
 function toggleKanbanView() {
   projectCompletedOpen.value = false;
-  projectLogOpen.value = false;
   const enabled = projectTaskViewMode.value !== "kanban";
   kanbanEnabled.value = enabled;
   window.localStorage.setItem(
@@ -1480,7 +1393,6 @@ function toggleKanbanView() {
 
 function toggleCompletedProjectTasks() {
   projectCompletedOpen.value = !projectCompletedOpen.value;
-  if (projectCompletedOpen.value) projectLogOpen.value = false;
   projectPickerOpen.value = false;
   projectActionsMenuOpen.value = false;
   resetProjectTaskComposer();
@@ -1488,24 +1400,11 @@ function toggleCompletedProjectTasks() {
   if (projectCompletedOpen.value) void loadCompletedProjectTasks();
 }
 
-function toggleProjectLog() {
-  projectLogOpen.value = !projectLogOpen.value;
-  if (projectLogOpen.value) {
-    projectCompletedOpen.value = false;
-    resetProjectTaskComposer();
-    closeProjectTaskDetail();
-  }
-  projectPickerOpen.value = false;
-  projectActionsMenuOpen.value = false;
-  if (projectLogOpen.value) void loadProjectJournalLinks();
-}
-
 function setProjectTaskViewMode(mode: ProjectTaskViewMode) {
   const nextMode = mode === "kanban" && kanbanEnabled.value ? "kanban" : "list";
   if (projectTaskViewMode.value === nextMode) return;
   projectTaskViewMode.value = nextMode;
   projectCompletedOpen.value = false;
-  projectLogOpen.value = false;
   projectActionsMenuOpen.value = false;
   resetProjectTaskComposer();
   closeProjectTaskDetail();
@@ -2329,23 +2228,6 @@ async function archiveProjectTask(task: MissionTask): Promise<boolean> {
   }
 }
 
-async function deleteProjectJournalLink(link: JournalProjectLink) {
-  if (projectJournalLinkActionId.value) return;
-  projectJournalLinkActionId.value = link.id;
-  projectJournalLinksError.value = "";
-  try {
-    await api.delete(`/mission-control/journal/links/${encodeURIComponent(link.id)}`);
-    projectJournalLinks.value = projectJournalLinks.value.filter(
-      (item) => item.id !== link.id,
-    );
-  } catch (e) {
-    projectJournalLinksError.value =
-      e instanceof ApiError ? e.message : "Could not remove journal link";
-  } finally {
-    projectJournalLinkActionId.value = "";
-  }
-}
-
 async function archiveSelectedProjectTask() {
   const task = selectedProjectTaskDetail.value;
   if (!task || projectTaskDetailSaving.value) return;
@@ -2479,18 +2361,6 @@ function accountSourceLabel(source: FinancialEntrySource): string {
   if (source === "email_triage") return "Email triage";
   if (source === "csv_import") return "CSV import";
   return source.charAt(0).toUpperCase() + source.slice(1);
-}
-
-function journalLinkTitle(link: JournalProjectLink): string {
-  return link.entryTitle || "Journal entry";
-}
-
-function journalLinkSnippet(link: JournalProjectLink): string {
-  return link.sourceText || "";
-}
-
-function journalLinkHref(link: JournalProjectLink): string {
-  return `/journal?date=${encodeURIComponent(link.entryDate)}`;
 }
 
 function formatMoney(cents: number, currency: string): string {
@@ -2661,7 +2531,6 @@ watch(
 watch(activeSection, (section) => {
   if (section === "projects") {
     void loadProjectTasks();
-    if (projectLogOpen.value) void loadProjectJournalLinks();
     void loadLocalExecutorStatus();
   }
   if (section === "activity") void loadActivityReview();
@@ -2673,7 +2542,6 @@ watch(selectedProjectDetailId, (next, previous) => {
   if (next === previous) return;
   if (activeSection.value === "projects") {
     void loadProjectTasks(next);
-    if (projectLogOpen.value) void loadProjectJournalLinks(next);
     if (projectCompletedOpen.value) void loadCompletedProjectTasks(next);
   }
 });
@@ -2718,7 +2586,6 @@ onMounted(() => {
   void loadPluginCapabilities();
   if (activeSection.value === "projects") {
     void loadProjectTasks();
-    void loadProjectJournalLinks();
     void loadLocalExecutorStatus();
   }
   if (activeSection.value === "activity") void loadActivityReview();
@@ -2756,17 +2623,6 @@ onBeforeUnmount(() => {
           @select="selectProjectDetail"
           @add-project="openProjectModal"
         />
-        <Button
-          color="ghost"
-          shape="soft"
-          size="compact"
-          type="button"
-          aria-label="Add project"
-          @click="openProjectModal"
-        >
-          <UiIcon name="Plus" :size="15" />
-          <span>Add project</span>
-        </Button>
       </div>
       <div v-if="activeSection !== 'projects'" class="mission-control__section-title">
         {{ sectionLabels[activeSection] }}
@@ -2839,30 +2695,8 @@ onBeforeUnmount(() => {
               <UiIcon name="Pencil" :size="15" />
               Edit project
             </button>
-            <button
-              type="button"
-              class="mission-control__actions-item"
-              :class="{ 'is-active': projectLogOpen }"
-              role="menuitem"
-              @click="toggleProjectLog"
-            >
-              <UiIcon name="BookOpen" :size="15" />
-              {{ projectLogToggleLabel }}
-            </button>
           </div>
         </div>
-        <Button
-          v-if="!isAccountsRoute"
-          color="ghost"
-          shape="soft"
-          size="compact"
-          icon-only
-          to="/journal"
-          aria-label="Close projects"
-          title="Close projects"
-        >
-          <UiIcon name="X" :size="18" />
-        </Button>
       </div>
     </header>
 
@@ -2870,65 +2704,7 @@ onBeforeUnmount(() => {
 
     <section v-show="activeSection === 'projects'" class="mission-page">
       <div class="mission-projects-shell">
-        <section
-          v-if="projectLogOpen"
-          class="project-journal-log"
-          aria-label="Project journal"
-        >
-          <header class="project-journal-log__header">
-            <div>
-              <h2>Project journal</h2>
-            </div>
-          </header>
-          <p
-            v-if="projectJournalLinksError"
-            class="mission-control__message is-error"
-          >
-            {{ projectJournalLinksError }}
-          </p>
-          <div v-if="projectJournalLinksLoading" class="empty-row">
-            Loading project journal...
-          </div>
-          <div v-else-if="visibleProjectJournalLinksCount === 0" class="empty-row">
-            No project journal entries yet. Link text from notes in your daily
-            journal to a project, and it will appear here.
-          </div>
-          <template v-else>
-            <section
-              v-for="group in projectJournalLogGroups"
-              :key="group.id"
-              class="project-journal-log__group"
-            >
-              <h3 v-if="!selectedProjectDetail">{{ group.label }}</h3>
-              <article
-                v-for="link in group.links"
-                :key="link.id"
-                class="project-journal-log__row"
-              >
-                <a
-                  class="project-journal-log__row-main"
-                  :href="journalLinkHref(link)"
-                >
-                  <span>{{ formatShortDate(link.entryDate) }}</span>
-                  <strong>{{ journalLinkTitle(link) }}</strong>
-                  <p v-if="journalLinkSnippet(link)">
-                    {{ journalLinkSnippet(link) }}
-                  </p>
-                </a>
-                <button
-                  type="button"
-                  class="project-journal-log__remove"
-                  :disabled="projectJournalLinkActionId === link.id"
-                  @click.stop="deleteProjectJournalLink(link)"
-                >
-                  <UiIcon name="Trash2" :size="14" aria-hidden="true" />
-                  Remove
-                </button>
-              </article>
-            </section>
-          </template>
-        </section>
-        <section v-else-if="projectCompletedOpen" class="completed-tasks-view">
+        <section v-if="projectCompletedOpen" class="completed-tasks-view">
           <header class="completed-tasks-view__header">
             <div>
               <h2>Completed items</h2>
@@ -3357,7 +3133,7 @@ onBeforeUnmount(() => {
         <div class="simple-sheet__header">
           <div>
             <h1>Activity</h1>
-            <p>Approvals, runs, and Mission Control updates.</p>
+            <p>Approvals, runs, and Assistant updates.</p>
           </div>
           <div class="activity-header__actions">
             <Button color="danger" shape="soft" size="compact"
@@ -3585,10 +3361,9 @@ onBeforeUnmount(() => {
             </Button>
           </div>
           <p class="project-delete-modal__copy">
-            The project will be hidden from active Mission Control views. Its
+            The project will be hidden from active project views. Its
             open and completed items will be archived with it, while history,
-            journal links, runs, and account records remain available in the
-            database.
+            runs, and account records remain available in the database.
           </p>
           <p v-if="projectDeleteError" class="mission-modal__error">
             {{ projectDeleteError }}
@@ -4162,111 +3937,6 @@ onBeforeUnmount(() => {
   display: grid;
   width: min(760px, 100%);
   gap: 14px;
-}
-
-.project-journal-log {
-  display: grid;
-  width: min(760px, 100%);
-  gap: 8px;
-  padding-top: 4px;
-}
-
-.project-journal-log__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--ui-border);
-}
-
-.project-journal-log__header h2,
-.project-journal-log__row-main p {
-  margin: 0;
-}
-
-.project-journal-log__header h2 {
-  color: var(--ui-text);
-  font-size: 15px;
-}
-
-.project-journal-log__group {
-  display: grid;
-  gap: 2px;
-}
-
-.project-journal-log__group h3 {
-  margin: 8px 0 2px;
-  color: var(--ui-text);
-  font-size: 13px;
-  line-height: 1.25;
-}
-
-.project-journal-log__row-main span,
-.project-journal-log__row-main p {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-}
-
-.project-journal-log__row {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  border-radius: var(--ui-radius-sm);
-  color: var(--ui-text);
-}
-
-.project-journal-log__row-main {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-  border-radius: var(--ui-radius-sm);
-  padding: 9px 8px;
-  color: inherit;
-  text-decoration: none;
-}
-
-.project-journal-log__row:hover,
-.project-journal-log__row:focus-within {
-  background: var(--ui-surface-muted);
-}
-
-.project-journal-log__row-main:focus-visible {
-  outline: none;
-}
-
-.project-journal-log__row-main strong,
-.project-journal-log__row-main p {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.project-journal-log__remove {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: 4px;
-  border: 0;
-  border-radius: var(--ui-radius-sm);
-  padding: 7px 9px;
-  background: transparent;
-  color: #b91c1c;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.project-journal-log__remove:hover,
-.project-journal-log__remove:focus-visible {
-  background: var(--ui-surface-muted);
-  outline: none;
-}
-
-.project-journal-log__remove:disabled {
-  cursor: default;
-  opacity: 0.55;
 }
 
 .completed-tasks-view__header {
@@ -4955,7 +4625,6 @@ onBeforeUnmount(() => {
     padding-left: var(--app-shell-mobile-nav-leading-padding);
   }
 
-  .mission-control__project-nav,
   .mission-control__section-title {
     justify-self: stretch;
   }

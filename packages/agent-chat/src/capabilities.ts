@@ -691,7 +691,7 @@ export const CORE_CHAT_CAPABILITIES = [
     owner: "core",
     pluginId: null,
     ownerFacingLabel: "Search owner content",
-    summary: "Search the owner's Mission Control tasks and Journal entries by title or body, returning lightweight candidates with stable IDs.",
+    summary: "Search the owner's tasks and Journal entries by title or body, returning lightweight candidates with stable IDs.",
     category: "assistant",
     handler: {
       surface: "chat",
@@ -715,15 +715,15 @@ export const CORE_CHAT_CAPABILITIES = [
         },
         projectId: {
           type: "string",
-          description: "Optional stable Mission Control project ID.",
+          description: "Optional stable project ID.",
         },
         projectName: {
           type: "string",
-          description: "Optional exact Mission Control project name or slug.",
+          description: "Optional exact project name or slug.",
         },
         status: {
           type: "string",
-          description: "Optional Mission Control task status.",
+          description: "Optional task status.",
           enum: ["backlog", "in_progress", "review", "done", "cancelled"],
         },
         dateFrom: {
@@ -761,7 +761,7 @@ export const CORE_CHAT_CAPABILITIES = [
     owner: "plugin",
     pluginId: "me3.social-publishing",
     ownerFacingLabel: "Read social post source",
-    summary: "Read one Journal entry or Mission Control task as the source for a social draft.",
+    summary: "Read one Journal entry or task as the source for a social draft.",
     category: "content",
     handler: {
       surface: "chat",
@@ -781,7 +781,7 @@ export const CORE_CHAT_CAPABILITIES = [
         },
         sourceId: {
           type: "string",
-          description: "Journal entry ID/date (or today), or stable Mission Control task ID.",
+          description: "Journal entry ID/date (or today), or stable task ID.",
         },
       },
       additionalProperties: false,
@@ -1099,7 +1099,7 @@ export const CORE_CHAT_CAPABILITIES = [
     examples: {
       positive: [
         "Turn today's Journal into a Quote, Short Post, Thread, and carousel outline I can review.",
-        "Repurpose the Mission Control task we just read into grounded social Suggestions.",
+        "Repurpose the task we just read into grounded social Suggestions.",
       ],
       negative: [
         "Invent four social Suggestions without reading one of my Sources.",
@@ -1115,8 +1115,8 @@ export const CORE_CHAT_CAPABILITIES = [
     id: "core.mission.task.create",
     owner: "core",
     pluginId: "me3.mission-control",
-    ownerFacingLabel: "Create Mission Control task",
-    summary: "Create a Mission Control task from a clear owner request.",
+    ownerFacingLabel: "Create task",
+    summary: "Create a task from a clear owner request.",
     category: "mission_control",
     handler: {
       surface: "chat",
@@ -1134,7 +1134,7 @@ export const CORE_CHAT_CAPABILITIES = [
           type: "string",
           description: "Optional task description, notes, details, or body.",
         },
-        projectId: { type: "string", description: "Mission Control project ID." },
+        projectId: { type: "string", description: "Project ID." },
         dueAt: {
           type: "string",
           description: "Optional YYYY-MM-DD due date.",
@@ -1151,7 +1151,7 @@ export const CORE_CHAT_CAPABILITIES = [
     auditEventKind: "mission_task_created",
     examples: {
       positive: ["Add a task to project ME3 Launch to follow up with Sam tomorrow."],
-      negative: ["I want to test Mission Control tasks and projects."],
+      negative: ["I want to explore tasks and projects."],
     },
     chat: {
       intentKind: "write_action",
@@ -1162,8 +1162,8 @@ export const CORE_CHAT_CAPABILITIES = [
     id: "core.mission.task.list",
     owner: "core",
     pluginId: "me3.mission-control",
-    ownerFacingLabel: "List Mission Control tasks",
-    summary: "Read Mission Control tasks by project and status.",
+    ownerFacingLabel: "List tasks",
+    summary: "Read tasks by project and status.",
     category: "mission_control",
     handler: {
       surface: "chat",
@@ -1177,11 +1177,11 @@ export const CORE_CHAT_CAPABILITIES = [
       properties: {
         projectId: {
           type: "string",
-          description: "Stable Mission Control project ID, or null to list across all projects.",
+          description: "Stable project ID, or null to list across all projects.",
         },
         projectName: {
           type: "string",
-          description: "Exact Mission Control project name or slug, or null when not filtering by project.",
+          description: "Exact project name or slug, or null when not filtering by project.",
         },
         status: {
           type: "string",
@@ -1195,7 +1195,7 @@ export const CORE_CHAT_CAPABILITIES = [
     examples: {
       positive: [
         "Show backlog tasks for project ME3 Launch.",
-        "Help me prioritise my Mission Control tasks.",
+        "Help me prioritise my tasks.",
       ],
       negative: ["Explain how task statuses work."],
     },
@@ -1208,8 +1208,8 @@ export const CORE_CHAT_CAPABILITIES = [
     id: "core.mission.task.read",
     owner: "core",
     pluginId: "me3.mission-control",
-    ownerFacingLabel: "Read Mission Control task",
-    summary: "Read one Mission Control task, including its full description where possible.",
+    ownerFacingLabel: "Read task",
+    summary: "Read one task, including its full description where possible.",
     category: "mission_control",
     handler: {
       surface: "chat",
@@ -1222,7 +1222,7 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["taskId"],
       properties: {
-        taskId: { type: "string", description: "Mission Control task ID." },
+        taskId: { type: "string", description: "Task ID." },
       },
       additionalProperties: false,
     },
@@ -1240,8 +1240,8 @@ export const CORE_CHAT_CAPABILITIES = [
     id: "core.mission.task.update",
     owner: "core",
     pluginId: "me3.mission-control",
-    ownerFacingLabel: "Update Mission Control task",
-    summary: "Update, move, rename, or reschedule a Mission Control task.",
+    ownerFacingLabel: "Update task",
+    summary: "Update, move, rename, or reschedule a task.",
     category: "mission_control",
     handler: {
       surface: "chat",
@@ -1254,7 +1254,7 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["taskId"],
       properties: {
-        taskId: { type: "string", description: "Mission Control task ID." },
+        taskId: { type: "string", description: "Task ID." },
         title: { type: "string", description: "Optional replacement task title." },
         description: {
           type: "string",
@@ -1290,7 +1290,7 @@ export const CORE_CHAT_CAPABILITIES = [
     auditEventKind: "mission_task_updated",
     examples: {
       positive: ["Mark task follow up with Sam as done."],
-      negative: ["How should I organize my Mission Control tasks?"],
+      negative: ["How should I organize my tasks?"],
     },
     chat: {
       intentKind: "write_action",
@@ -1301,8 +1301,8 @@ export const CORE_CHAT_CAPABILITIES = [
     id: "core.mission.task.archive",
     owner: "core",
     pluginId: "me3.mission-control",
-    ownerFacingLabel: "Archive Mission Control task",
-    summary: "Archive a Mission Control task from a clear owner request.",
+    ownerFacingLabel: "Archive task",
+    summary: "Archive a task from a clear owner request.",
     category: "mission_control",
     handler: {
       surface: "chat",
@@ -1315,14 +1315,14 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["taskId"],
       properties: {
-        taskId: { type: "string", description: "Mission Control task ID." },
+        taskId: { type: "string", description: "Task ID." },
       },
       additionalProperties: false,
     },
     auditEventKind: "mission_task_archived",
     examples: {
       positive: ["Delete task follow up with Sam."],
-      negative: ["Can you explain deleted Mission Control tasks?"],
+      negative: ["Can you explain archived tasks?"],
     },
     chat: {
       intentKind: "write_action",

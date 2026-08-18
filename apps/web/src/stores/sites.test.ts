@@ -427,6 +427,25 @@ describe("sites store", () => {
       expect(result).toEqual(mockResult);
     });
 
+    it("should upload a site logo using the shared image path", async () => {
+      const blob = new Blob(["logo"], { type: "image/webp" });
+      const mockResult = {
+        ok: true,
+        path: "files/logo.webp",
+        url: "files/logo.webp",
+        type: "logo" as const,
+      };
+      vi.mocked(api.upload).mockResolvedValue(mockResult);
+
+      const store = useSitesStore();
+      const result = await store.uploadImage("testuser", blob, "logo");
+
+      expect(result).toEqual(mockResult);
+      const formData = vi.mocked(api.upload).mock.calls.at(-1)?.[1] as FormData;
+      expect(formData.get("type")).toBe("logo");
+      expect((formData.get("file") as File).name).toBe("logo.webp");
+    });
+
     it("should handle upload image errors", async () => {
       const blob = new Blob(["image data"], { type: "image/png" });
       vi.mocked(api.upload).mockRejectedValue(

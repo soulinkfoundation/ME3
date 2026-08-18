@@ -309,7 +309,7 @@ function calendarState(
 
 function sourceLabel(sourceType: string): string {
   if (sourceType === "journal") return "Journal";
-  if (sourceType === "mission_task") return "Mission Control";
+  if (sourceType === "mission_task") return "Task";
   if (sourceType === "site") return "Site";
   if (sourceType === "file") return "File";
   if (sourceType === "script") return "Script";

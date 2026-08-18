@@ -151,6 +151,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-07-31-owner-onboarding-v1",
     apply: applyOwnerOnboardingMigration,
   },
+  {
+    id: "0035_calendar_source_event_dismissals",
+    checksum: "2026-08-18-calendar-source-event-dismissals-v1",
+    apply: applyCalendarSourceEventDismissalsMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -2105,6 +2110,30 @@ async function applyOwnerOnboardingMigration(db: D1Database): Promise<void> {
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE
       )`,
+    )
+    .run();
+}
+
+async function applyCalendarSourceEventDismissalsMigration(
+  db: D1Database,
+): Promise<void> {
+  if (!(await tableExists(db, "calendar_sources"))) return;
+
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS calendar_source_event_dismissals (
+        source_id TEXT NOT NULL,
+        external_key TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (source_id, external_key),
+        FOREIGN KEY (source_id) REFERENCES calendar_sources(id) ON DELETE CASCADE
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_calendar_source_event_dismissals_source
+       ON calendar_source_event_dismissals(source_id)`,
     )
     .run();
 }

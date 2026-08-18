@@ -23,7 +23,7 @@
 ### 🖥️ What's in ME3
 
 - **🤖 An AI assistant/agent** you control and create jobs for to save you time. Pick any model from Open Source models to Claude.
-- **🚀 Mission Control** to manage your projects/tasks/life.
+- **Tasks and Projects** to organise work and keep priorities moving.
 - **🌐 A ME3 site/profile**: it's like a digital business card, built for humans and AI agents.
 - **📧 Email** for you or your 🤖, whatever allows you to spend less time on email.
 - **📆 A Calendar** your 🤖 can use to help you spend more time on what matters to you.

@@ -200,7 +200,7 @@ export async function updateAgentMissionTask(
   const project = input.projectId
     ? projects.find((candidate) => candidate.id === input.projectId)
     : projects.find((candidate) => candidate.id === existing.projectId);
-  if (!project) return { error: "Mission Control project not found.", status: 404 };
+  if (!project) return { error: "Project not found.", status: 404 };
 
   const title = input.title === undefined ? existing.title : requiredText(input.title);
   if (!title) return { error: "Task title cannot be empty.", status: 400 };
@@ -322,7 +322,7 @@ function resolveCreateProject(
   const projectId = optionalText(projectIdInput);
   if (projectId) {
     return projects.find((project) => project.id === projectId) || {
-      error: "Mission Control project not found. List tasks and use a stable project ID.",
+      error: "Project not found. List tasks and use a stable project ID.",
       status: 404,
     };
   }
@@ -341,7 +341,7 @@ function serializeMissionTaskRow(row: MissionTaskRow): AgentMissionTask[] {
     title: row.title,
     description: row.description,
     projectId: row.project_id,
-    projectName: row.project_name || "Mission Control",
+    projectName: row.project_name || "No project",
     dueAt: row.due_at || row.scheduled_for || null,
     status: row.status,
     priority: row.priority,

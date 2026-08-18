@@ -51,6 +51,7 @@ describe("Core runtime migrations", () => {
     ).toBe(true);
     expect(db.tables.has("managed_runtime_write_leases")).toBe(true);
     expect(db.tables.has("owner_onboarding")).toBe(true);
+    expect(db.tables.has("calendar_source_event_dismissals")).toBe(true);
     expect(db.tables.has("drive_multipart_uploads")).toBe(true);
     expect(db.tables.has("drive_multipart_parts")).toBe(true);
     expect(db.tables.has("social_media_delivery_grants")).toBe(true);
@@ -144,6 +145,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0034_owner_onboarding")).toBe(
       "2026-07-31-owner-onboarding-v1",
+    );
+    expect(db.migrations.get("0035_calendar_source_event_dismissals")).toBe(
+      "2026-08-18-calendar-source-event-dismissals-v1",
     );
     expect(
       db.statements.some(
@@ -305,6 +309,7 @@ class RuntimeMigrationDb {
     "sites",
     "subscribers",
     "bookings",
+    "calendar_sources",
   ]);
   readonly columns = new Map<string, Set<string>>([
     ["commerce_settings", new Set(["user_id", "encrypted_stripe_secret_key"])],

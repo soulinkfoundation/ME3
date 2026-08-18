@@ -930,7 +930,7 @@ function missionTaskWriteOutcome(
   return {
     capabilityId,
     result: { ok: true, task },
-    fallbackReply: `${action === "archived" ? "Archived" : action === "created" ? "Created" : "Updated"} the Mission Control task: ${task.title}.`,
+    fallbackReply: `${action === "archived" ? "Archived" : action === "created" ? "Created" : "Updated"} the task: ${task.title}.`,
     reminderAction: null,
     actionCards: [buildMissionTaskActionCard(task, action)],
   };
@@ -953,7 +953,7 @@ export function buildMissionTaskActionCard(
         ? "mission.task_updated"
         : "mission.task_archived",
     capabilityId,
-    title: `Mission Control task ${action}`,
+    title: `Task ${action}`,
     summary: task.title,
     status: "complete",
     statusLabel: "Complete",
@@ -965,7 +965,7 @@ export function buildMissionTaskActionCard(
       { label: "Status", value: action === "archived" ? "archived" : task.status },
     ],
     records: [{ kind: "mission_task", id: task.id }],
-    primaryAction: { label: "Open Mission Control", href: "/mission-control" },
+    primaryAction: { label: "Open Tasks", href: "/mission-control/projects" },
     secondaryActions: [],
   };
 }
@@ -1733,8 +1733,8 @@ function withCoreToolInstructions(
     "Site blog read tool rules:",
     "- Use core_sites_blog_post_read to list profile-site blog posts or read one named post. Omit post to list; provide the title, slug, or file path to read the full markdown body.",
     "- Site blog access is read-only. No tool can create, draft, edit, publish, unpublish, archive, or delete a blog post.",
-    "Mission Control task tool rules:",
-    "- Use task tools only when the owner clearly asks to list, read, create, update, move, complete, or archive Mission Control tasks.",
+    "Task and project tool rules:",
+    "- Use task tools only when the owner clearly asks to list, read, create, update, move, complete, or archive tasks.",
     "- When the owner remembers a task or Journal entry by title or content, use core_owner_content_search. Search returns lightweight candidates with stable source IDs; read the selected source before using its full body.",
     "- Search before task read/update/archive when the owner names or describes a record but no stable task ID is present. Use task list for browsing a project or status, not title discovery.",
     "- Task list accepts an exact projectName directly. Use projectId=null and projectName=null to list across all projects; never claim a project ID is required for a read.",
@@ -1765,7 +1765,7 @@ function withCoreToolInstructions(
     "- Draft requires a complete recipient, subject, and plain-text body. Use replyToMessageId only after reading that exact message.",
     "- Draft creation saves a reviewable mailbox draft only. Never claim the email was sent; sending is not an available tool.",
     "Social publishing tool rules:",
-    "- Use social tools when the owner asks to turn a Journal entry or Mission Control task into social Posts or Suggestions.",
+    "- Use social tools when the owner asks to turn a Journal entry or task into social Posts or Suggestions.",
     "- Search owner content when the owner gives a remembered task or Journal title. For Journal, an entry ID, YYYY-MM-DD date, or today can also be used directly. Never invent a source ID.",
     "- Read the exact Source with core_social_source_read before calling core_social_suggestions_create or core_social_draft_create. Build every Suggestion and Version from that returned Source, not from assumptions or a summary invented by the model.",
     "- If source reading is the last action in a turn, confirm the source by its human title only. ME3 preserves the stable source ID privately for safe cross-turn revalidation.",
@@ -2008,7 +2008,7 @@ function resolveMissionTaskProjectId(
     ? projects.find((project) => project.id === projectId)
     : undefined;
   if (projectId && !byId) {
-    throw new Error("Mission Control project not found. List tasks or use an exact project name.");
+    throw new Error("Project not found. List tasks or use an exact project name.");
   }
   if (!projectName) return byId?.id;
 
@@ -2023,12 +2023,12 @@ function resolveMissionTaskProjectId(
   if (matches.length !== 1) {
     throw new Error(
       matches.length
-        ? `Multiple Mission Control projects match "${projectName}". Use a stable project ID.`
-        : `Mission Control project "${projectName}" was not found.`,
+        ? `Multiple projects match "${projectName}". Use a stable project ID.`
+        : `Project "${projectName}" was not found.`,
     );
   }
   if (byId && byId.id !== matches[0].id) {
-    throw new Error("Mission Control projectId and projectName refer to different projects.");
+    throw new Error("projectId and projectName refer to different projects.");
   }
   return matches[0].id;
 }
@@ -2188,9 +2188,9 @@ function formatMissionTask(task: AgentMissionTask): string {
 }
 
 function formatMissionTaskList(tasks: AgentMissionTask[]): string {
-  if (tasks.length === 0) return "I could not find any matching Mission Control tasks.";
+  if (tasks.length === 0) return "I could not find any matching tasks.";
   return [
-    `Found ${tasks.length} Mission Control task${tasks.length === 1 ? "" : "s"}:`,
+    `Found ${tasks.length} task${tasks.length === 1 ? "" : "s"}:`,
     ...tasks.map(
       (task) => `- ${task.title} — ${task.projectName} — ${task.status} — priority ${task.priority} (ID: ${task.id})`,
     ),
@@ -2298,7 +2298,7 @@ function formatOwnerContentSearch(
   ambiguous: boolean,
 ): string {
   if (results.length === 0) {
-    return "I could not find a matching Mission Control task or Journal entry.";
+    return "I could not find a matching task or Journal entry.";
   }
   return [
     ambiguous

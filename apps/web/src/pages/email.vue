@@ -250,7 +250,6 @@ const threadDetailError = ref("");
 const conversationScrollRef = ref<HTMLElement | null>(null);
 let renderedThreadPageKey: string | null = null;
 const threadPageNextCursors = new Map<string, string | null>();
-const keyboardStatus = ref("");
 const deliveryResolutionPending = ref<string | null>(null);
 const deliveryRetryConfirmId = ref<string | null>(null);
 const deliveryStatuses = ref<Record<string, MailboxDeliveryStatus>>({});
@@ -3080,120 +3079,6 @@ async function resolveUnconfirmedDelivery(
   }
 }
 
-function keyboardTargetIsEditable(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
-  if (target.closest('[role="dialog"]')) return true;
-  if (target.closest(".conversation-open")) return false;
-  return Boolean(
-    target.closest(
-      'input, textarea, select, button, [contenteditable="true"]',
-    ),
-  );
-}
-
-function activeConversationMessage(): InboxMessage | null {
-  return (
-    messages.value.find((message) => message.id === expandedId.value) ||
-    messages.value.find((message) => selectedMessageIds.value.has(message.id)) ||
-    null
-  );
-}
-
-async function moveConversationSelection(direction: -1 | 1) {
-  if (!messages.value.length) return;
-  const currentIndex = messages.value.findIndex(
-    (message) => message.id === expandedId.value,
-  );
-  const nextIndex =
-    currentIndex < 0
-      ? direction > 0
-        ? 0
-        : messages.value.length - 1
-      : Math.min(
-          messages.value.length - 1,
-          Math.max(0, currentIndex + direction),
-        );
-  const message = messages.value[nextIndex];
-  if (!message || message.id === expandedId.value) return;
-  await selectMessage(message.id);
-  keyboardStatus.value = `${nextIndex + 1} of ${messages.value.length}: ${getMessageSubject(message)}`;
-  await nextTick();
-  const row = conversationScrollRef.value?.querySelector<HTMLElement>(
-    `[data-message-id="${message.id.replace(/["\\]/g, "\\$&")}"]`,
-  );
-  row?.scrollIntoView?.({ block: "nearest" });
-}
-
-async function handleMailboxKeyboardShortcut(event: KeyboardEvent) {
-  if (
-    event.defaultPrevented ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.altKey ||
-    activeTab.value === "telegram" ||
-    composeOpen.value ||
-    composeDiscardConfirmOpen.value ||
-    keyboardTargetIsEditable(event.target)
-  ) {
-    return;
-  }
-  const key = event.key.toLowerCase();
-  if (key === "j" || event.key === "ArrowDown") {
-    event.preventDefault();
-    await moveConversationSelection(1);
-    return;
-  }
-  if (key === "k" || event.key === "ArrowUp") {
-    event.preventDefault();
-    await moveConversationSelection(-1);
-    return;
-  }
-
-  const message = activeConversationMessage();
-  if (!message || inboxBusy.value) return;
-  if (key === "x") {
-    event.preventDefault();
-    toggleMessageSelected(
-      message.id,
-      !selectedMessageIds.value.has(message.id),
-    );
-    keyboardStatus.value = selectedMessageIds.value.has(message.id)
-      ? "Conversation selected."
-      : "Conversation unselected.";
-    return;
-  }
-  if (key === "e") {
-    if (activeTab.value === "archive" || activeTab.value === "trash") return;
-    event.preventDefault();
-    await moveConversation(message, "archive");
-    keyboardStatus.value = "Conversation archived.";
-    return;
-  }
-  if (key === "u") {
-    event.preventDefault();
-    const read = getConversationUnreadCount(message) > 0;
-    await markConversationRead(message, read);
-    keyboardStatus.value = read
-      ? "Conversation marked as read."
-      : "Conversation marked as unread.";
-    return;
-  }
-  if (key === "r" && !isDraftMessage(message)) {
-    event.preventDefault();
-    await selectMessage(message.id);
-    if (selectedMessage.value && !isDraftMessage(selectedMessage.value)) {
-      openComposeModal(selectedMessage.value);
-    }
-    return;
-  }
-  if (event.key === "Delete" || event.key === "#") {
-    if (activeTab.value === "trash") return;
-    event.preventDefault();
-    await moveConversation(message, "trash");
-    keyboardStatus.value = "Conversation moved to Trash.";
-  }
-}
-
 onMounted(() => {
   const routeTab = typeof route.query.tab === "string" ? route.query.tab : "";
   if (emailTabOrder.includes(routeTab as EmailTab)) {
@@ -3203,11 +3088,9 @@ onMounted(() => {
     await loadMessages();
     void Promise.all([loadMailboxHealth(), loadFolderCounts()]);
   })();
-  window.addEventListener("keydown", handleMailboxKeyboardShortcut);
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener("keydown", handleMailboxKeyboardShortcut);
   clearDeliveryStatusRefreshes();
   for (const observer of activeEmailFrameObservers) {
     observer.disconnect();
@@ -3546,22 +3429,7 @@ onBeforeUnmount(() => {
                         Clear
                       </Button>
                     </div>
-                    <details v-else class="mail-keyboard-help">
-                      <summary>
-                        <UiIcon name="HelpCircle" :size="14" aria-hidden="true" />
-                        Shortcuts
-                      </summary>
-                      <p>
-                        <kbd>J</kbd>/<kbd>K</kbd> or <kbd>↑</kbd>/<kbd>↓</kbd> move ·
-                        <kbd>X</kbd> select ·
-                        <kbd>E</kbd> archive · <kbd>U</kbd> read/unread ·
-                        <kbd>R</kbd> reply · <kbd>#</kbd> trash
-                      </p>
-                    </details>
                   </div>
-                  <p class="sr-only" role="status" aria-live="polite">
-                    {{ keyboardStatus }}
-                  </p>
                   <div class="conversation-scroll">
                   <article
                     v-for="message in messages"
@@ -4856,18 +4724,18 @@ onBeforeUnmount(() => {
 }
 
 .mail-search--mobile-nav {
-  grid-template-columns: minmax(0, 1fr) 44px auto 44px;
+  grid-template-columns: minmax(0, 1fr) 36px auto 36px;
   width: 100%;
 }
 
 .mail-search--mobile-nav .mail-search__input {
-  height: 44px;
+  height: 36px;
 }
 
 .mail-search--mobile-nav .mail-mobile-icon-btn {
   flex: 0 0 auto;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   margin: 0;
   padding: 0;
 }
@@ -4889,7 +4757,7 @@ onBeforeUnmount(() => {
 .mail-search--mobile-nav .mail-mobile-compose-btn {
   flex: 0 0 auto;
   gap: 6px;
-  min-height: 44px;
+  min-height: 36px;
   padding-inline: 10px;
   font-size: 13px;
   font-weight: 600;
@@ -5331,57 +5199,6 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   gap: 6px;
   min-width: 0;
-}
-
-.mail-keyboard-help {
-  position: relative;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 12px;
-}
-
-.mail-keyboard-help summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  padding: 0 7px;
-  border-radius: var(--ui-radius-sm, 6px);
-  cursor: pointer;
-  list-style: none;
-}
-
-.mail-keyboard-help summary::-webkit-details-marker {
-  display: none;
-}
-
-.mail-keyboard-help summary:hover,
-.mail-keyboard-help summary:focus-visible {
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-  color: var(--ui-text, var(--color-text));
-  outline: none;
-}
-
-.mail-keyboard-help[open] p {
-  position: absolute;
-  z-index: 8;
-  top: calc(100% + 6px);
-  right: 0;
-  width: max-content;
-  max-width: min(420px, calc(100vw - 32px));
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 6px);
-  background: var(--ui-surface, var(--color-bg));
-  box-shadow: var(--ui-shadow-md, 0 12px 32px rgba(0, 0, 0, 0.14));
-  color: var(--ui-text-muted, var(--color-text-muted));
-  line-height: 1.7;
-}
-
-.mail-keyboard-help kbd {
-  color: var(--ui-text, var(--color-text));
-  font: inherit;
-  font-weight: 800;
 }
 
 .bulk-mail-btn {
@@ -6832,7 +6649,6 @@ onBeforeUnmount(() => {
     gap: 4px;
   }
 
-  .mail-keyboard-help,
   .conversation-quick-actions {
     display: none;
   }

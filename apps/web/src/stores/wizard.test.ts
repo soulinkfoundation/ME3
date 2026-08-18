@@ -16,6 +16,7 @@ describe("wizard store", () => {
       expect(store.furthestStep).toBe(1);
       expect(store.profile.name).toBe("");
       expect(store.profile.handle).toBe("");
+      expect(store.profile.logo).toBeNull();
       expect(store.pages).toEqual([]);
       expect(store.username).toBe("");
       expect(store.draftSourceUrl).toBeNull();
@@ -857,13 +858,26 @@ describe("wizard store", () => {
     it("should strip preview prefixes from published profile image paths", () => {
       const store = useWizardStore();
       store.profile.name = "Test User";
+      store.profile.logo = "/preview/testuser/files/logo.webp";
       store.profile.avatar = "./preview/testuser/files/avatar.jpg";
       store.profile.banner = "/preview/testuser/files/banner.jpg";
 
       const me3 = store.generateMe3Json();
 
+      expect(me3.logo).toBe("./files/logo.webp");
       expect(me3.avatar).toBe("./files/avatar.jpg");
       expect(me3.banner).toBe("./files/banner.jpg");
+    });
+
+    it("should use the uploaded logo file path in site source", () => {
+      const store = useWizardStore();
+      store.profile.name = "Test User";
+      store.updateProfile({
+        logo: "blob:http://local/site-logo",
+        logoBlob: new Blob(["logo"], { type: "image/png" }),
+      });
+
+      expect(store.generateMe3Json().logo).toBe("./files/logo.png");
     });
 
     it("should include non-home testimonial placement targets as link extensions", () => {
@@ -956,6 +970,7 @@ describe("wizard store", () => {
       const siteProfile = {
         name: "Existing User",
         handle: "existing",
+        logo: "./files/logo.png",
         avatar: "./files/avatar.jpg",
         banner: "/preview/undefined/files/banner.jpg",
       };
@@ -963,6 +978,7 @@ describe("wizard store", () => {
       store.loadFromSiteContent(siteProfile, [], [], [], undefined);
 
       expect(store.username).toBe("existing");
+      expect(store.profile.logo).toBe("/preview/existing/files/logo.png");
       expect(store.profile.avatar).toBe("/preview/existing/files/avatar.jpg");
       expect(store.profile.banner).toBe("/preview/existing/files/banner.jpg");
     });

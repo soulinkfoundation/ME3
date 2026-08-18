@@ -91,7 +91,7 @@ describe("Social content Agent Runtime v2", () => {
     expect(database.variants.every((variant) => variant.approval_status === "draft")).toBe(true);
   });
 
-  it("reads an exact Mission Control task and preserves its provenance", async () => {
+  it("reads an exact task and preserves its provenance", async () => {
     const database = createSocialAgentDb({
       tasks: [{
         id: "task-1",
@@ -124,9 +124,9 @@ describe("Social content Agent Runtime v2", () => {
           ideaText: "Turn planning work into useful public progress notes.",
           linkedinBody: "Your task list can be more than admin. It can become the raw material for useful progress notes.",
         }),
-        { response: "Saved a LinkedIn draft from the Mission Control task." },
+        { response: "Saved a LinkedIn draft from the task." },
       ]) as never,
-      messages: baseMessages("Use Mission Control task ID task-1 for a LinkedIn post."),
+      messages: baseMessages("Use task ID task-1 for a LinkedIn post."),
     });
 
     expect(response.contentAction?.platforms).toEqual(["linkedin"]);

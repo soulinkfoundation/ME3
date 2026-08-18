@@ -846,61 +846,19 @@ describe("EmailPage", () => {
     await flushPromises();
   });
 
-  it("keeps mailbox shortcuts active when a conversation row has focus", async () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    const wrapper = mountEmailPage(host);
-    await flushPromises();
-    const row = wrapper.get(".conversation-open");
-    await wrapper.get('input[aria-label="Select ME3"]').setValue(true);
-    (row.element as HTMLButtonElement).focus();
-
-    row.element.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "e", bubbles: true }),
-    );
-    await flushPromises();
-
-    expect(api.post).toHaveBeenCalledWith("/mailbox/threads/thread-1/move", {
-      folder: "archive",
-      fromFolder: "sent",
-    });
-  });
-
-  it("requires an active or checked conversation before keyboard actions", async () => {
+  it("does not expose or register mailbox keyboard shortcuts", async () => {
     const wrapper = mountEmailPage();
     await flushPromises();
 
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
-    await flushPromises();
-    expect(api.post).not.toHaveBeenCalledWith(
-      "/mailbox/threads/thread-1/move",
-      { folder: "archive", fromFolder: "sent" },
-    );
+    expect(wrapper.text()).not.toContain("Shortcuts");
+    await wrapper.get('input[aria-label="Select ME3"]').setValue(true);
 
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
-    await flushPromises();
-    expect(wrapper.get(".conversation-open").attributes("aria-current")).toBe(
-      "true",
-    );
-
-    const search = document.querySelector(
-      "#mail-search-input-mobile-nav",
-    ) as HTMLInputElement;
-    search.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "e", bubbles: true }),
-    );
-    await flushPromises();
-    expect(api.post).not.toHaveBeenCalledWith(
-      "/mailbox/threads/thread-1/move",
-      { folder: "archive", fromFolder: "sent" },
-    );
-    expect(
-      wrapper.find('button[aria-label="Archive conversation"]').exists(),
-    ).toBe(true);
-
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
     await flushPromises();
-    expect(api.post).toHaveBeenCalledWith(
+
+    expect(wrapper.get(".conversation-open").attributes("aria-current")).toBeUndefined();
+    expect(api.post).not.toHaveBeenCalledWith(
       "/mailbox/threads/thread-1/move",
       { folder: "archive", fromFolder: "sent" },
     );

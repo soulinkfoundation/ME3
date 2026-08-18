@@ -264,9 +264,30 @@ async function downloadSite() {
     }
   }
 
+  function siteAssetUrl(value: string): string {
+    try {
+      const siteBase = new URL(
+        `${siteUrl.value.replace(/\/$/, "")}/`,
+        window.location.origin,
+      );
+      return new URL(value, siteBase).toString();
+    } catch {
+      return value;
+    }
+  }
+
+  // Add the site logo separately from the public identity avatar.
+  if (content.profile.logo) {
+    const result = await fetchImageAsBlob(siteAssetUrl(content.profile.logo));
+    if (result) {
+      zip.file(`files/logo.${result.ext}`, result.blob);
+      me3Json.logo = `./files/logo.${result.ext}`;
+    }
+  }
+
   // Add avatar
   if (content.profile.avatar) {
-    const result = await fetchImageAsBlob(content.profile.avatar);
+    const result = await fetchImageAsBlob(siteAssetUrl(content.profile.avatar));
     if (result) {
       zip.file(`files/avatar.${result.ext}`, result.blob);
       me3Json.avatar = `./files/avatar.${result.ext}`;
@@ -275,7 +296,7 @@ async function downloadSite() {
 
   // Add banner
   if (content.profile.banner) {
-    const result = await fetchImageAsBlob(content.profile.banner);
+    const result = await fetchImageAsBlob(siteAssetUrl(content.profile.banner));
     if (result) {
       zip.file(`files/banner.${result.ext}`, result.blob);
       me3Json.banner = `./files/banner.${result.ext}`;

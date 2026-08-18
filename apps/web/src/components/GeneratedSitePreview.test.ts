@@ -55,4 +55,20 @@ describe("GeneratedSitePreview", () => {
     expect(html).toContain('<base href="/preview/preview-person/blog/">');
     expect(html).toContain('src="../files/avatar.jpg"');
   });
+
+  it("uses the site logo for preview icons before the avatar fallback", async () => {
+    const wizard = useWizardStore();
+    wizard.profile.name = "Preview Person";
+    wizard.profile.handle = "preview-person";
+    wizard.profile.logo = "/preview/preview-person/files/logo.png";
+    wizard.profile.avatar = "/preview/preview-person/files/avatar.jpg";
+    wizard.username = "preview-person";
+
+    const wrapper = mount(GeneratedSitePreview);
+    await flushPromises();
+
+    const html = wrapper.get("iframe").attributes("srcdoc");
+    expect(html).toContain('<link rel="icon" href="./files/logo.png">');
+    expect(html).not.toContain('<link rel="icon" href="./files/avatar.jpg">');
+  });
 });

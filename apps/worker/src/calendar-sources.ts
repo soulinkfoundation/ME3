@@ -224,6 +224,36 @@ export async function removeCalendarSource(
   return { ok: true, sourceId: source.id };
 }
 
+export async function removeImportedCalendarEvent(
+  env: Env,
+  ownerId: string,
+  eventId: string,
+): Promise<{ ok: true; eventId: string }> {
+  const event = await env.DB.prepare(
+    `SELECT cse.source_id, cse.external_key
+     FROM calendar_source_events cse
+     JOIN calendar_sources cs ON cs.id = cse.source_id
+     WHERE cse.id = ? AND cs.user_id = ? AND cs.status = 'active'`,
+  )
+    .bind(eventId, ownerId)
+    .first<{ source_id: string; external_key: string }>();
+
+  if (!event) {
+    throw new CalendarSourceInputError("Imported event not found.", 404);
+  }
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO calendar_source_event_dismissals
+         (source_id, external_key)
+       VALUES (?, ?)`,
+    ).bind(event.source_id, event.external_key),
+    env.DB.prepare("DELETE FROM calendar_source_events WHERE id = ?").bind(eventId),
+  ]);
+
+  return { ok: true, eventId };
+}
+
 export async function dispatchDueCalendarSourceRefreshes(
   env: Env,
   fetcher: FetchLike = fetch,
@@ -556,6 +586,23 @@ async function replaceSourceWithEvents(
     mode: "insert" | "update";
   },
 ) {
+  const dismissedExternalKeys = new Set<string>();
+  if (input.mode === "update") {
+    const dismissed = await env.DB.prepare(
+      `SELECT external_key
+       FROM calendar_source_event_dismissals
+       WHERE source_id = ?`,
+    )
+      .bind(input.source.id)
+      .all<{ external_key: string }>();
+    for (const row of dismissed.results || []) {
+      dismissedExternalKeys.add(row.external_key);
+    }
+  }
+
+  const visibleEvents = input.events.filter(
+    (event) => !dismissedExternalKeys.has(event.externalKey),
+  );
   const statements: D1PreparedStatement[] = [];
   if (input.mode === "insert") {
     statements.push(
@@ -607,7 +654,7 @@ async function replaceSourceWithEvents(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
   );
 
-  for (const event of input.events) {
+  for (const event of visibleEvents) {
     statements.push(
       eventStatement.bind(
         crypto.randomUUID(),

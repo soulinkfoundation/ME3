@@ -1,6 +1,7 @@
 import {
   CalendarSourceInputError,
   importIcsUpload,
+  removeImportedCalendarEvent,
   removeCalendarSource,
   refreshCalendarSource,
   subscribeIcsUrl,
@@ -65,6 +66,26 @@ export function registerCalendarSourceRoutes(app: AppHono, deps: OwnerRouteDeps)
     try {
       return c.json(
         await removeCalendarSource(c.env, ownerId, c.req.param("sourceId")),
+      );
+    } catch (error) {
+      if (error instanceof CalendarSourceInputError) {
+        return c.json({ error: error.message }, error.status as any);
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/api/calendar/imported-events/:eventId", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    try {
+      return c.json(
+        await removeImportedCalendarEvent(
+          c.env,
+          ownerId,
+          c.req.param("eventId"),
+        ),
       );
     } catch (error) {
       if (error instanceof CalendarSourceInputError) {

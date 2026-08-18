@@ -266,6 +266,7 @@ const updatingReminderId = ref<string | null>(null);
 const cancellingBookingId = ref<string | null>(null);
 const deletingEventId = ref<string | null>(null);
 const removingSourceId = ref<string | null>(null);
+const removingImportedEventId = ref<string | null>(null);
 const addingImportedBirthdayId = ref<string | null>(null);
 const { toastSuccess, toastFromUnknown } = useAppToast();
 let calendarLoadToken = 0;
@@ -1093,7 +1094,11 @@ function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
           : "Add to Birthdays"
         : null
       : "Edit event",
-    dangerActionLabel: isImported ? null : "Delete event",
+    dangerActionLabel: isImported
+      ? removingImportedEventId.value === event.id
+        ? "Removing..."
+        : "Remove imported event"
+      : "Delete event",
   };
 }
 
@@ -1343,6 +1348,30 @@ async function deleteCalendarEvent(eventId: string) {
   }
 }
 
+async function removeImportedCalendarEvent(event: CalendarAgendaEvent) {
+  if (removingImportedEventId.value) return;
+  if (
+    !window.confirm(
+      "Remove this imported event from your calendar? It will stay hidden if the source syncs again.",
+    )
+  ) {
+    return;
+  }
+
+  removingImportedEventId.value = event.id;
+  try {
+    await api.delete(
+      `/calendar/imported-events/${encodeURIComponent(event.id)}`,
+    );
+    toastSuccess("Imported event removed.");
+    await reloadCalendar();
+  } catch (err) {
+    toastFromUnknown(err, "Could not remove imported event");
+  } finally {
+    removingImportedEventId.value = null;
+  }
+}
+
 function handleEventAction(event: CalendarAgendaEvent) {
   closeBoardContext(false);
   if (event.entryType === "social_publication") {
@@ -1439,6 +1468,11 @@ function handleEventDangerAction(event: CalendarAgendaEvent) {
   closeBoardContext(false);
   if (event.entryType === "reminder" || event.sourceLabel === "Reminder") {
     void cancelReminder(event.id);
+    return;
+  }
+
+  if (event.entryType === "imported") {
+    void removeImportedCalendarEvent(event);
     return;
   }
 
@@ -3110,16 +3144,6 @@ onBeforeUnmount(() => {
         @click.stop
       >
         <div class="cal-toolbar-left">
-          <Button
-            color="outline"
-            shape="soft"
-            size="compact"
-            type="button"
-            title="Go to today (T)"
-            @click="onCalendarToday"
-          >
-            Today
-          </Button>
           <div class="cal-view-toggle" role="group" aria-label="Calendar range">
             <button
               type="button"
@@ -4574,19 +4598,27 @@ onBeforeUnmount(() => {
 .cal-create-menu--mobile-nav,
 .cal-settings-menu--mobile-nav {
   position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
+  top: 0;
+  right: calc(100% + 8px);
   left: auto;
   width: min(220px, calc(100vw - 32px));
 }
 
 :global(#app-side-nav-mobile-page-controls:has(.cal-mobile-nav-controls)) {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 45;
   min-height: var(--app-shell-mobile-nav-height);
   height: var(--app-shell-mobile-nav-height);
   overflow: visible;
   padding: var(--workspace-topbar-padding-block) 8px
     var(--workspace-topbar-padding-block)
     var(--app-shell-mobile-nav-leading-padding);
+  border-bottom: 1px solid var(--ui-border, var(--color-border));
+  background: var(--ui-bg, var(--color-bg));
+  box-sizing: border-box;
 }
 
 .cal-toolbar-left {
@@ -4748,13 +4780,16 @@ onBeforeUnmount(() => {
 
 .cal-create-menu.cal-create-menu--mobile-nav,
 .cal-create-menu.cal-settings-menu--mobile-nav {
-  top: calc(100% + 8px);
-  right: 0;
+  top: 0;
+  right: calc(100% + 8px);
   left: auto;
   width: min(220px, calc(100vw - 32px));
 }
 
 .cal-settings-menu--toolbar {
+  top: 0;
+  right: calc(100% + 8px);
+  left: auto;
   width: 180px;
 }
 
@@ -5254,6 +5289,10 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1100px) {
+  :global(.app-root:has(.cal-mobile-nav-controls) .calendar-spike) {
+    padding-top: var(--app-shell-mobile-nav-height);
+  }
+
   .cal-shell {
     grid-template-columns: 1fr;
   }

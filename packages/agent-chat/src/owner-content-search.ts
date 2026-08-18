@@ -98,7 +98,7 @@ export async function searchAgentOwnerContent(
     throw new Error(`Invalid Mission task status "${input.status}".`);
   }
   if (sourceType === "journal" && (input.projectId || input.status)) {
-    throw new Error("Project and status filters apply only to Mission Control tasks.");
+    throw new Error("Project and status filters apply only to tasks.");
   }
   assertIsoDate(input.dateFrom, "dateFrom");
   assertIsoDate(input.dateTo, "dateTo");

@@ -187,7 +187,7 @@ describe("assistant jobs persistence", () => {
       },
     });
     expect(env.__state.missionAgentRuns[0]?.prompt_summary).toBe(
-      "📊 Your weekly review is ready in Mission Control 🚀. You have 0 open tasks, and 0 completed over the last 7 days.",
+      "Your weekly task review is ready. You have 0 open tasks, and 0 completed over the last 7 days.",
     );
     expect(env.__state.missionAgentRuns[0]?.prompt_summary).not.toContain(
       "ME3 agent context packet",
@@ -328,11 +328,11 @@ describe("assistant jobs persistence", () => {
     expect(weekly.availableActions).toEqual(["save", "save_and_activate"]);
     expect(weekly.explanation.reads).toEqual(
       expect.arrayContaining([
-        "Reads scoped Mission Control project state.",
-        "Reads scoped Mission Control tasks.",
+        "Reads scoped project state.",
+        "Reads scoped tasks.",
       ]),
     );
-    expect(weekly.explanation.writes).toContain("Creates a Mission Control result.");
+    expect(weekly.explanation.writes).toContain("Creates a review result.");
 
     const inbox = await createAssistantJobBuilderAction(
       createAssistantJobsEnv(),
@@ -441,7 +441,7 @@ describe("assistant jobs persistence", () => {
     expect(activeJobs.jobs.map((job) => job.name)).not.toContain("Inbox Watch");
   });
 
-  it("triages mailbox messages into a useful Mission Control result", async () => {
+  it("triages mailbox messages into a useful review result", async () => {
     const env = createAssistantJobsEnv({
       mailbox: activeMailboxRow(),
       mailboxMessages: [
@@ -835,7 +835,7 @@ describe("assistant jobs persistence", () => {
         sections: [
           expect.objectContaining({ kind: "calendar", title: "Calendar" }),
           expect.objectContaining({ kind: "reminders", title: "Reminders" }),
-          expect.objectContaining({ kind: "tasks", title: "Mission Control" }),
+          expect.objectContaining({ kind: "tasks", title: "Tasks" }),
         ],
         notification: {
           ownerName: "Kieran",
@@ -940,7 +940,7 @@ describe("assistant jobs persistence", () => {
     expect(env.__state.pluginActivities).toHaveLength(0);
   });
 
-  it("renders rich Mission Control task descriptions as plain text in daily briefing", async () => {
+  it("renders rich task descriptions as plain text in daily briefing", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-07T07:00:00.000Z"));
     const env = createAssistantJobsEnv({

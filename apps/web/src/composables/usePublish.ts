@@ -286,6 +286,22 @@ export function usePublish() {
       const publishManifest =
         (await sites.fetchPublishManifest(username)) || createEmptyPublishManifest();
 
+      if (wizard.profile.logoBlob) {
+        const logoFilename = `logo.${getImageExt(wizard.profile.logoBlob)}`;
+        const logoHash = await sha256Blob(wizard.profile.logoBlob);
+        if (publishManifest.assetFiles[`files/${logoFilename}`] !== logoHash) {
+          publishProgress.value = "Uploading site logo...";
+          const result = await sites.uploadImage(
+            username,
+            wizard.profile.logoBlob,
+            "logo",
+          );
+          if (!result?.ok) {
+            throw new Error(sites.error || "Failed to upload site logo");
+          }
+        }
+      }
+
       if (wizard.profile.avatarBlob) {
         const avatarFilename = `avatar.${getImageExt(wizard.profile.avatarBlob)}`;
         const avatarHash = await sha256Blob(wizard.profile.avatarBlob);

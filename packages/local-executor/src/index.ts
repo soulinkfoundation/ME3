@@ -9,7 +9,7 @@ export const LOCAL_EXECUTOR_RUNTIME = {
   notes: [
     "Local Executor stays optional and owner-paired.",
     "Core queues bounded runs; the local runner owns process execution and local logs.",
-    "Mission Control remains the owner-facing surface for approvals, history, and results.",
+    "Assistant activity remains the owner-facing surface for approvals, history, and results.",
   ],
 } as const;
 

@@ -788,6 +788,21 @@
           return resolveSectionPaths().shop;
         }
 
+        function updateSiteIcons() {
+          const icon = profile.logo || profile.avatar;
+          if (!icon) return;
+
+          for (const rel of ["icon", "apple-touch-icon"]) {
+            let link = document.head.querySelector(`link[rel="${rel}"]`);
+            if (!link) {
+              link = document.createElement("link");
+              link.rel = rel;
+              document.head.appendChild(link);
+            }
+            link.href = icon;
+          }
+        }
+
         // Render the profile header
         function renderHeader() {
           const hasBanner = profile.banner;
@@ -1296,6 +1311,7 @@
             if (!response.ok) throw new Error("me.json not found");
 
             profile = await response.json();
+            updateSiteIcons();
 
             // Update page title with name (and bio on home)
             document.title = homeDocumentTitle();

@@ -133,7 +133,7 @@ export async function readAgentSocialSource(
     .bind(userId, requestedRef)
     .first<MissionTaskRow>();
   if (!row) {
-    throw new Error("Mission Control task not found. List tasks and use a valid stable task ID.");
+    throw new Error("Task not found. List tasks and use a valid stable task ID.");
   }
   const content = [
     row.title,

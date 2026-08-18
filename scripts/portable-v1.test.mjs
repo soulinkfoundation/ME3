@@ -197,6 +197,21 @@ test("exports sanitized owner data and restores the exact identity, D1 rows, and
   assert.equal(statSync(importSql).mode & 0o777, 0o600);
   assert.equal(readFileSync(importSql, "utf8").includes(PROOF_PLATFORM_SECRET), false);
   assert.equal(readFileSync(importSql, "utf8").includes(PROOF_SESSION_SECRET), false);
+  assert.equal(readFileSync(importSql, "utf8").includes("BEGIN TRANSACTION"), false);
+  assert.equal(readFileSync(importSql, "utf8").includes("COMMIT;"), false);
+  const remoteImportTarget = freshTarget("remote-import");
+  runSqlite(
+    remoteImportTarget,
+    `PRAGMA foreign_keys=ON;\n${readFileSync(importSql, "utf8")}`,
+  );
+  assert.equal(
+    queryScalar(remoteImportTarget, "SELECT COUNT(*) FROM pragma_foreign_key_check;"),
+    "0",
+  );
+  assert.equal(
+    queryScalar(remoteImportTarget, "SELECT COUNT(*) FROM mission_tasks;"),
+    "1",
+  );
 
   const restoredArchive = join(root, "restored-snapshot.me3-portable");
   await exportPortableV1({
@@ -213,6 +228,128 @@ test("exports sanitized owner data and restores the exact identity, D1 rows, and
       passphrase: PROOF_PASSPHRASE,
     }).ok,
     true,
+  );
+});
+
+test("restores across equivalent D1 ledgers when runtime migrations produced the same schema", async () => {
+  const legacySource = cloneSource("legacy-d1-ledger-source");
+  runSqlite(
+    legacySource,
+    `DELETE FROM d1_migrations
+     WHERE name IN (
+       '0032_social_version_publishing_settings.sql',
+       '0033_manual_payments.sql',
+       '0034_owner_onboarding.sql'
+     );
+     UPDATE d1_migrations SET id = id + 100;`,
+  );
+  const legacyArchive = join(root, "legacy-d1-ledger.me3-portable");
+  await exportPortableV1({
+    database: legacySource,
+    r2Directory: sourceR2,
+    output: legacyArchive,
+    passphrase: PROOF_PASSPHRASE,
+  });
+
+  const target = freshTarget("legacy-d1-ledger-target");
+  const result = restorePortableV1({
+    archive: legacyArchive,
+    targetDatabase: target,
+    targetR2Directory: join(root, "legacy-d1-ledger-r2"),
+    passphrase: PROOF_PASSPHRASE,
+  });
+  assert.equal(result.logicalInstallId, PROOF_INSTALL_ID);
+});
+
+test("preserves CRLF owner content through generated import SQL", async () => {
+  const crlfSource = cloneSource("crlf-source");
+  runSqlite(
+    crlfSource,
+    `UPDATE mailbox_messages
+     SET text_body = 'first' || char(13) || char(10) || 'second',
+         html_body = '<p>first</p>' || char(13) || char(10) || '<p>second</p>',
+         raw_message = 'Header: value' || char(13) || char(10) || char(13) || char(10) || 'Body';`,
+  );
+  const crlfArchive = join(root, "crlf.me3-portable");
+  await exportPortableV1({
+    database: crlfSource,
+    r2Directory: sourceR2,
+    output: crlfArchive,
+    passphrase: PROOF_PASSPHRASE,
+  });
+
+  const target = freshTarget("crlf-target");
+  restorePortableV1({
+    archive: crlfArchive,
+    targetDatabase: target,
+    targetR2Directory: join(root, "crlf-r2"),
+    passphrase: PROOF_PASSPHRASE,
+  });
+  for (const column of ["text_body", "html_body", "raw_message"]) {
+    assert.equal(
+      queryScalar(target, `SELECT hex(${column}) FROM mailbox_messages WHERE id = 'mail-1';`),
+      queryScalar(crlfSource, `SELECT hex(${column}) FROM mailbox_messages WHERE id = 'mail-1';`),
+    );
+  }
+});
+
+test("chunks large text and blob values into D1-safe import statements", async () => {
+  const largeSource = cloneSource("large-values-source");
+  runSqlite(
+    largeSource,
+    `UPDATE mission_tasks
+     SET description = replace(hex(zeroblob(100000)), '00', 'x')
+     WHERE id = 'task-1';
+     UPDATE site_files
+     SET content = randomblob(100000)
+     WHERE site_id = 'site-1' AND path = 'me.json';`,
+  );
+  const largeArchive = join(root, "large-values.me3-portable");
+  await exportPortableV1({
+    database: largeSource,
+    r2Directory: sourceR2,
+    output: largeArchive,
+    passphrase: PROOF_PASSPHRASE,
+  });
+  const sql = gunzipSync(
+    readFileSync(join(largeArchive, "data", "d1-sanitized.sql.gz")),
+  ).toString("utf8");
+  assert.ok(
+    sql.split("\n").every((statement) => Buffer.byteLength(statement, "utf8") <= 48 * 1024),
+  );
+
+  const target = freshTarget("large-values-target");
+  restorePortableV1({
+    archive: largeArchive,
+    targetDatabase: target,
+    targetR2Directory: join(root, "large-values-r2"),
+    passphrase: PROOF_PASSPHRASE,
+  });
+  assert.equal(
+    queryScalar(target, "SELECT hex(description) FROM mission_tasks WHERE id = 'task-1';"),
+    queryScalar(largeSource, "SELECT hex(description) FROM mission_tasks WHERE id = 'task-1';"),
+  );
+  assert.equal(
+    queryScalar(target, "SELECT hex(content) FROM site_files WHERE site_id = 'site-1' AND path = 'me.json';"),
+    queryScalar(largeSource, "SELECT hex(content) FROM site_files WHERE site_id = 'site-1' AND path = 'me.json';"),
+  );
+});
+
+test("rejects a clean target with an unrelated extra D1 migration ledger entry", () => {
+  const target = freshTarget("unknown-d1-ledger");
+  runSqlite(
+    target,
+    "INSERT INTO d1_migrations (id, name, applied_at) VALUES (999, '9999_unknown.sql', CURRENT_TIMESTAMP);",
+  );
+  assertPortableCode(
+    () =>
+      restorePortableV1({
+        archive,
+        targetDatabase: target,
+        targetR2Directory: join(root, "unknown-d1-ledger-r2"),
+        passphrase: PROOF_PASSPHRASE,
+      }),
+    "MIGRATION_MISMATCH",
   );
 });
 

@@ -46,7 +46,7 @@ describe("renderAssistantMarkdown", () => {
     );
   });
 
-  it("renders rich-text HTML embedded in Mission Control task results", () => {
+  it("renders rich-text HTML embedded in task results", () => {
     expect(renderAssistantMarkdown("- Order a nuc of bees: <p>Ask donough</p>")).toBe(
       "<ul><li>Order a nuc of bees: Ask donough</li></ul>",
     );

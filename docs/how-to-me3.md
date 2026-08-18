@@ -449,12 +449,12 @@ evidence.
 
 ## Core Plugins
 
-ME3 exposes its first-party capability catalog through `/api/plugins`. Account -> Plugins lists owner-manageable optional plugins; foundational Agent Chat, Mission Control, Calendar, and Journal capabilities remain in the catalog for runtime discovery but are hidden from plugin management.
+ME3 exposes its first-party capability catalog through `/api/plugins`. Account -> Plugins lists owner-manageable optional plugins; foundational Agent Chat, Tasks and Projects, Calendar, and Journal capabilities remain in the catalog for runtime discovery but are hidden from plugin management.
 
 | Plugin | Current status | Purpose |
 | --- | --- | --- |
 | ME3 Agent Chat | Bundled, default on | Full assistant chat workspace, voice transcription route, and sandbox replies. |
-| ME3 Mission Control | Bundled, default on | Projects, tasks, approvals, private memory, sources, activity, and review surfaces. |
+| ME3 Tasks and Projects | Bundled, default on | Projects, tasks, approvals, private memory, sources, activity, and review surfaces. |
 | ME3 Journal | Bundled, optional | Private daily writing, notes, drafts, and longer-form capture. |
 | ME3 Accounts | Bundled, optional | Income/expense ledger, categories, CSV import/export, and Stripe-backed context. |
 | ME3 Calendar | Bundled | Events, reminders, bookings, birthdays, tasks, imports, recurring event expansion, and ready-plugin Social Publication visibility. |
@@ -466,7 +466,7 @@ ME3 exposes its first-party capability catalog through `/api/plugins`. Account -
 
 Social Publishing uses five owner-facing domain terms:
 
-- A **Source** is explicit human-authored material such as a Journal entry, Mission Control task,
+- A **Source** is explicit human-authored material such as a Journal entry, task,
   site article, file, script, or pasted text. An agent-saved Post requires a stable Source reference,
   immutable snapshot, and visible Source text. Brainstorming from a blank prompt may remain
   conversational, but it cannot be saved as a publishable Post.
@@ -553,7 +553,7 @@ Current starter recipes:
 
 | Recipe | State | Purpose |
 | --- | --- | --- |
-| Weekly Review | Ready | Summarizes Mission Control projects, tasks, approvals, and carry-over choices. |
+| Weekly Review | Ready | Summarizes projects, tasks, approvals, and carry-over choices. |
 | Daily Briefing | Ready | Prepares a morning review of tasks, approvals, due items, and optional owner notification. |
 | Inbox Watch | Needs setup | Watches scoped email and creates review packets; provider adapters are still setup-dependent. |
 | Invoice and Receipt Triage | Needs setup | Extracts receipts/invoices from email and proposes Accounts ledger entries. |

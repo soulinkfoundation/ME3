@@ -46,6 +46,18 @@ describe("Core chat tool contracts", () => {
     });
   });
 
+  it("keeps retired Mission Control wording out of model-facing tool copy", () => {
+    const modelFacingCopy = CORE_CHAT_CAPABILITIES.map((capability) => ({
+      ownerFacingLabel: capability.ownerFacingLabel,
+      summary: capability.summary,
+      inputSchema: capability.inputSchema,
+      examples: capability.examples,
+    }));
+
+    expect(JSON.stringify(modelFacingCopy)).not.toMatch(/mission control/i);
+    expect(JSON.stringify(CORE_CHAT_TOOLS)).not.toMatch(/mission control/i);
+  });
+
   it("requires explicit Source evidence for grounded Social Suggestions", () => {
     expect(getCoreChatToolByName("core_social_suggestions_create")).toMatchObject({
       capabilityId: "core.social.suggestions.create",

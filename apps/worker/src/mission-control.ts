@@ -1138,33 +1138,6 @@ export async function createMissionTaskFromJournal(
   };
 }
 
-export async function createJournalProjectLink(
-  env: Env,
-  userId: string,
-  input: unknown,
-) {
-  const body = isRecord(input) ? input : {};
-  const journalEntryId = normalizeNullableText(body.journalEntryId);
-  const projectId = normalizeNullableText(body.projectId);
-  const sourceText = normalizeNullableText(body.sourceText);
-  if (!journalEntryId) throw new MissionControlInputError("Journal entry is required");
-  if (!projectId) throw new MissionControlInputError("Project is required");
-
-  await ensureJournalEntryExists(env, userId, journalEntryId);
-  await ensureProjectExists(env, userId, projectId);
-
-  const id = crypto.randomUUID();
-  await env.DB.prepare(
-    `INSERT INTO journal_project_links
-       (id, user_id, journal_entry_id, project_id, source_text)
-     VALUES (?, ?, ?, ?, ?)`,
-  )
-    .bind(id, userId, journalEntryId, projectId, sourceText)
-    .run();
-
-  return { link: await getJournalProjectLink(env, userId, id) };
-}
-
 export async function updateMissionTask(
   env: Env,
   userId: string,
@@ -1237,51 +1210,6 @@ export async function updateMissionTask(
   };
 }
 
-export async function listJournalProjectLinks(
-  env: Env,
-  userId: string,
-  projectId: string,
-) {
-  await ensureProjectExists(env, userId, projectId);
-  const rows = await env.DB.prepare(
-    `SELECT l.id, l.user_id, l.journal_entry_id, l.project_id, l.source_text,
-            l.created_task_id, l.created_reminder_id, l.created_at,
-            e.entry_date, e.title AS entry_title, t.title AS task_title
-     FROM journal_project_links l
-     INNER JOIN journal_entries e
-       ON e.id = l.journal_entry_id AND e.user_id = l.user_id
-     LEFT JOIN mission_tasks t
-       ON t.id = l.created_task_id AND t.user_id = l.user_id
-     WHERE l.user_id = ? AND l.project_id = ? AND e.archived_at IS NULL
-     ORDER BY l.created_at DESC
-     LIMIT 100`,
-  )
-    .bind(userId, projectId)
-    .all<JournalProjectLinkRow>();
-
-  return { links: (rows.results || []).map(serializeJournalProjectLink) };
-}
-
-export async function listAllJournalProjectLinks(env: Env, userId: string) {
-  const rows = await env.DB.prepare(
-    `SELECT l.id, l.user_id, l.journal_entry_id, l.project_id, l.source_text,
-            l.created_task_id, l.created_reminder_id, l.created_at,
-            e.entry_date, e.title AS entry_title, t.title AS task_title
-     FROM journal_project_links l
-     INNER JOIN journal_entries e
-       ON e.id = l.journal_entry_id AND e.user_id = l.user_id
-     LEFT JOIN mission_tasks t
-       ON t.id = l.created_task_id AND t.user_id = l.user_id
-     WHERE l.user_id = ? AND e.archived_at IS NULL
-     ORDER BY l.created_at DESC
-     LIMIT 100`,
-  )
-    .bind(userId)
-    .all<JournalProjectLinkRow>();
-
-  return { links: (rows.results || []).map(serializeJournalProjectLink) };
-}
-
 export async function listJournalEntryLinks(
   env: Env,
   userId: string,
@@ -1297,7 +1225,8 @@ export async function listJournalEntryLinks(
        ON e.id = l.journal_entry_id AND e.user_id = l.user_id
      LEFT JOIN mission_tasks t
        ON t.id = l.created_task_id AND t.user_id = l.user_id
-     WHERE l.user_id = ? AND l.journal_entry_id = ? AND e.archived_at IS NULL
+     WHERE l.user_id = ? AND l.journal_entry_id = ?
+       AND l.created_task_id IS NOT NULL AND e.archived_at IS NULL
      ORDER BY l.created_at DESC
      LIMIT 100`,
   )
@@ -1305,23 +1234,6 @@ export async function listJournalEntryLinks(
     .all<JournalProjectLinkRow>();
 
   return { links: (rows.results || []).map(serializeJournalProjectLink) };
-}
-
-export async function deleteJournalProjectLink(
-  env: Env,
-  userId: string,
-  linkId: string,
-) {
-  const result = await env.DB.prepare(
-    `DELETE FROM journal_project_links
-     WHERE id = ? AND user_id = ?`,
-  )
-    .bind(linkId, userId)
-    .run();
-  if ((result.meta?.changes || 0) === 0) {
-    throw new MissionControlInputError("Journal link not found", 404);
-  }
-  return { ok: true };
 }
 
 export async function archiveMissionTask(env: Env, userId: string, taskId: string) {
@@ -2421,15 +2333,15 @@ export async function getMissionSetup(env: Env, userId: string) {
       status: memory.length > 0 ? "ready" : "optional",
       detail: memory.length > 0
         ? "Private memory is available for owner-approved context."
-        : "Add only the private context you want Mission Control to remember.",
-      actionPath: "/mission-control?section=memory",
+        : "Add only the private context you want your Assistant to remember.",
+      actionPath: "/assistant?settings=context",
     },
     {
       id: "context-sources",
       label: "Context sources",
       status: sources.length > 0 ? "ready" : "optional",
       detail: "Public profile, private memory, plugin tables, and local sources stay inventoried here.",
-      actionPath: "/mission-control?section=sources",
+      actionPath: "/assistant?settings=context",
     },
     {
       id: "daemon",
@@ -2947,7 +2859,7 @@ async function ensurePersonalProject(env: Env, userId: string) {
   await env.DB.prepare(
     `INSERT INTO mission_projects
        (id, user_id, name, slug, description, color, icon, source_kind)
-     VALUES (?, ?, 'Personal', 'personal', 'Default Mission Control project.', 'teal', 'sparkles', 'manual')
+     VALUES (?, ?, 'Personal', 'personal', 'Default personal project.', 'teal', 'sparkles', 'manual')
      ON CONFLICT(user_id, slug) DO NOTHING`,
   )
     .bind(userId === "owner" ? PERSONAL_PROJECT_ID : crypto.randomUUID(), userId)

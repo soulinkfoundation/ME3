@@ -53,8 +53,10 @@ export interface WizardProfile {
   location: string;
   locationData: WizardLocationData | null;
   bio: string;
+  logo: string | null; // Site branding URL, data URL, or temporary blob URL
   avatar: string | null; // URL or data URL
   banner: string | null; // URL or data URL
+  logoBlob: Blob | null;
   avatarBlob: Blob | null;
   bannerBlob: Blob | null;
   // Original uploaded images (kept in-memory only, not persisted).
@@ -611,6 +613,22 @@ function resolveWizardSiteAssetUrl(
   }
 
   return trimmed;
+}
+
+function imageBlobFromDataUrl(value: unknown): Blob | null {
+  if (typeof value !== "string") return null;
+  const match = value.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/i);
+  if (!match) return null;
+  try {
+    const decoded = atob(match[2]);
+    const bytes = new Uint8Array(decoded.length);
+    for (let index = 0; index < decoded.length; index += 1) {
+      bytes[index] = decoded.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: match[1].toLowerCase() });
+  } catch {
+    return null;
+  }
 }
 
 function generateSlug(title: string): string {
@@ -1326,8 +1344,10 @@ const defaultProfile: WizardProfile = {
   location: "",
   locationData: null,
   bio: "",
+  logo: null,
   avatar: null,
   banner: null,
+  logoBlob: null,
   avatarBlob: null,
   bannerBlob: null,
   avatarOriginalBlob: null,
@@ -3040,7 +3060,7 @@ export const useWizardStore = defineStore("wizard", () => {
     if (!url) return null;
     const trimmed = url.trim();
     const m = trimmed.match(
-      /\/files\/(avatar|banner|testimonial-\d+)\.([a-z0-9]+)$/i,
+      /\/files\/(logo|avatar|banner|testimonial-\d+)\.([a-z0-9]+)$/i,
     );
     if (m) {
       return `./files/${m[1]}.${m[2]}`;
@@ -3078,6 +3098,13 @@ export const useWizardStore = defineStore("wizard", () => {
 
     if (profile.value.bio) {
       me3.bio = profile.value.bio.trim();
+    }
+
+    if (profile.value.logo) {
+      me3.logo = profile.value.logoBlob
+        ? `./files/logo.${blobImageExt(profile.value.logoBlob)}`
+        : fileReferenceToRelativePath(profile.value.logo) ||
+          profile.value.logo;
     }
 
     const cleanedBusiness = {
@@ -3797,6 +3824,7 @@ export const useWizardStore = defineStore("wizard", () => {
         furthestStepId: stepIds.value[furthestStep.value - 1] || null,
         profile: {
           ...profile.value,
+          logoBlob: null,
           avatarBlob: null,
           bannerBlob: null,
           avatarOriginalBlob: null,
@@ -3866,6 +3894,10 @@ export const useWizardStore = defineStore("wizard", () => {
         profile.value = {
           ...defaultProfile,
           ...storedProfile,
+          logo: resolveWizardSiteAssetUrl(
+            storedProfile.logo,
+            storedAssetUsername,
+          ),
           avatar: resolveWizardSiteAssetUrl(
             storedProfile.avatar,
             storedAssetUsername,
@@ -3874,6 +3906,7 @@ export const useWizardStore = defineStore("wizard", () => {
             storedProfile.banner,
             storedAssetUsername,
           ),
+          logoBlob: imageBlobFromDataUrl(storedProfile.logo),
           locationData: normalizeLocationData(storedProfile.locationData),
           business: normalizeBusinessConfig(storedProfile.business),
           booking: normalizeWizardBookingConfig(storedBooking),
@@ -4169,6 +4202,7 @@ export const useWizardStore = defineStore("wizard", () => {
       name: string;
       handle?: string;
       bio?: string;
+      logo?: string;
       avatar?: string;
       banner?: string;
       links?: Record<string, string | undefined>;
@@ -4547,8 +4581,10 @@ export const useWizardStore = defineStore("wizard", () => {
       location: (siteProfile as any).location || "",
       locationData: normalizeLocationData((siteProfile as any).locationData),
       bio: siteProfile.bio || "",
+      logo: resolveLoadedSiteAssetUrl(siteProfile.logo),
       avatar: resolveLoadedSiteAssetUrl(siteProfile.avatar),
       banner: resolveLoadedSiteAssetUrl(siteProfile.banner),
+      logoBlob: null,
       avatarBlob: null, // Can't restore blobs from server
       bannerBlob: null,
       avatarOriginalBlob: null,

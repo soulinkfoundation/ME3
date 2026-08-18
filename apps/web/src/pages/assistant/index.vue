@@ -1371,6 +1371,7 @@ async function startNewAssistantChat(
 }
 
 async function selectAssistantThread(threadId: string) {
+  assistantHistoryDrawerOpen.value = false;
   if (!threadId || assistantThreadId.value === threadId) {
     return;
   }
@@ -3311,15 +3312,15 @@ function assistantJobStatusLabel(
 
 function assistantJobBuilderDestinationLabel(draft: AssistantJobDraft) {
   const labels: Record<AssistantJobDraft["destination"]["landing"], string> = {
-    review_packet: "Mission Control review",
-    task: "Mission Control task",
-    capture: "Mission Control capture",
-    approval: "Mission Control approval",
+    review_packet: "Review result",
+    task: "Task",
+    capture: "Saved result",
+    approval: "Approval",
     memory_review: "Memory review",
-    activity: "Mission Control activity",
+    activity: "Assistant activity",
     accounts: "Accounts",
   };
-  return labels[draft.destination.landing] || "Mission Control";
+  return labels[draft.destination.landing] || "ME3";
 }
 
 function assistantJobBuilderWhenPhrase(draft: AssistantJobDraft) {
@@ -3351,23 +3352,23 @@ function assistantJobBuilderWhenPhrase(draft: AssistantJobDraft) {
 function assistantJobBuilderToolNames(draft: AssistantJobDraft) {
   const recipeTools: Record<string, string[]> = {
     "weekly-review": [
-      "Mission Control Projects",
-      "Mission Control Tasks",
-      "Mission Control Approvals",
-      "Mission Control Reviews",
+      "Projects",
+      "Tasks",
+      "Approvals",
+      "Reviews",
     ],
     "daily-briefing": [
-      "Mission Control Tasks",
-      "Mission Control Approvals",
-      "Mission Control Reviews",
+      "Tasks",
+      "Approvals",
+      "Reviews",
       "Owner Notifications",
     ],
     "email-triage": [
       "Email",
-      "Mission Control Reviews",
-      "Mission Control Tasks",
+      "Reviews",
+      "Tasks",
     ],
-    "invoice-receipt-triage": ["Email", "Accounts", "Mission Control Reviews"],
+    "invoice-receipt-triage": ["Email", "Accounts", "Reviews"],
   };
   const fromRecipe = draft.recipeId ? recipeTools[draft.recipeId] : null;
   if (fromRecipe) return fromRecipe;
@@ -3375,7 +3376,7 @@ function assistantJobBuilderToolNames(draft: AssistantJobDraft) {
   const names = new Set<string>();
   for (const action of draft.actions) {
     const [namespace] = action.capabilityId.split(".");
-    if (namespace === "mission") names.add("Mission Control");
+    if (namespace === "mission") names.add("Tasks and Projects");
     if (namespace === "message") names.add("Owner Notifications");
     if (namespace === "email") names.add("Email");
     if (namespace === "accounts") names.add("Accounts");
@@ -3404,7 +3405,7 @@ function assistantJobBuilderSentenceSegments(
       { text: " " },
       { text: when, strong: true },
       { text: " and create " },
-      { text: "a weekly review in Mission Control", strong: true },
+      { text: "a weekly task review", strong: true },
       { text: " for you to review." },
     ],
     "daily-briefing": [
@@ -3413,7 +3414,7 @@ function assistantJobBuilderSentenceSegments(
       { text: " " },
       { text: when, strong: true },
       { text: " and create " },
-      { text: "a daily briefing in Mission Control", strong: true },
+      { text: "a daily briefing", strong: true },
       { text: " for you to start the day." },
     ],
     "email-triage": [
@@ -3425,7 +3426,7 @@ function assistantJobBuilderSentenceSegments(
       { text: " " },
       { text: when, strong: true },
       { text: " and create " },
-      { text: "an inbox review in Mission Control", strong: true },
+      { text: "an inbox review", strong: true },
       { text: " for you to act on." },
     ],
     "invoice-receipt-triage": [
@@ -3434,7 +3435,7 @@ function assistantJobBuilderSentenceSegments(
       { text: " " },
       { text: when, strong: true },
       { text: " and create " },
-      { text: "Accounts entries with a Mission Control review", strong: true },
+      { text: "Accounts entries with a review", strong: true },
       { text: " for anything that needs checking." },
     ],
   };
@@ -3698,7 +3699,7 @@ async function runJob(job: AssistantJob) {
     const status = response.run?.status;
     toastSuccess(
       job.recipeId === "weekly-review" && status === "succeeded"
-        ? "Weekly Review created in Mission Control."
+        ? "Weekly task review created."
         : status === "waiting_for_approval"
           ? "Run is waiting for approval."
           : status === "blocked" || status === "failed"
@@ -3751,7 +3752,7 @@ async function duplicateJob(job: AssistantJob) {
 async function archiveJob(job: AssistantJob) {
   if (!canArchiveJob(job)) return;
   const confirmed = window.confirm(
-    `Remove "${job.name}"? Results and run history stay in Mission Control.`,
+    `Remove "${job.name}"? Results and run history stay in Assistant activity.`,
   );
   if (!confirmed) return;
 
@@ -4319,19 +4320,19 @@ function formatTrigger(summary: string) {
   if (value.includes("calendar.event.upcoming"))
     return "Before matching calendar events";
   if (value.includes("review_packet.created"))
-    return "When Mission Control changes";
+    return "When Assistant results change";
   if (/^When .+ happens$/i.test(value)) return "When something matches";
   return value;
 }
 
 function formatDestination(detail: AssistantJobDetail | null) {
   const landing = detail?.job.destination?.landing;
-  if (landing === "task") return "Mission Control tasks";
-  if (landing === "approval") return "Mission Control approvals";
-  if (landing === "memory_review") return "Mission Control memory review";
-  if (landing === "activity") return "Mission Control activity";
+  if (landing === "task") return "Tasks";
+  if (landing === "approval") return "Approvals";
+  if (landing === "memory_review") return "Memory review";
+  if (landing === "activity") return "Assistant activity";
   if (landing === "accounts") return "Accounts ledger";
-  return "Mission Control results";
+  return "Assistant results";
 }
 
 function setupErrorForJob(job: AssistantJob) {
@@ -4369,7 +4370,8 @@ function setupMessageForJob(job: AssistantJob) {
 
 function cleanPlainText(value: string) {
   return String(value || "")
-    .replace(/Mission Control review packets?/gi, "Mission Control results")
+    .replace(/Mission Control review packets?/gi, "Assistant results")
+    .replace(/Mission Control/gi, "Tasks and Projects")
     .replace(/review packets?/gi, "results")
     .replace(/durable private memory/gi, "saved memory")
     .replace(/\s+/g, " ")
@@ -4466,7 +4468,7 @@ function formatAssistantSettingsDate(value: string | null | undefined) {
 
 function jobDetailPurpose(job: AssistantJob) {
   if (job.recipeId === "daily-briefing") {
-    return "Sends a customised message to your mission control dashboard or Soulink when connected.";
+    return "Sends a customised message to your Assistant or Soulink when connected.";
   }
   return cleanPlainText(job.purpose);
 }
@@ -4480,7 +4482,7 @@ function renderDailyBriefingPreview(template: string) {
     "calendar.reminders":
       "Reminders: 1 due today.\n- 10:00 Follow up with Bilbo Baggins",
     "mission.tasks":
-      "Mission Control: 1 task due today.\n- Review launch notes",
+      "Tasks: 1 task due today.\n- Review launch notes",
   };
   return template
     .replace(

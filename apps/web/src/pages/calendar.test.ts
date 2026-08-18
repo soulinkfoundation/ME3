@@ -285,6 +285,52 @@ describe("Calendar Social Publishing source", () => {
       .props("events") as Array<Record<string, unknown>>;
     expect(events.some((event) => event.entryType === "social_publication")).toBe(false);
   });
+
+  it("removes an imported event and keeps the action owner-scoped", async () => {
+    const importedEvent = {
+      id: "imported-event-1",
+      title: "Dylans Birthday",
+      notes: null,
+      location: null,
+      startsAt: "2026-08-21T00:00:00.000Z",
+      endsAt: "2026-08-22T00:00:00.000Z",
+      timezone: null,
+      allDay: true,
+      kind: "event",
+      sourceId: "source-1",
+      sourceName: "Personal calendar",
+      sourceKind: "imported",
+      createdAt: "2026-08-01T00:00:00.000Z",
+    };
+    vi.mocked(api.get).mockResolvedValue(calendarFeed(false, [importedEvent]));
+    vi.mocked(api.delete).mockResolvedValue({ ok: true });
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const monthBoard = wrapper.getComponent(CalendarMonthBoardStub);
+    monthBoard.vm.$emit("select-event", importedEvent.id, {
+      left: 20,
+      right: 40,
+      top: 20,
+      bottom: 40,
+      trigger: document.createElement("button"),
+    });
+    await flushPromises();
+
+    const remove = wrapper
+      .findAll("button")
+      .find((button) => button.text().trim() === "Remove imported event");
+    expect(remove).toBeTruthy();
+    await remove!.trigger("click");
+    await flushPromises();
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Remove this imported event from your calendar? It will stay hidden if the source syncs again.",
+    );
+    expect(api.delete).toHaveBeenCalledWith(
+      "/calendar/imported-events/imported-event-1",
+    );
+  });
 });
 
 function mountPage() {
@@ -338,12 +384,12 @@ function approvedVersion() {
   };
 }
 
-function calendarFeed(ready: boolean) {
+function calendarFeed(ready: boolean, importedEvents: unknown[] = []) {
   return {
     bookings: [],
     reminders: [],
     events: [],
-    importedEvents: [],
+    importedEvents,
     sources: [],
     tasks: [],
     socialPublishing: {

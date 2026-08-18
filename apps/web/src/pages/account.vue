@@ -4204,10 +4204,10 @@ onBeforeUnmount(() => {
               </div>
             </li>
             <li>
-              <strong>Add a local project in Mission Control.</strong>
+              <strong>Add a local project.</strong>
               <span>
-                Visit your ME3 site, open Mission Control, go to Projects, and
-                add a project with type <code>Local</code>. Use the local folder
+                Visit your ME3 site, open Tasks, and add a project with type
+                <code>Local</code>. Use the local folder
                 path for the project repo you want the runner to work in.
               </span>
               <router-link
@@ -4215,7 +4215,7 @@ onBeforeUnmount(() => {
                 to="/mission-control/projects"
                 @click="closeLocalExecutorSetup"
               >
-                Open Mission Control Projects
+                Open Projects
               </router-link>
             </li>
             <li>

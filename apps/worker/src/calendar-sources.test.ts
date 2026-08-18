@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchDueCalendarSourceRefreshes,
   importIcsUpload,
+  removeImportedCalendarEvent,
   removeCalendarSource,
   refreshCalendarSource,
   subscribeIcsUrl,
@@ -44,6 +45,7 @@ type EventRow = {
 type TestState = {
   sources: SourceRow[];
   events: EventRow[];
+  dismissals: Set<string>;
   installSecrets: Map<string, string>;
 };
 
@@ -337,12 +339,32 @@ describe("calendar source subscriptions", () => {
     });
     expect(state.events).toHaveLength(0);
   });
+
+  it("keeps a removed imported event hidden after source refresh", async () => {
+    const { env, state } = createCalendarSourceEnv();
+    const fetcher = vi.fn(async () => new Response(FEED_ONE)) as typeof fetch;
+    const subscribed = await subscribeIcsUrl(env, "owner", {
+      url: "https://calendar.google.com/calendar/ical/private/basic.ics",
+    }, fetcher);
+    const importedEventId = state.events[0]!.id;
+
+    await expect(
+      removeImportedCalendarEvent(env, "owner", importedEventId),
+    ).resolves.toEqual({ ok: true, eventId: importedEventId });
+    expect(state.events).toHaveLength(0);
+
+    await refreshCalendarSource(env, "owner", subscribed.source.id, fetcher);
+
+    expect(state.events).toHaveLength(0);
+    expect(state.dismissals.size).toBe(1);
+  });
 });
 
 function createCalendarSourceEnv() {
   const state: TestState = {
     sources: [],
     events: [],
+    dismissals: new Set(),
     installSecrets: new Map(),
   };
 
@@ -361,6 +383,16 @@ function createCalendarSourceEnv() {
             );
             return { results: results as T[] };
           }
+          if (sql.includes("FROM calendar_source_event_dismissals")) {
+            const [sourceId] = values;
+            return {
+              results: [...state.dismissals]
+                .filter((key) => key.startsWith(`${sourceId}:`))
+                .map((key) => ({
+                  external_key: key.slice(String(sourceId).length + 1),
+                })) as T[],
+            };
+          }
           return { results: [] as T[] };
         },
         async first<T>() {
@@ -378,8 +410,22 @@ function createCalendarSourceEnv() {
                   source.id === id &&
                   source.user_id === userId &&
                   source.status === "active",
-              ) as T
+            ) as T
             ) || null;
+          }
+
+          if (sql.includes("FROM calendar_source_events")) {
+            const [eventId, userId] = values;
+            const event = state.events.find((item) => item.id === eventId);
+            const source = event
+              ? state.sources.find((item) => item.id === event.source_id)
+              : null;
+            return event && source && source.user_id === userId && source.status === "active"
+              ? ({
+                  source_id: event.source_id,
+                  external_key: event.external_key,
+                } as T)
+              : null;
           }
 
           return null;
@@ -463,8 +509,18 @@ function applyStatement(state: TestState, sql: string, values: unknown[]) {
   }
 
   if (sql.includes("DELETE FROM calendar_source_events")) {
-    const [sourceId] = values;
-    state.events = state.events.filter((event) => event.source_id !== sourceId);
+    const [targetId] = values;
+    if (sql.includes("WHERE id = ?")) {
+      state.events = state.events.filter((event) => event.id !== targetId);
+    } else {
+      state.events = state.events.filter((event) => event.source_id !== targetId);
+    }
+    return;
+  }
+
+  if (sql.includes("INSERT OR IGNORE INTO calendar_source_event_dismissals")) {
+    const [sourceId, externalKey] = values;
+    state.dismissals.add(`${sourceId}:${externalKey}`);
     return;
   }
 

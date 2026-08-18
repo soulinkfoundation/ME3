@@ -135,6 +135,12 @@ function switchContactMailboxTab(tabId: string) {
   display: none;
 }
 
+@media (min-width: 768px) {
+  .contacts-mail-tabs {
+    justify-content: center;
+  }
+}
+
 .contacts-mobile-nav {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 36px auto;

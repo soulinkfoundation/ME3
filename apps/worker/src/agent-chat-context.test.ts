@@ -2756,7 +2756,7 @@ describe("Core chat native context", () => {
     });
   });
 
-  it("creates Mission Control tasks through the shared configured model loop", async () => {
+  it("creates tasks through the shared configured model loop", async () => {
     const aiRun = workersAiSequence(
       {
         tool_calls: [
@@ -3188,11 +3188,11 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
-    name: "Mission Control task exploration stays model-first",
+    name: "Task exploration stays model-first",
     messageText:
-      "I want to test Mission Control tasks and projects. What would you use there?",
+      "I want to explore tasks and projects. What would you use there?",
     aiReply:
-      "For Mission Control I would use projects, tasks, and private memory as context before suggesting next steps.",
+      "I would use projects, tasks, and private memory as context before suggesting next steps.",
     withAi: true,
     envState: {
       projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
@@ -3215,8 +3215,8 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
-    name: "Mission Control task prioritisation stays model-first with context",
-    messageText: "Help me prioritise my Mission Control tasks based on my goals.",
+    name: "Task prioritisation stays model-first with context",
+    messageText: "Help me prioritise my tasks based on my goals.",
     aiReply:
       "Start with Prepare launch checklist because it supports the launch goal, then review lower-priority backlog items.",
     withAi: true,
@@ -3462,7 +3462,7 @@ describe("Core chat golden transcript evals", () => {
           kind: expectedKind,
           capabilityId: scenario.expected.capabilityId,
           records: [{ kind: "mission_task", id: env.state.tasks.at(-1)?.id }],
-          primaryAction: { label: "Open Mission Control", href: "/mission-control" },
+          primaryAction: { label: "Open Tasks", href: "/mission-control/projects" },
         }),
       ]);
     }

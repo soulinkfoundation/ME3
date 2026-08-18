@@ -131,6 +131,8 @@ watch(
 watchEffect(async () => {
   const version = ++renderVersion;
   const profile = wizard.generateMe3Json() as unknown as Me3SiteProfile;
+  const logoUrl = wizard.profile.logo;
+  const logoBlob = wizard.profile.logoBlob;
   const avatarUrl = wizard.profile.avatar;
   const avatarBlob = wizard.profile.avatarBlob;
   const bannerUrl = wizard.profile.banner;
@@ -159,6 +161,7 @@ watchEffect(async () => {
       }))
     : [];
 
+  profile.logo = (await blobToDataUrl(logoBlob)) || logoUrl || undefined;
   profile.avatar = (await blobToDataUrl(avatarBlob)) || avatarUrl || undefined;
   profile.banner = (await blobToDataUrl(bannerBlob)) || bannerUrl || undefined;
   if (profile.testimonials) {

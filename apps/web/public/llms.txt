@@ -57,18 +57,18 @@ Generated from the typed ME3 knowledge package. This file is public-safe and sho
   Data boundary: Site content is public once published; drafts and setup data remain owner-scoped.
   App/API routes: /api/sites, /sites/:username
   Boundaries: Distinguish drafts from published pages. Do not publish visible changes without owner intent.
-- Mission Control workspace (workspace.mission_control)
+- Tasks and Projects (workspace.mission_control)
   Category: workspace
   Surfaces: core, hosted
   Lifecycle: available
   Runtime state in Core: available
-  Summary: Mission Control gives the owner a private workspace for tasks, projects, approvals, private memory, context sources, and run history.
+  Summary: Tasks and Projects gives the owner a private workspace for tasks, projects, approvals, private memory, context sources, and run history.
   Approval mode: owner_approval
   Side effect: internal_write
-  Data boundary: Mission Control data is private, owner-scoped, and plugin-owned.
+  Data boundary: Task and project data is private, owner-scoped, and plugin-owned.
   App/API routes: /mission-control, /mission-control/wheel-of-life
   Agent tool ids: mission.task.create, mission.memory.write, mission.approval.request
-  Boundaries: Private memory writes should be visible and approval-aware. Public me.json remains Core-owned and separate from Mission Control memory.
+  Boundaries: Private memory writes should be visible and approval-aware. Public me.json remains Core-owned and separate from private Assistant memory.
 - Optional local daemon bridge (workspace.local_daemon_bridge)
   Category: workspace
   Surfaces: core

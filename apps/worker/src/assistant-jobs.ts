@@ -2380,7 +2380,7 @@ async function resolveOwnerNotificationMessage(
   return (
     missionTextInput(input.action, "message") ||
     missionTextInput(input.action, "text") ||
-    `${input.job.name} is ready. I created a Mission Control result for you.`
+    `${input.job.name} is ready. I created a review result for you.`
   );
 }
 
@@ -2461,7 +2461,7 @@ async function createAssistantJobMissionActivity(
     missionTextInput(input.action, "summary") ||
     generated.summary ||
     (defaultActivityType === "assistant_job.review_packet"
-      ? `Created a Mission Control result for ${input.job.name}.`
+      ? `Created a review result for ${input.job.name}.`
       : input.job.purpose) ||
     null;
   const status = missionTextInput(input.action, "status") || "succeeded";
@@ -3880,7 +3880,7 @@ async function appendAssistantJobMissionActivity(
       )
       .run();
   } catch {
-    // Mission Control activity should not make queue failure handling fail again.
+    // Activity logging should not make queue failure handling fail again.
   }
 }
 
@@ -4128,7 +4128,7 @@ function buildDailyBriefingSections(
     },
     {
       kind: "tasks",
-      title: "Mission Control",
+      title: "Tasks",
       summary: dueTasks.length === 0
         ? "No tasks due today."
         : `${dueTasks.length} task${dueTasks.length === 1 ? "" : "s"} due today.`,
@@ -4351,7 +4351,7 @@ function formatDailyTasks(tasks: DailyBriefingTask[], dateKey: string) {
   });
   if (due.length === 0) return "";
   return [
-    `Mission Control: ${due.length} task${due.length === 1 ? "" : "s"} due today.`,
+    `Tasks: ${due.length} task${due.length === 1 ? "" : "s"} due today.`,
     ...due.slice(0, 4).map((task) => {
       const detail = formatDailyBriefingTaskDetail(task.description);
       return `- ${task.title}${detail ? `: ${detail}` : ""}`;
@@ -4496,7 +4496,7 @@ function suggestWeeklyReviewMemory(
 function formatWeeklyReviewReadyMessage(review: Awaited<ReturnType<typeof buildWeeklyReviewResult>>) {
   const openLabel = `${review.openTasks.length} open task${review.openTasks.length === 1 ? "" : "s"}`;
   const completedLabel = `${review.completedTasks.length} completed`;
-  return `📊 Your weekly review is ready in Mission Control 🚀. You have ${openLabel}, and ${completedLabel} over the last 7 days.`;
+  return `Your weekly task review is ready. You have ${openLabel}, and ${completedLabel} over the last 7 days.`;
 }
 
 function sharedSignificantWordCount(left: string, right: string) {
@@ -5418,7 +5418,7 @@ async function summarizeAssistantJobRunOutput(
     if (triage) {
       return `Invoice and Receipt Triage added ${triage.filed} account entr${triage.filed === 1 ? "y" : "ies"}; ${triage.reviewed} need${triage.reviewed === 1 ? "s" : ""} review and ${triage.skipped} skipped.`;
     }
-    return "Invoice and Receipt Triage ran successfully. Check Mission Control Accounts for review items.";
+    return "Invoice and Receipt Triage ran successfully. Check Accounts for review items.";
   }
   if (isWeeklyReviewJob(job, draft)) {
     const review = await buildWeeklyReviewResult(env, userId, "");
@@ -5444,7 +5444,7 @@ async function summarizeAssistantJobRunOutput(
     const bits = [
       context.calendarSummary,
       context.calendarReminders ? "included reminders" : null,
-      context.missionTasks ? "included Mission Control tasks" : null,
+      context.missionTasks ? "included tasks" : null,
     ].filter(Boolean);
     return `Daily Briefing ready: ${bits.join("; ")}.`;
   }
@@ -5455,7 +5455,7 @@ async function summarizeAssistantJobRunOutput(
     (action) => action.capabilityId === "mission.task.create",
   );
   const createdParts = [
-    createdResult ? "created a Mission Control result" : null,
+    createdResult ? "created a review result" : null,
     createdTask ? "created follow-up tasks" : null,
   ].filter(Boolean);
   if (createdParts.length > 0) {

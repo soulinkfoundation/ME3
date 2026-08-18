@@ -13,13 +13,11 @@ import {
   createMissionMemory,
   createMissionProject,
   createMissionProjectColumn,
-  createJournalProjectLink,
   createMissionTask,
   createMissionTaskFromJournal,
   createMissionTaskLocalExecutorRun,
   createMissionWheelSnapshot,
   deleteMissionContextSource,
-  deleteJournalProjectLink,
   deleteMissionMemory,
   getMissionDaemonStatus,
   getMissionDashboard,
@@ -32,8 +30,6 @@ import {
   listMissionApprovals,
   listMissionContextSources,
   listJournalEntryLinks,
-  listAllJournalProjectLinks,
-  listJournalProjectLinks,
   listMissionMemory,
   listMissionPluginActivity,
   listMissionProjects,
@@ -340,34 +336,6 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
     }
   });
 
-  app.get("/api/mission-control/projects/:id/journal-links", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-    const blocked = await requireMissionControlPlugin(c);
-    if (blocked) return blocked;
-
-    try {
-      return c.json(
-        await listJournalProjectLinks(c.env, ownerId, c.req.param("id")),
-      );
-    } catch (error) {
-      return missionControlErrorResponse(c, error);
-    }
-  });
-
-  app.get("/api/mission-control/journal/links", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-    const blocked = await requireMissionControlPlugin(c);
-    if (blocked) return blocked;
-
-    try {
-      return c.json(await listAllJournalProjectLinks(c.env, ownerId));
-    } catch (error) {
-      return missionControlErrorResponse(c, error);
-    }
-  });
-
   app.post("/api/mission-control/journal/tasks", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
@@ -388,26 +356,6 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
     }
   });
 
-  app.post("/api/mission-control/journal/links", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-    const blocked = await requireMissionControlPlugin(c);
-    if (blocked) return blocked;
-
-    try {
-      return c.json(
-        await createJournalProjectLink(
-          c.env,
-          ownerId,
-          await c.req.json().catch(() => ({})),
-        ),
-        201,
-      );
-    } catch (error) {
-      return missionControlErrorResponse(c, error);
-    }
-  });
-
   app.get("/api/mission-control/journal/entries/:id/links", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
@@ -417,21 +365,6 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
     try {
       return c.json(
         await listJournalEntryLinks(c.env, ownerId, c.req.param("id")),
-      );
-    } catch (error) {
-      return missionControlErrorResponse(c, error);
-    }
-  });
-
-  app.delete("/api/mission-control/journal/links/:id", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-    const blocked = await requireMissionControlPlugin(c);
-    if (blocked) return blocked;
-
-    try {
-      return c.json(
-        await deleteJournalProjectLink(c.env, ownerId, c.req.param("id")),
       );
     } catch (error) {
       return missionControlErrorResponse(c, error);
@@ -873,7 +806,7 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
 
 async function requireMissionControlPlugin(c: AppContext) {
   if (await isCorePluginEnabled(c.env, "me3.mission-control")) return null;
-  return c.json({ ok: false, error: "ME3 Mission Control is disabled" }, 403);
+  return c.json({ ok: false, error: "Tasks and Projects are disabled" }, 403);
 }
 
 async function requireLocalExecutorPlugin(c: AppContext) {

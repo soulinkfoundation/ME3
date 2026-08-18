@@ -13974,6 +13974,119 @@ describe("ME3 Worker auth", () => {
     }
   });
 
+  it("syncs connected Soulink Links into Core contacts", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.soulinkConnection = {
+      id: "soulink-links-connection",
+      user_id: "owner",
+      channel: "soulink",
+      status: "active",
+      setup_token: "dispatch-token",
+      provider_connection_id: "messaging",
+      provider_user_id: "node-owner",
+      provider_thread_id: "assistant-channel",
+      provider_username: "assistant-owner",
+      provider_metadata_json: JSON.stringify({ ownerNodeId: "node-owner" }),
+      telegram_user_id: null,
+      telegram_chat_id: null,
+      telegram_username: null,
+      telegram_first_name: null,
+      telegram_last_name: null,
+      connected_at: "2026-05-11T10:01:00Z",
+      disconnected_at: null,
+      last_inbound_at: null,
+      last_outbound_at: null,
+      created_at: "2026-05-11T10:00:00Z",
+      updated_at: "2026-05-11T10:00:00Z",
+    };
+
+    const linksMock = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        ownerNodeId: "node-owner",
+        links: [
+          {
+            id: "link-ada",
+            fromNodeId: "node-owner",
+            toNodeId: "node-ada",
+            sourceChatId: "chat-ada",
+            status: "active",
+            createdAt: "2026-06-01T12:00:00Z",
+            updatedAt: "2026-06-05T12:00:00Z",
+            otherNode: {
+              id: "node-ada",
+              displayName: "Ada Lovelace",
+              handle: "ada",
+              me3Url: null,
+              kind: "person",
+              avatarUrl: "https://cdn.test/ada.png",
+            },
+            context: {
+              sourceChatId: "chat-ada",
+              sourceChatTitle: "Ada chat",
+              sourceChatKind: "direct",
+              streamChannelId: "direct-ada",
+              lastActiveAt: "2026-06-05T09:00:00Z",
+              label: "Shared 1:1 chat",
+            },
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", linksMock);
+
+    try {
+      const response = await app.fetch(
+        new Request("http://localhost/api/soulink/contacts/sync", {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        synced: 1,
+        created: 1,
+        updated: 0,
+        skipped: 0,
+      });
+      expect(linksMock).toHaveBeenCalledOnce();
+      expect(linksMock).toHaveBeenCalledWith(
+        "https://soulink.test/api/me3/links?ownerNodeId=node-owner",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer dispatch-token",
+          }),
+        }),
+      );
+      expect(env.contacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            user_id: "owner",
+            name: "Ada Lovelace",
+            source: "soulink",
+            source_ref: "node-ada",
+          }),
+        ]),
+      );
+      const syncedContact = env.contacts.find(
+        (contact) => contact.source_ref === "node-ada",
+      );
+      expect(JSON.parse(syncedContact?.metadata || "{}")).toMatchObject({
+        soulinkLinkId: "link-ada",
+        soulinkNodeId: "node-ada",
+        soulinkChatUrl:
+          "https://soulink.test/?chat=messaging%3Adirect-ada",
+        soulinkSourceChatId: "chat-ada",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("rejects Soulink Links requests for invalid tokens and mismatched owners", async () => {
     const env = createEnv();
     await bootstrap(env);

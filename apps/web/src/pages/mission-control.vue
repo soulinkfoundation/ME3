@@ -20,8 +20,8 @@ definePage({
     requiresAuth: true,
     requiresWorkspace: true,
     requiresPlugin: "me3.mission-control",
-    title: "Mission Control | ME3",
-    description: "ME3 Mission Control dashboard.",
+    title: "Tasks | ME3",
+    description: "ME3 task workspace.",
     robots: "noindex,follow",
   },
 });
@@ -732,7 +732,7 @@ async function loadDashboard() {
     }
   } catch (err) {
     error.value =
-      err instanceof Error ? err.message : "Mission Control could not load.";
+      err instanceof Error ? err.message : "Tasks could not load.";
   } finally {
     loading.value = false;
   }
@@ -960,12 +960,12 @@ onBeforeUnmount(() => {
 
     <section
       class="mission-dashboard__workspace"
-      aria-label="Mission Control dashboard"
+      aria-label="Task workspace"
     >
       <p v-if="error" class="mission-dashboard__message is-error">
         {{ error }}
       </p>
-      <PageLoading v-else-if="loading" label="Loading mission control..." />
+      <PageLoading v-else-if="loading" label="Loading tasks..." />
 
       <div v-if="dashboardReady" class="mission-dashboard__grid">
         <article
@@ -1094,7 +1094,7 @@ onBeforeUnmount(() => {
               <section
                 v-if="dailyBriefingTaskSection"
                 class="daily-briefing__tasks"
-                aria-label="Mission Control tasks due today"
+                aria-label="Tasks due today"
               >
                 <p class="daily-briefing__task-summary">
                   {{ dailyBriefingTaskSection.summary }}

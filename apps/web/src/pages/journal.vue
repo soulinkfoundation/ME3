@@ -77,14 +77,16 @@ type JournalProjectLink = {
   taskTitle: string | null;
 };
 
-type CaptureMode = "task" | "link" | "reminder";
+type CaptureMode = "task" | "reminder";
 type OrganizeTaskSuggestion = JournalTaskMarkerSuggestion & {
   selected: boolean;
 };
 type InlineJournalChip = {
   id: string;
   label: string;
-  kind: CaptureMode;
+  kind: "task";
+  taskId: string;
+  projectId: string;
   left: number;
   top: number;
 };
@@ -166,17 +168,17 @@ const inlineJournalChipIds = computed(
   () => new Set(inlineJournalChips.value.map((chip) => chip.id)),
 );
 const fallbackEntryLinks = computed(() =>
-  entryLinks.value.filter((link) => !inlineJournalChipIds.value.has(link.id)),
+  entryLinks.value.filter(
+    (link) => link.createdTaskId && !inlineJournalChipIds.value.has(link.id),
+  ),
 );
 const captureHeading = computed(() => {
   if (captureMode.value === "task") return "Create task";
-  if (captureMode.value === "reminder") return "Create reminder";
-  return "Link to project";
+  return "Create reminder";
 });
 const captureTextLabel = computed(() => {
   if (captureMode.value === "task") return "Description";
-  if (captureMode.value === "reminder") return "Notes";
-  return "Note";
+  return "Notes";
 });
 const captureSubmitDisabled = computed(() => {
   if (captureSaving.value) return true;
@@ -323,21 +325,17 @@ function insertVoiceTranscript(text: string) {
   editorRef.value?.insertText(text);
 }
 
-function projectName(projectId: string | null): string {
-  if (!projectId) return "Project";
-  return projects.value.find((project) => project.id === projectId)?.name || "Project";
-}
-
 function defaultCaptureTitle(text: string): string {
   return text.split(/\r?\n/)[0]?.trim().slice(0, 180) || text.slice(0, 180);
 }
 
-function linkChipKind(link: JournalProjectLink): CaptureMode {
-  return link.createdTaskId ? "task" : "link";
+function missionTaskHref(projectId: string, taskId: string): string {
+  const query = new URLSearchParams({ project: projectId, task: taskId });
+  return `/mission-control/projects?${query.toString()}`;
 }
 
-function linkChipLabel(link: JournalProjectLink): string {
-  return link.createdTaskId ? "Task" : projectName(link.projectId);
+function taskLinkHref(link: JournalProjectLink): string {
+  return missionTaskHref(link.projectId, link.createdTaskId || "");
 }
 
 function entryHasContent(entry: Pick<JournalArchiveEntry, "title" | "body" | "preview">): boolean {
@@ -698,7 +696,7 @@ function updateInlineJournalChips() {
 
   for (const link of entryLinks.value) {
     const sourceText = link.sourceText?.trim();
-    if (!sourceText) continue;
+    if (!sourceText || !link.createdTaskId) continue;
 
     const range = findSourceRange(root, sourceText);
     if (!range) continue;
@@ -718,9 +716,16 @@ function updateInlineJournalChips() {
       continue;
     }
 
-    const label = linkChipLabel(link);
+    const label = "Task";
     const estimatedWidth = Math.min(96, Math.max(38, label.length * 7 + 14));
     const height = 20;
+    const minTop = Math.max(8, visibleRect.top + 4);
+    const maxTop = Math.min(
+      window.innerHeight - height - 8,
+      visibleRect.bottom - height - 4,
+    );
+    if (maxTop < minTop) continue;
+
     let left = rect.right + 6;
     let top = rect.top + rect.height / 2 - height / 2;
 
@@ -732,10 +737,12 @@ function updateInlineJournalChips() {
     chips.push({
       id: link.id,
       label,
-      kind: linkChipKind(link),
+      kind: "task",
+      taskId: link.createdTaskId,
+      projectId: link.projectId,
       left: Math.round(left),
       top: Math.round(
-        Math.min(window.innerHeight - height - 8, Math.max(8, top)),
+        Math.min(maxTop, Math.max(minTop, top)),
       ),
     });
   }
@@ -785,9 +792,7 @@ async function submitCapture() {
       title: captureTitle.value.trim(),
     };
     const response = await api.post<{ link: JournalProjectLink }>(
-      captureMode.value === "task"
-        ? "/mission-control/journal/tasks"
-        : "/mission-control/journal/links",
+      "/mission-control/journal/tasks",
       payload,
     );
     entryLinks.value = [
@@ -1084,17 +1089,6 @@ onBeforeUnmount(() => {
         >
           <UiIcon name="Archive" :size="16" />
         </Button>
-        <Button
-          color="ghost"
-          shape="soft"
-          size="compact"
-          icon-only
-          to="/mission-control"
-          aria-label="Close Journal"
-          title="Close Journal"
-        >
-          <UiIcon name="X" :size="18" />
-        </Button>
       </div>
     </header>
 
@@ -1221,16 +1215,16 @@ onBeforeUnmount(() => {
           class="journal__chips"
           aria-label="Journal captures"
         >
-          <span
+          <a
             v-for="link in fallbackEntryLinks"
             :key="link.id"
-            class="journal__chip"
-            :class="
-              link.createdTaskId ? 'journal__chip--task' : 'journal__chip--link'
-            "
+            class="journal__chip journal__chip--task"
+            :href="taskLinkHref(link)"
+            aria-label="Open task"
+            title="Open task"
           >
-            {{ link.createdTaskId ? "Task" : projectName(link.projectId) }}
-          </span>
+            Task
+          </a>
         </div>
 
         <div class="journal__status" aria-live="polite">
@@ -1249,7 +1243,7 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <span
+    <a
       v-for="chip in inlineJournalChips"
       :key="chip.id"
       class="journal-inline-chip"
@@ -1258,10 +1252,12 @@ onBeforeUnmount(() => {
         left: `${chip.left}px`,
         top: `${chip.top}px`,
       }"
-      aria-hidden="true"
+      :href="missionTaskHref(chip.projectId, chip.taskId)"
+      aria-label="Open task"
+      title="Open task"
     >
       {{ chip.label }}
-    </span>
+    </a>
 
     <div
       v-if="selectionToolbar.visible"
@@ -1299,18 +1295,6 @@ onBeforeUnmount(() => {
       >
         <UiIcon name="AlarmClock" :size="16" />
       </Button>
-      <Button
-        color="ghost"
-        shape="soft"
-        size="compact"
-        icon-only
-        aria-label="Link highlighted text to project"
-        title="Link to project"
-        type="button"
-        @click="openCapture('link')"
-      >
-        <UiIcon name="Link" :size="16" />
-      </Button>
     </div>
 
     <div v-if="captureOpen" class="journal-capture" role="dialog" aria-modal="true">
@@ -1330,7 +1314,7 @@ onBeforeUnmount(() => {
             <UiIcon name="X" :size="16" />
           </Button>
         </header>
-        <label v-if="captureMode !== 'link'">
+        <label>
           <span>Title</span>
           <input v-model="captureTitle" type="text" maxlength="180" required />
         </label>
@@ -1805,12 +1789,13 @@ onBeforeUnmount(() => {
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
+  text-decoration: none;
 }
 
 .journal-inline-chip {
   position: fixed;
   z-index: 45;
-  pointer-events: none;
+  cursor: pointer;
   box-shadow: var(--ui-shadow-sm, 0 6px 14px rgba(15, 23, 42, 0.12));
 }
 
@@ -1821,11 +1806,12 @@ onBeforeUnmount(() => {
   color: var(--ui-accent-strong, #1d4ed8);
 }
 
-.journal__chip--link,
-.journal-inline-chip--link {
-  border-color: color-mix(in srgb, var(--ui-success, #15803d) 32%, transparent);
-  background: color-mix(in srgb, var(--ui-success, #15803d) 10%, var(--ui-surface, #ffffff));
-  color: var(--ui-success-strong, #166534);
+.journal__chip--task:hover,
+.journal__chip--task:focus-visible,
+.journal-inline-chip--task:hover,
+.journal-inline-chip--task:focus-visible {
+  border-color: var(--ui-accent, #2563eb);
+  outline: none;
 }
 
 .journal__message {

@@ -501,19 +501,19 @@ export const ME3_CAPABILITIES: readonly Me3Capability[] = [
   },
   {
     id: "workspace.mission_control",
-    title: "Mission Control workspace",
+    title: "Tasks and Projects",
     category: "workspace",
     summary:
-      "Mission Control gives the owner a private workspace for tasks, projects, approvals, private memory, context sources, and run history.",
+      "Tasks and Projects gives the owner a private workspace for tasks, projects, approvals, private memory, context sources, and run history.",
     agentSummary:
-      "Mission Control is the default private workspace for tasks, approvals, private memory, context sources, plugin activity, and run history.",
+      "Tasks and Projects is the default private workspace for tasks, approvals, private memory, context sources, plugin activity, and run history.",
     surfaces: ["core", "hosted"],
     lifecycle: "available",
     pluginId: "me3.mission-control",
     defaultEnabled: true,
     approvalMode: "owner_approval",
     sideEffect: "internal_write",
-    dataBoundary: "Mission Control data is private, owner-scoped, and plugin-owned.",
+    dataBoundary: "Task and project data is private, owner-scoped, and plugin-owned.",
     appRoutes: ["/mission-control", "/mission-control/wheel-of-life"],
     agentToolIds: [
       "mission.task.create",
@@ -522,7 +522,7 @@ export const ME3_CAPABILITIES: readonly Me3Capability[] = [
     ],
     boundaries: [
       "Private memory writes should be visible and approval-aware.",
-      "Public me.json remains Core-owned and separate from Mission Control memory.",
+      "Public me.json remains Core-owned and separate from private Assistant memory.",
     ],
     tags: ["workspace", "tasks", "memory", "approvals"],
   },

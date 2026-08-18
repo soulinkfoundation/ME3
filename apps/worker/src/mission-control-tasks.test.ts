@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   archiveMissionProject,
   createMissionTaskFromJournal,
-  deleteJournalProjectLink,
   listMissionTaskPage,
   updateMissionProjectColumn,
 } from "./mission-control";
@@ -805,41 +804,5 @@ describe("Mission Control journal project links", () => {
       projectId: "project-1",
       createdTaskId: result.task.id,
     });
-  });
-
-  it("deletes a journal project link without touching tasks", async () => {
-    const links = [{ id: "link-1", user_id: "owner" }];
-    const env = {
-      DB: {
-        prepare(sql: string) {
-          return {
-            bind(...values: unknown[]) {
-              return {
-                async run() {
-                  if (!sql.includes("DELETE FROM journal_project_links")) {
-                    return { meta: { changes: 0 } };
-                  }
-                  const [linkId, userId] = values;
-                  const index = links.findIndex(
-                    (link) => link.id === linkId && link.user_id === userId,
-                  );
-                  if (index < 0) return { meta: { changes: 0 } };
-                  links.splice(index, 1);
-                  return { meta: { changes: 1 } };
-                },
-              };
-            },
-          };
-        },
-      },
-    } as unknown as Env;
-
-    await expect(deleteJournalProjectLink(env, "owner", "link-1")).resolves.toEqual({
-      ok: true,
-    });
-    expect(links).toEqual([]);
-    await expect(
-      deleteJournalProjectLink(env, "owner", "missing"),
-    ).rejects.toThrow("Journal link not found");
   });
 });

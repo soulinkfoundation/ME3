@@ -470,7 +470,7 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
 const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
   id: "me3.mission-control",
-  name: "ME3 Mission Control",
+  name: "ME3 Tasks and Projects",
   version: "0.1.0",
   description:
     "Operational workspace for reviewing projects, tasks, approvals, private memory, sources, and assistant activity.",
@@ -492,7 +492,7 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   permissions: [
     {
       id: "mission.tasks.manage",
-      label: "Create and manage Mission Control tasks and projects",
+      label: "Create and manage tasks and projects",
     },
     {
       id: "mission.approvals.manage",
@@ -629,17 +629,17 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
     {
       id: "mission.dashboard.nav",
       slot: "dashboard.nav",
-      label: "🚀 Mission Control",
+      label: "Tasks",
     },
     {
       id: "mission.workspace.page",
       slot: "dashboard.page",
-      label: "Mission Control",
+      label: "Tasks and Projects",
     },
     {
       id: "mission.setup.panel",
       slot: "account.plugins.setup",
-      label: "Mission Control setup",
+      label: "Task and project setup",
     },
     {
       id: "mission.approvals.panel",
@@ -764,7 +764,7 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   ],
   queuesAndCrons: [],
   notes: [
-    "Mission Control is bundled as a first-party package and enabled by default.",
+    "Tasks and Projects is bundled as a first-party package and enabled by default.",
     "Public me.json remains Core-owned and separate from plugin private memory.",
     "Local daemon access is optional, owner-paired, path-scoped, and approval-gated.",
   ],
@@ -1029,7 +1029,7 @@ const ACCOUNTS_PLUGIN: CorePluginManifestSummary = {
       id: "accounts.financial-entry-projects",
       path: "./apps/worker/migrations/0011_financial_entry_projects.sql",
       destructive: false,
-      description: "Adds optional Mission Control project links to financial entries.",
+      description: "Adds optional project links to financial entries.",
     },
   ],
   queuesAndCrons: [],
@@ -1350,7 +1350,7 @@ const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
   notes: [
     "Bundled through @me3-core/plugin-local-executor as an optional first-party Core package.",
     "The plugin owns runner pairing, project policies, queued local runs, daemon token auth, and audit.",
-    "Mission Control remains the canonical owner-facing approval, result, history, and activity surface.",
+    "Assistant activity remains the canonical owner-facing approval, result, and run-history surface.",
     "OpenCode is the default provider preset, with Codex and Claude presets available for local CLI users.",
   ],
 };
@@ -1452,7 +1452,7 @@ const JOURNAL_PLUGIN: CorePluginManifestSummary = {
   queuesAndCrons: [],
   notes: [
     "Bundled through @me3-core/plugin-journal as a first-party Core package.",
-    "Journal owns private owner-scoped writing entries and is surfaced through Mission Control workflows.",
+    "Journal owns private owner-scoped writing entries and connects with task and project workflows.",
     "Assistant reads use the explicit owner-scoped core.journal.read capability; Journal writes remain owner-controlled.",
   ],
 };

@@ -883,7 +883,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   ): Promise<AssistantThreadRow | null | { error: string; status: 400 | 404 }> {
     if (!threadId) {
       if (projectId && !(await assistantProjectExists(env, ownerId, projectId))) {
-        return { error: "Mission Control project not found", status: 404 };
+        return { error: "Project not found", status: 404 };
       }
       return createAssistantThread(env, ownerId, messageText, projectId);
     }
@@ -2986,7 +2986,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         ? normalizeNullableText(body.projectId)
         : thread.project_id;
     if (projectId && !(await assistantProjectExists(c.env, ownerId, projectId))) {
-      return c.json({ ok: false, error: "Mission Control project not found" }, 404);
+      return c.json({ ok: false, error: "Project not found" }, 404);
     }
 
     let nextStatus = thread.status;

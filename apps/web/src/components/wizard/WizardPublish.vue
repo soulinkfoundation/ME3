@@ -21,7 +21,6 @@ import {
   getVibeFontUrl,
   type VibeId,
 } from "../../styles/vibes";
-import { resolvePublicProfileUrl } from "../../utils/publicSiteUrl";
 import { createContentTurndownService } from "../../utils/contentMarkdown";
 
 const turndown = createContentTurndownService();
@@ -169,9 +168,14 @@ const {
 const { toastError } = useAppToast();
 
 const isDownloading = ref(false);
+const logoFileInput = ref<HTMLInputElement | null>(null);
+const logoError = ref<string | null>(null);
 
 const isLoggedIn = computed(() => auth.isAuthenticated);
 const canCustomizeFooter = computed(() => true);
+const siteIconPreview = computed(
+  () => wizard.profile.logo || wizard.profile.avatar,
+);
 
 // Footer customization modal
 const showFooterModal = ref(false);
@@ -194,6 +198,50 @@ function setAccentOverride(color: string) {
 
 function resetAccentOverride() {
   wizard.setAccentOverride(null);
+}
+
+function openLogoPicker() {
+  logoFileInput.value?.click();
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      typeof reader.result === "string"
+        ? resolve(reader.result)
+        : reject(new Error("Failed to read image"));
+    reader.onerror = () => reject(new Error("Failed to read image"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleLogoSelect(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    logoError.value = "Choose a PNG, JPEG, or WebP image.";
+    return;
+  }
+  if (file.size > 1_900_000) {
+    logoError.value = "Choose an image smaller than 1.9 MB.";
+    return;
+  }
+
+  try {
+    wizard.updateProfile({ logo: await fileToDataUrl(file), logoBlob: file });
+    logoError.value = null;
+  } catch {
+    logoError.value = "We couldn’t read that image. Try another file.";
+  }
+}
+
+function removeLogo() {
+  wizard.updateProfile({ logo: null, logoBlob: null });
+  logoError.value = null;
 }
 
 async function downloadZip() {
@@ -223,6 +271,19 @@ async function downloadZip() {
         return { blob, ext };
       } catch {
         return null;
+      }
+    }
+
+    // Add site logo - use blob if available, otherwise fetch from URL
+    if (wizard.profile.logoBlob) {
+      const ext = getImageExt(wizard.profile.logoBlob);
+      zip.file(`files/logo.${ext}`, wizard.profile.logoBlob);
+      me3Json.logo = `./files/logo.${ext}`;
+    } else if (wizard.profile.logo) {
+      const result = await fetchImageAsBlob(wizard.profile.logo);
+      if (result) {
+        zip.file(`files/logo.${result.ext}`, result.blob);
+        me3Json.logo = `./files/logo.${result.ext}`;
       }
     }
 
@@ -286,7 +347,7 @@ async function downloadZip() {
       }
     }
 
-    // Update me.json in case avatar/banner paths changed
+    // Update me.json in case logo/avatar/banner paths changed
     if (me3Json.links && "_avatar_variants" in me3Json.links) {
       delete me3Json.links._avatar_variants;
       if (Object.keys(me3Json.links).length === 0) {
@@ -294,20 +355,6 @@ async function downloadZip() {
       }
     }
     zip.file("me.json", JSON.stringify(me3Json, null, 2));
-
-    // Add favicon if it exists (fetch from published site)
-    if (wizard.profile.handle) {
-      try {
-        const baseUrl = await resolvePublicProfileUrl(wizard.profile.handle);
-        const faviconUrl = `${baseUrl.replace(/\/$/, "")}/favicon.png`;
-        const faviconResult = await fetchImageAsBlob(faviconUrl);
-        if (faviconResult) {
-          zip.file("favicon.png", faviconResult.blob);
-        }
-      } catch (e) {
-        console.warn("Could not fetch favicon:", e);
-      }
-    }
 
     // Add pages (convert HTML to Markdown)
     if (wizard.pagesEnabled) {
@@ -389,7 +436,6 @@ This folder contains your portable me3 site.
 ## Files
 - \`index.html\` - Self-contained site viewer
 - \`me.json\` - Your profile data (me3 protocol)
-- \`favicon.png\` - Your site favicon
 - \`files/\` - Your images
 ${wizard.pagesEnabled && wizard.pages.length > 0 ? wizard.pages.map((p) => `- \`${p.slug}.md\` - ${p.title}`).join("\n") : ""}
 ${wizard.blogEnabled && wizard.posts.length > 0 ? wizard.posts.map((p) => `- \`blog/${p.slug}.md\` - ${p.title}`).join("\n") : ""}
@@ -548,6 +594,46 @@ function closeFooterModal() {
         </button>
       </div>
     </div>
+
+    <section class="site-logo-section" aria-labelledby="site-logo-title">
+      <div class="site-logo-copy">
+        <h3 id="site-logo-title">Site logo</h3>
+        <p>
+          Used in browser tabs and bookmarks. If you don’t add one, your avatar
+          is used automatically.
+        </p>
+      </div>
+      <div class="site-logo-control">
+        <div class="site-logo-preview" aria-hidden="true">
+          <img v-if="siteIconPreview" :src="siteIconPreview" alt="" />
+          <UiIcon v-else name="Image" :size="24" />
+        </div>
+        <div class="site-logo-actions">
+          <button class="site-logo-button" type="button" @click="openLogoPicker">
+            {{ wizard.profile.logo ? "Change logo" : "Upload logo" }}
+          </button>
+          <button
+            v-if="wizard.profile.logo"
+            class="site-logo-remove"
+            type="button"
+            @click="removeLogo"
+          >
+            Use avatar
+          </button>
+          <input
+            ref="logoFileInput"
+            class="site-logo-input"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            @change="handleLogoSelect"
+          />
+          <span class="site-logo-hint">Square PNG, JPEG, or WebP · 1.9 MB max</span>
+        </div>
+      </div>
+      <p v-if="logoError" class="site-logo-error" role="alert">
+        {{ logoError }}
+      </p>
+    </section>
 
     <!-- Preview -->
     <div class="publish-preview">
@@ -742,6 +828,116 @@ function closeFooterModal() {
 /* Vibe Selector */
 .vibe-section {
   margin-bottom: 32px;
+}
+
+.site-logo-section {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 32px;
+  padding: 18px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 12px);
+  background: var(--ui-surface, var(--color-bg));
+}
+
+.site-logo-copy h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.site-logo-copy p,
+.site-logo-hint {
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.site-logo-copy p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.site-logo-control {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.site-logo-preview {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface-muted, var(--color-border));
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.site-logo-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.site-logo-actions {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.site-logo-button,
+.site-logo-remove {
+  min-height: 38px;
+  padding: 8px 12px;
+  border-radius: var(--ui-radius-sm, 8px);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.site-logo-button {
+  border: 1px solid var(--ui-border-strong, var(--color-border));
+  background: var(--ui-text, var(--color-text));
+  color: var(--ui-bg, var(--color-bg));
+}
+
+.site-logo-remove {
+  border: 0;
+  background: transparent;
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.site-logo-button:focus-visible,
+.site-logo-remove:focus-visible {
+  outline: 3px solid var(--ui-accent, var(--color-text));
+  outline-offset: 2px;
+}
+
+.site-logo-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.site-logo-hint {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
+.site-logo-error {
+  margin: 0;
+  color: #b42318;
+  font-size: 13px;
 }
 
 .vibe-title {

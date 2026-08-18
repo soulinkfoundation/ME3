@@ -472,6 +472,7 @@ function closeFromBackdrop() {
   align-items: start;
   justify-items: stretch;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 0;
   background: var(--ui-bg);
 }
@@ -479,6 +480,7 @@ function closeFromBackdrop() {
 .mission-modal__dialog {
   position: relative;
   display: grid;
+  box-sizing: border-box;
   width: min(460px, 100%);
   min-width: 0;
   max-height: min(720px, calc(100vh - 48px));
@@ -506,6 +508,7 @@ function closeFromBackdrop() {
   min-height: 100dvh;
   height: auto;
   max-height: none;
+  overflow: visible;
   border: 0;
   border-radius: 0;
   background: var(--ui-bg);
@@ -687,6 +690,8 @@ function closeFromBackdrop() {
 .task-note-body-field {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   color: var(--ui-text);
   font-size: inherit;
@@ -697,7 +702,10 @@ function closeFromBackdrop() {
   display: flex;
   flex: 1;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
+  max-width: 100%;
   --tiptap-toolbar-offset: 0px;
 }
 
@@ -705,6 +713,7 @@ function closeFromBackdrop() {
   display: flex;
   flex: 1;
   flex-direction: column;
+  width: 100%;
   min-height: 0;
   min-width: 0;
   max-width: 100%;
@@ -712,13 +721,14 @@ function closeFromBackdrop() {
 
 .task-note-body-field__editor :deep(.editor-toolbar) {
   box-sizing: border-box;
-  position: static;
+  position: sticky;
+  top: 0;
   width: 100%;
   margin-inline: 0;
   padding: 0 0 10px;
   border: 0;
   border-radius: 0;
-  background: transparent;
+  background: var(--ui-bg);
   flex-wrap: nowrap;
   justify-content: flex-start;
   overflow-x: auto;

@@ -359,6 +359,37 @@ describe("site generator", () => {
     expect(files["index.html"]).not.toContain("readonly");
   });
 
+  it("prefers a custom site logo for icons and otherwise falls back to the avatar", async () => {
+    const brandedFiles = await generateSiteHtml(
+      {
+        name: "Branded Site",
+        logo: "./files/logo.png",
+        avatar: "./files/avatar.jpg",
+      },
+      [],
+    );
+    const avatarFiles = await generateSiteHtml(
+      { name: "Avatar Site", avatar: "./files/avatar.jpg" },
+      [],
+    );
+    const unbrandedFiles = await generateSiteHtml({ name: "Plain Site" }, []);
+
+    expect(brandedFiles["index.html"]).toContain(
+      '<link rel="icon" href="./files/logo.png">',
+    );
+    expect(brandedFiles["index.html"]).toContain(
+      '<link rel="apple-touch-icon" href="./files/logo.png">',
+    );
+    expect(brandedFiles["index.html"]).not.toContain(
+      '<link rel="icon" href="./files/avatar.jpg">',
+    );
+    expect(avatarFiles["index.html"]).toContain(
+      '<link rel="icon" href="./files/avatar.jpg">',
+    );
+    expect(unbrandedFiles["index.html"]).not.toContain('rel="icon"');
+    expect(unbrandedFiles["index.html"]).not.toContain("favicon.png");
+  });
+
   it("confirms pay-separately bookings without checkout and keeps instructions private", async () => {
     const files = await generateSiteHtml(
       {

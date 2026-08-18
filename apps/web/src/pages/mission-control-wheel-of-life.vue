@@ -10,7 +10,7 @@ definePage({
     requiresWorkspace: true,
     requiresPlugin: "me3.mission-control",
     title: "Wheel of Life | ME3",
-    description: "ME3 Mission Control Wheel of Life workspace.",
+    description: "ME3 Wheel of Life workspace.",
     robots: "noindex,follow",
   },
 });
@@ -20,7 +20,7 @@ definePage({
   <main class="wheel-life-page">
     <RouterLink
       class="wheel-life-page__close"
-      to="/mission-control"
+      to="/mission-control/projects"
       aria-label="Close Wheel of Life"
       title="Close Wheel of Life"
     >

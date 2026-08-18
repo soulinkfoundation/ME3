@@ -28,6 +28,8 @@ export const PORTABLE_VERSION = 1;
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const INSTALL_ID_RE = /^core_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const EMPTY_SHA256 = sha256("");
+const MAX_IMPORT_STATEMENT_BYTES = 48 * 1024;
+const IMPORT_VALUE_CHUNK_BYTES = 16 * 1024;
 
 export const RUNTIME_MIGRATIONS = [
   ["0002_mission_task_pins", "2026-06-24-mission-task-pins-v1"],
@@ -49,6 +51,13 @@ export const RUNTIME_MIGRATIONS = [
   ["0025_social_posting_plans", "2026-07-18-social-posting-plans-v1"],
   ["0026_social_carousels", "2026-07-18-social-carousels-v1"],
   ["0027_managed_runtime_lifecycle", "2026-07-18-managed-runtime-lifecycle-v2"],
+  ["0028_journal_entry_revision", "2026-07-23-journal-entry-revision-v1"],
+  ["0029_social_media_delivery", "2026-07-21-social-media-delivery-v1"],
+  ["0030_social_youtube_tiktok", "2026-07-21-social-youtube-tiktok-v2"],
+  ["0031_social_publication_formats", "2026-07-25-social-publication-formats-v1"],
+  ["0032_social_version_publishing_settings", "2026-07-29-social-version-publishing-settings-v1"],
+  ["0033_manual_payments", "2026-07-31-manual-payments-v1"],
+  ["0034_owner_onboarding", "2026-07-31-owner-onboarding-v1"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];
@@ -71,6 +80,8 @@ const EXCLUDED_TABLES = [
   "assistant_job_ingress_events",
   "auth_rate_limits",
   "booking_holds",
+  "drive_multipart_parts",
+  "drive_multipart_uploads",
   "local_executor_audit_events",
   "local_executor_pairings",
   "local_executor_project_policies",
@@ -86,6 +97,7 @@ const EXCLUDED_TABLES = [
   "mission_daemon_pairings",
   "mobile_pairings",
   "mobile_refresh_tokens",
+  "social_media_delivery_grants",
   "social_oauth_states",
   "telegram_settings",
 ];
@@ -144,6 +156,7 @@ const COPIED_TABLES = [
   "mission_tasks",
   "mission_wheel_settings",
   "mission_wheel_snapshots",
+  "owner_onboarding",
   "owner_profile",
   "plugin_installations",
   "scheduling_request_audit",
@@ -279,6 +292,7 @@ const SENSITIVE_FIELD_POLICIES = new Map([
   ["social_accounts.access_token_ciphertext", "replace with noncredential reconnect marker"],
   ["social_accounts.refresh_token_ciphertext", "clear and reconnect"],
   ["social_accounts.token_expires_at", "clear and reconnect"],
+  ["social_media_delivery_grants.token_hash", "exclude short-lived provider delivery grant"],
   ["social_posting_plans.confirmation_token", "reset ephemeral confirmation claim"],
   ["social_suggestions.choose_token", "reset ephemeral choose claim"],
   ["social_oauth_states.state", "exclude one-time state"],
@@ -682,15 +696,23 @@ export function restorePortableV1({
       ["TOKEN_ENCRYPTION_KEY", validated.secrets.installSecrets.TOKEN_ENCRYPTION_KEY],
       ["JWT_SECRET", sessionSecret],
     ];
+    const secretStatements = secretRows.map(
+      ([name, value]) =>
+        `INSERT INTO install_secrets (name, value, created_at, updated_at) VALUES (${sqlQuote(name)}, ${sqlQuote(value)}, ${sqlQuote(now)}, ${sqlQuote(now)});`,
+    );
     const restoreSql = [
       "PRAGMA defer_foreign_keys=TRUE;",
       "BEGIN TRANSACTION;",
       validated.sql,
-      ...secretRows.map(
-        ([name, value]) =>
-          `INSERT INTO install_secrets (name, value, created_at, updated_at) VALUES (${sqlQuote(name)}, ${sqlQuote(value)}, ${sqlQuote(now)}, ${sqlQuote(now)});`,
-      ),
+      ...secretStatements,
       "COMMIT;",
+    ].join("\n");
+    // Wrangler's remote D1 import endpoint wraps the uploaded file in its own
+    // atomic transaction and rejects explicit BEGIN/COMMIT statements.
+    const importSql = [
+      "PRAGMA defer_foreign_keys=TRUE;",
+      validated.sql,
+      ...secretStatements,
     ].join("\n");
     runSqlite(stagedDatabase, restoreSql);
 
@@ -714,7 +736,7 @@ export function restorePortableV1({
     }
     if (importSqlOutput) {
       mkdirSync(dirname(importSqlOutput), { recursive: true });
-      writeFileSync(importSqlOutput, `${restoreSql}\n`, { mode: 0o600 });
+      writeFileSync(importSqlOutput, `${importSql}\n`, { mode: 0o600 });
     }
 
     return {
@@ -943,15 +965,45 @@ function readMigrationState(database) {
 function assertMigrationState(database, expectedSchema) {
   const actual = readMigrationState(database);
   if (
-    stableJson(actual.d1) !== stableJson(expectedSchema.d1Migrations) ||
+    !d1MigrationStateIsCompatible(
+      actual.d1,
+      expectedSchema.d1Migrations,
+      expectedSchema.runtimeMigrations,
+    ) ||
     stableJson(actual.runtime) !== stableJson(expectedSchema.runtimeMigrations)
   ) {
     throw new PortableError("MIGRATION_MISMATCH", "Target migration level does not match the snapshot");
   }
 }
 
+function d1MigrationStateIsCompatible(actual, expected, runtime) {
+  const actualNames = actual.map((migration) => migration.name);
+  const expectedNames = expected.map((migration) => migration.name);
+  if (
+    new Set(actualNames).size !== actualNames.length ||
+    new Set(expectedNames).size !== expectedNames.length
+  ) {
+    return false;
+  }
+
+  const actualNameSet = new Set(actualNames);
+  if (expectedNames.some((name) => !actualNameSet.has(name))) return false;
+
+  // D1 assigns ledger IDs from deployment history, so two installations with
+  // the same migration names and schema can legitimately have different IDs.
+  // A fresh install can also record a migration that an upgraded install
+  // already applied through the identically named Core runtime migration.
+  const expectedNameSet = new Set(expectedNames);
+  const runtimeMigrationNames = new Set(
+    runtime.map((migration) => `${migration.id}.sql`),
+  );
+  return actualNames.every(
+    (name) => expectedNameSet.has(name) || runtimeMigrationNames.has(name),
+  );
+}
+
 function buildDatabaseExport(database) {
-  const statements = [];
+  const statementsByTable = new Map();
   const tables = [];
   let sourceRowCount = 0;
   let portableRowCount = 0;
@@ -962,7 +1014,7 @@ function buildDatabaseExport(database) {
     sourceRowCount += policy === "verify" || policy === "derived" ? 0 : sourceRows;
     if (policy === "copy" || policy === "transform") {
       const exported = canonicalTableRows(database, name);
-      statements.push(...exported.statements);
+      statementsByTable.set(name, exported.statements);
       portableRowCount += exported.rows;
       excludedRowCount += sourceRows - exported.rows;
       tables.push({
@@ -977,6 +1029,10 @@ function buildDatabaseExport(database) {
       tables.push({ name, policy, sourceRows, rows: 0, sha256: EMPTY_SHA256 });
     }
   }
+  const statements = foreignKeySafeTableOrder(
+    database,
+    [...statementsByTable.keys()],
+  ).flatMap((name) => statementsByTable.get(name) || []);
   return {
     sql: statements.length ? `${statements.join("\n")}\n` : "",
     sourceRowCount,
@@ -986,23 +1042,143 @@ function buildDatabaseExport(database) {
   };
 }
 
+function foreignKeySafeTableOrder(database, tableNames) {
+  const included = new Set(tableNames);
+  const dependencies = new Map(
+    tableNames.map((name) => [
+      name,
+      sqliteJson(database, `PRAGMA foreign_key_list(${identifier(name)});`)
+        .map((row) => row.table)
+        .filter((dependency) => dependency !== name && included.has(dependency))
+        .sort(),
+    ]),
+  );
+  const ordered = [];
+  const visited = new Set();
+  const active = new Set();
+  const visit = (name) => {
+    if (visited.has(name)) return;
+    if (active.has(name)) {
+      throw new PortableError(
+        "SCHEMA_UNCLASSIFIED",
+        "Portable tables contain a cyclic foreign-key dependency",
+      );
+    }
+    active.add(name);
+    for (const dependency of dependencies.get(name) || []) visit(dependency);
+    active.delete(name);
+    visited.add(name);
+    ordered.push(name);
+  };
+  for (const name of [...tableNames].sort()) visit(name);
+  return ordered;
+}
+
 function canonicalTableRows(database, table) {
-  const columns = sqliteJson(database, `PRAGMA table_info(${identifier(table)});`).map((row) => row.name);
+  const tableColumns = sqliteJson(database, `PRAGMA table_info(${identifier(table)});`);
+  const columns = tableColumns.map((row) => row.name);
+  const primaryColumns = tableColumns
+    .filter((row) => Number(row.pk) > 0)
+    .sort((a, b) => Number(a.pk) - Number(b.pk))
+    .map((row) => row.name);
+  if (!primaryColumns.length) {
+    throw new PortableError(
+      "SCHEMA_UNCLASSIFIED",
+      `Portable table requires a primary key: ${table}`,
+    );
+  }
   const transform = TRANSFORMS[table] || {};
   const projected = columns.map(
     (column) => `${transform.columns?.[column] || identifier(column)} AS ${identifier(column)}`,
   );
-  const quoted = columns.map((column) => `quote(${identifier(column)})`).join(", ");
+  const quoted = columns
+    .map((column) => {
+      const value = identifier(column);
+      // SQL parsers normalize CRLF inside string literals. Encode text as a
+      // UTF-8 blob cast back to TEXT so email bodies and other owner content
+      // survive the generated import SQL byte-for-byte.
+      return `CASE WHEN typeof(${value}) = 'text' THEN 'CAST(X''' || hex(CAST(${value} AS BLOB)) || ''' AS TEXT)' ELSE quote(${value}) END`;
+    })
+    .join(", ");
   const order = columns.map(identifier).join(", ");
   const query = `SELECT json_array(${quoted}) FROM (SELECT ${projected.join(", ")} FROM ${identifier(table)}${transform.where ? ` WHERE ${transform.where}` : ""}) ORDER BY ${order};`;
   const output = runSqlite(database, query).trim();
   const rowLines = output ? output.split("\n") : [];
-  const statements = rowLines.map((line) => {
+  const statements = rowLines.flatMap((line) => {
     const values = JSON.parse(line);
-    return `INSERT INTO ${identifier(table)} (${columns.map(identifier).join(", ")}) VALUES (${values.join(", ")});`;
+    return chunkedInsertStatements(table, columns, primaryColumns, values);
   });
   const canonical = statements.length ? `${statements.join("\n")}\n` : "";
-  return { statements, rows: statements.length, sha256: sha256(canonical) };
+  return { statements, rows: rowLines.length, sha256: sha256(canonical) };
+}
+
+function chunkedInsertStatements(table, columns, primaryColumns, values) {
+  const working = [...values];
+  const primaryIndexes = new Set(
+    primaryColumns.map((column) => columns.indexOf(column)),
+  );
+  const candidates = values
+    .map((value, index) => ({ index, ...parseChunkableLiteral(value) }))
+    .filter((candidate) => candidate.type && candidate.hex && !primaryIndexes.has(candidate.index))
+    .sort((a, b) => b.hex.length - a.hex.length || a.index - b.index);
+  const buildInsert = () =>
+    `INSERT INTO ${identifier(table)} (${columns.map(identifier).join(", ")}) VALUES (${working.join(", ")});`;
+
+  let insert = buildInsert();
+  const deferred = [];
+  while (Buffer.byteLength(insert, "utf8") > MAX_IMPORT_STATEMENT_BYTES && candidates.length) {
+    const candidate = candidates.shift();
+    working[candidate.index] = candidate.type === "blob" ? "X''" : "CAST(X'' AS TEXT)";
+    deferred.push(candidate);
+    insert = buildInsert();
+  }
+  if (Buffer.byteLength(insert, "utf8") > MAX_IMPORT_STATEMENT_BYTES) {
+    throw new PortableError(
+      "ROW_TOO_LARGE",
+      `Portable row cannot be represented safely: ${table}`,
+    );
+  }
+
+  const where = primaryColumns
+    .map((column) => {
+      const index = columns.indexOf(column);
+      return `${identifier(column)} IS ${values[index]}`;
+    })
+    .join(" AND ");
+  const statements = [insert];
+  for (const candidate of deferred.sort((a, b) => a.index - b.index)) {
+    const column = identifier(columns[candidate.index]);
+    for (
+      let offset = 0;
+      offset < candidate.hex.length;
+      offset += IMPORT_VALUE_CHUNK_BYTES * 2
+    ) {
+      const chunk = candidate.hex.slice(offset, offset + IMPORT_VALUE_CHUNK_BYTES * 2);
+      statements.push(
+        `UPDATE ${identifier(table)} SET ${column} = CAST(${column} AS TEXT) || CAST(X'${chunk}' AS TEXT) WHERE ${where};`,
+      );
+    }
+    if (candidate.type === "blob") {
+      statements.push(
+        `UPDATE ${identifier(table)} SET ${column} = CAST(${column} AS BLOB) WHERE ${where};`,
+      );
+    }
+  }
+  if (statements.some((statement) => Buffer.byteLength(statement, "utf8") > MAX_IMPORT_STATEMENT_BYTES)) {
+    throw new PortableError(
+      "ROW_TOO_LARGE",
+      `Portable row chunk exceeds the import limit: ${table}`,
+    );
+  }
+  return statements;
+}
+
+function parseChunkableLiteral(value) {
+  const text = /^CAST\(X'([0-9A-F]*)' AS TEXT\)$/.exec(value);
+  if (text) return { type: "text", hex: text[1] };
+  const blob = /^X'([0-9A-F]*)'$/.exec(value);
+  if (blob) return { type: "blob", hex: blob[1] };
+  return { type: null, hex: "" };
 }
 
 function readProviderConnections(database) {
@@ -1133,14 +1309,31 @@ function parseObjectManifest(text) {
 
 function verifyRestoredDatabase(database, manifest) {
   const actual = buildDatabaseExport(database);
-  if (
-    actual.portableRowCount !== manifest.database.portableRowCount ||
-    actual.tables.some((table, index) => {
-      const expected = manifest.database.tables[index];
-      return table.name !== expected?.name || table.rows !== expected.rows || table.sha256 !== expected.sha256;
-    })
-  ) {
-    throw new PortableError("RESTORE_VERIFY_FAILED", "Restored D1 row counts or checksums differ");
+  const mismatch = actual.tables.find((table, index) => {
+    const expected = manifest.database.tables[index];
+    return table.name !== expected?.name || table.rows !== expected.rows || table.sha256 !== expected.sha256;
+  });
+  if (actual.portableRowCount !== manifest.database.portableRowCount || mismatch) {
+    const expected = mismatch
+      ? manifest.database.tables.find((table) => table.name === mismatch.name)
+      : null;
+    throw new PortableError(
+      "RESTORE_VERIFY_FAILED",
+      "Restored D1 row counts or checksums differ",
+      {
+        expectedRows: manifest.database.portableRowCount,
+        actualRows: actual.portableRowCount,
+        ...(mismatch
+          ? {
+              table: mismatch.name,
+              expectedTableRows: expected?.rows,
+              actualTableRows: mismatch.rows,
+              expectedTableSha256: expected?.sha256,
+              actualTableSha256: mismatch.sha256,
+            }
+          : {}),
+      },
+    );
   }
   const installSecrets = readInstallSecrets(database);
   if (
