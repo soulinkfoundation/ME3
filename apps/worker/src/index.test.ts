@@ -617,11 +617,15 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("INSERT INTO assistant_threads")) {
+                const existing = state.assistantThreads.some((thread) => thread.id === values[0]);
+                if (sql.includes("ON CONFLICT(id)") && existing) {
+                  return { success: true, meta: { changes: 0 } };
+                }
                 state.assistantThreads.push({
                   id: values[0] as string,
                   owner_id: values[1] as string,
                   title: values[2] as string,
-                  origin_surface: "assistant",
+                  origin_surface: sql.includes("'soulink'") ? "soulink" : "assistant",
                   project_id: sql.includes("project_id") ? (values[3] as string | null) : null,
                   status: "active",
                   pinned_at: null,
@@ -631,6 +635,7 @@ function createEnv(): Env & {
                   created_at: "2026-05-11T10:06:00Z",
                   updated_at: "2026-05-11T10:06:00Z",
                 });
+                return { success: true, meta: { changes: 1 } };
               }
 
               if (sql.includes("UPDATE assistant_threads")) {
@@ -2158,6 +2163,14 @@ function createEnv(): Env & {
                     });
                   }
                 } else if (!sql.includes("'telegram'")) {
+                  const duplicate = state.agentEvents.some(
+                    (event) =>
+                      event.connection_id === values[1] &&
+                      event.provider_event_id === values[6],
+                  );
+                  if (sql.includes("INSERT OR IGNORE") && duplicate) {
+                    return { success: true, meta: { changes: 0 } };
+                  }
                   state.agentEvents.push({
                     id: values[0] as string,
                     connection_id: values[1] as string,
@@ -2171,6 +2184,7 @@ function createEnv(): Env & {
                     text_body: values[9] as string | null,
                     raw_json: values[10] as string | null,
                   });
+                  return { success: true, meta: { changes: 1 } };
                 } else {
                   state.agentEvents.push({
                     id: values[0] as string,
@@ -2189,6 +2203,32 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("UPDATE agent_channel_events")) {
+                if (sql.includes("direction = 'inbound'")) {
+                  const existing = state.agentEvents.find((event) => event.id === values[2]);
+                  if (!existing) return { success: true, meta: { changes: 0 } };
+                  state.agentEvents = state.agentEvents.map((event) =>
+                    event.id === values[2]
+                      ? { ...event, status: values[0] as StoredAgentChannelEvent["status"] }
+                      : event,
+                  );
+                  return { success: true, meta: { changes: 1 } };
+                }
+                if (sql.includes("provider_message_id IS NULL OR provider_message_id = ?")) {
+                  const existing = state.agentEvents.find((event) => event.id === values[3]);
+                  if (!existing || (existing.provider_message_id && existing.provider_message_id !== values[4])) {
+                    return { success: true, meta: { changes: 0 } };
+                  }
+                  state.agentEvents = state.agentEvents.map((event) =>
+                    event.id === values[3]
+                      ? {
+                          ...event,
+                          status: values[0] as StoredAgentChannelEvent["status"],
+                          provider_message_id: values[1] as string,
+                        }
+                      : event,
+                  );
+                  return { success: true, meta: { changes: 1 } };
+                }
                 state.agentEvents = state.agentEvents.map((event) =>
                   event.id === values[4]
                     ? {
@@ -13703,7 +13743,7 @@ describe("ME3 Worker auth", () => {
       updated_at: "2026-05-11T10:00:00Z",
     };
 
-    const runtimeFetch = vi.fn(async () =>
+    const runtimeFetch = vi.fn(async (_url: string, _init?: RequestInit) =>
       Response.json({
         ok: true,
         auditId: null,
@@ -13734,6 +13774,7 @@ describe("ME3 Worker auth", () => {
         },
         body: JSON.stringify({
           sourceEventId: "stream-message-1",
+          conversationId: "assistant-channel",
           streamChannelType: "messaging",
           streamChannelId: "assistant-channel",
           messageText: "Hello from Soulink",
@@ -13750,6 +13791,16 @@ describe("ME3 Worker auth", () => {
       streamChannelId: "assistant-channel",
     });
     expect(runtimeFetch).toHaveBeenCalledOnce();
+    const runtimeRequest = runtimeFetch.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(runtimeRequest.body))).toMatchObject({
+      threadId: "soulink:assistant-channel",
+    });
+    expect(env.assistantThreads).toEqual([
+      expect.objectContaining({
+        id: "soulink:assistant-channel",
+        origin_surface: "soulink",
+      }),
+    ]);
     expect(env.agentEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -13766,6 +13817,119 @@ describe("ME3 Worker auth", () => {
         }),
       ]),
     );
+
+    const duplicateResponse = await app.fetch(
+      new Request("http://localhost/api/agent/channels/soulink/dispatch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer setup-token",
+        },
+        body: JSON.stringify({
+          sourceEventId: "stream-message-1",
+          conversationId: "assistant-channel",
+          streamChannelType: "messaging",
+          streamChannelId: "assistant-channel",
+          messageText: "Hello from Soulink",
+        }),
+      }),
+      env,
+    );
+    expect(duplicateResponse.status).toBe(200);
+    await expect(duplicateResponse.json()).resolves.toMatchObject({
+      ok: true,
+      deduped: true,
+      turnId: "turn-1",
+      replyText: "Hello from Soulink Core.",
+    });
+    expect(runtimeFetch).toHaveBeenCalledOnce();
+    expect(env.assistantThreads).toHaveLength(1);
+
+    const unauthorizedDelivery = await app.fetch(
+      new Request("http://localhost/api/agent/channels/soulink/delivery", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer wrong-token",
+        },
+        body: JSON.stringify({
+          sourceEventId: "stream-message-1",
+          streamChannelId: "assistant-channel",
+          providerMessageId: "stream-reply-1",
+          status: "sent",
+        }),
+      }),
+      env,
+    );
+    expect(unauthorizedDelivery.status).toBe(401);
+
+    const deliveryRequest = () =>
+      new Request("http://localhost/api/agent/channels/soulink/delivery", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer setup-token",
+        },
+        body: JSON.stringify({
+          sourceEventId: "stream-message-1",
+          streamChannelId: "assistant-channel",
+          providerMessageId: "stream-reply-1",
+          status: "sent",
+        }),
+      });
+    const deliveryResponse = await app.fetch(deliveryRequest(), env);
+    expect(deliveryResponse.status).toBe(200);
+    await expect(deliveryResponse.json()).resolves.toMatchObject({ ok: true, deduped: false });
+    expect(
+      env.agentEvents.find((event) => event.provider_event_id === "stream-message-1:reply"),
+    ).toMatchObject({ status: "sent", provider_message_id: "stream-reply-1" });
+
+    const repeatedDelivery = await app.fetch(deliveryRequest(), env);
+    expect(repeatedDelivery.status).toBe(200);
+    await expect(repeatedDelivery.json()).resolves.toMatchObject({ ok: true, deduped: true });
+
+    runtimeFetch.mockResolvedValueOnce(
+      Response.json({ ok: false, error: "Temporary agent runtime failure" }, { status: 503 }),
+    );
+    const retryBody = {
+      sourceEventId: "stream-message-2",
+      conversationId: "assistant-channel",
+      streamChannelType: "messaging",
+      streamChannelId: "assistant-channel",
+      messageText: "Try this tool after a transient failure",
+    };
+    const failedTurn = await app.fetch(
+      new Request("http://localhost/api/agent/channels/soulink/dispatch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer setup-token",
+        },
+        body: JSON.stringify(retryBody),
+      }),
+      env,
+    );
+    expect(failedTurn.status).toBe(503);
+    const retriedTurn = await app.fetch(
+      new Request("http://localhost/api/agent/channels/soulink/dispatch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer setup-token",
+        },
+        body: JSON.stringify(retryBody),
+      }),
+      env,
+    );
+    expect(retriedTurn.status).toBe(200);
+    await expect(retriedTurn.json()).resolves.toMatchObject({
+      ok: true,
+      replyText: "Hello from Soulink Core.",
+    });
+    expect(runtimeFetch).toHaveBeenCalledTimes(3);
+    const failedRuntimeBody = JSON.parse(String(runtimeFetch.mock.calls[1]?.[1]?.body));
+    const retriedRuntimeBody = JSON.parse(String(runtimeFetch.mock.calls[2]?.[1]?.body));
+    expect(retriedRuntimeBody.sourceEventId).toBe(failedRuntimeBody.sourceEventId);
   });
 
   it("exposes privacy-safe Soulink Links to connected Core installs", async () => {

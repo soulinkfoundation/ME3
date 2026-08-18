@@ -26,10 +26,16 @@ import {
   type AssistantScopeParseResult,
 } from "../assistant-scopes";
 import {
+  acknowledgeAgentChannelDelivery,
+  canRetryAgentChannelInboundEvent,
+  claimAgentChannelInboundEvent,
   dispatchAgentChannelTurn,
+  ensureAgentChannelAssistantThread,
   getActiveSoulinkConnectionForThread,
-  getAgentChannelEventByProviderEventId,
+  getAgentChannelDispatchReplay,
   insertProviderChannelEvent,
+  insertProviderChannelEventOnce,
+  updateAgentChannelInboundDispatchStatus,
   verifySoulinkDispatchAuth,
 } from "../agent-channels";
 import { isCorePluginEnabled } from "../plugins";
@@ -162,11 +168,19 @@ type SoulinkDispatchBody = {
   assistantNodeId?: unknown;
   connectionId?: unknown;
   sourceEventId?: unknown;
+  conversationId?: unknown;
   streamChannelType?: unknown;
   streamChannelId?: unknown;
   messageText?: unknown;
   replyToMessageId?: unknown;
   createdAt?: unknown;
+};
+type SoulinkDeliveryBody = {
+  sourceEventId?: unknown;
+  streamChannelId?: unknown;
+  providerMessageId?: unknown;
+  status?: unknown;
+  errorMessage?: unknown;
 };
 type AssistantSettingsRow = {
   assistant_name: string | null;
@@ -4012,6 +4026,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const messageText = typeof body.messageText === "string" ? body.messageText.trim() : "";
     const sourceEventId = typeof body.sourceEventId === "string" ? body.sourceEventId.trim() : "";
     const streamChannelId = typeof body.streamChannelId === "string" ? body.streamChannelId.trim() : "";
+    const conversationId = typeof body.conversationId === "string" ? body.conversationId.trim() : "";
     const replyToMessageId =
       typeof body.replyToMessageId === "string" || typeof body.replyToMessageId === "number"
         ? body.replyToMessageId
@@ -4020,6 +4035,10 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     if (!messageText) return c.json({ ok: false, error: "Message text is required" }, 400);
     if (!sourceEventId) return c.json({ ok: false, error: "sourceEventId is required" }, 400);
     if (!streamChannelId) return c.json({ ok: false, error: "streamChannelId is required" }, 400);
+    if (!conversationId) return c.json({ ok: false, error: "conversationId is required" }, 400);
+    if (conversationId !== streamChannelId) {
+      return c.json({ ok: false, error: "conversationId must match streamChannelId" }, 400);
+    }
 
     const connection = await getActiveSoulinkConnectionForThread(c.env, streamChannelId);
     if (!connection) {
@@ -4031,21 +4050,17 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       return c.json({ ok: false, error: authResult.error }, authResult.status as any);
     }
 
-    const duplicate = await getAgentChannelEventByProviderEventId(c.env, connection.id, sourceEventId);
-    if (duplicate) {
-      return c.json({
-        ok: true,
-        deduped: true,
-        auditId: null,
-        turnId: null,
-        specialist: "core.agent-chat",
-        replyText: null,
-        model: null,
-        source: null,
-      });
+    const threadId = `soulink:${conversationId}`;
+    const threadReady = await ensureAgentChannelAssistantThread(c.env, {
+      userId: connection.user_id,
+      threadId,
+      messageText,
+    });
+    if (!threadReady) {
+      return c.json({ ok: false, error: "Soulink assistant thread could not be prepared" }, 409);
     }
 
-    const eventId = await insertProviderChannelEvent(c.env, {
+    const claimed = await claimAgentChannelInboundEvent(c.env, {
       channel: "soulink",
       connectionId: connection.id,
       direction: "inbound",
@@ -4058,6 +4073,30 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       rawJson: body,
       errorMessage: null,
     });
+    if (!claimed.created) {
+      const replay = await getAgentChannelDispatchReplay(c.env, connection.id, sourceEventId);
+      if (replay) {
+        return c.json({
+          ...replay,
+          deduped: true,
+          streamChannelType: connection.provider_connection_id || "messaging",
+          streamChannelId,
+        });
+      }
+      if (!claimed.event || !canRetryAgentChannelInboundEvent(claimed.event)) {
+        return c.json({
+          ok: true,
+          deduped: true,
+          pending: true,
+          auditId: null,
+          turnId: null,
+          specialist: "core.agent-chat",
+          replyText: null,
+          model: null,
+          source: null,
+        });
+      }
+    }
 
     await c.env.DB.prepare(
       `UPDATE agent_channel_connections
@@ -4068,17 +4107,25 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       .run();
 
     const turnId = crypto.randomUUID();
+    await updateAgentChannelInboundDispatchStatus(c.env, claimed.id, "pending", null);
     const response = await dispatchAgentChannelTurn(c.env, {
       userId: connection.user_id,
       connectionId: connection.id,
-      sourceEventId: eventId,
+      sourceEventId: claimed.id,
       turnId,
+      threadId,
       messageText,
       replyToMessageId,
     });
 
     if (!response.ok) {
-      await insertProviderChannelEvent(c.env, {
+      await updateAgentChannelInboundDispatchStatus(
+        c.env,
+        claimed.id,
+        "failed",
+        response.error || "Agent dispatch failed",
+      );
+      await insertProviderChannelEventOnce(c.env, {
         channel: "soulink",
         connectionId: connection.id,
         direction: "system",
@@ -4094,8 +4141,35 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       return c.json(response, 503 as any);
     }
 
-    if (response.replyText) {
-      await insertProviderChannelEvent(c.env, {
+    if (!response.replyText) {
+      const failedResponse = {
+        ...response,
+        ok: false as const,
+        error: "Agent chat runtime completed without a reply",
+      };
+      await updateAgentChannelInboundDispatchStatus(
+        c.env,
+        claimed.id,
+        "failed",
+        failedResponse.error,
+      );
+      await insertProviderChannelEventOnce(c.env, {
+        channel: "soulink",
+        connectionId: connection.id,
+        direction: "system",
+        eventType: "error",
+        status: "failed",
+        providerEventId: `${sourceEventId}:dispatch-error`,
+        providerMessageId: null,
+        replyToMessageId,
+        textBody: messageText,
+        rawJson: failedResponse,
+        errorMessage: failedResponse.error,
+      });
+      return c.json(failedResponse, 503 as any);
+    }
+
+    await insertProviderChannelEvent(c.env, {
         channel: "soulink",
         connectionId: connection.id,
         direction: "outbound",
@@ -4107,21 +4181,54 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         textBody: response.replyText,
         rawJson: response,
         errorMessage: null,
-      });
-      await c.env.DB.prepare(
+    });
+    await updateAgentChannelInboundDispatchStatus(c.env, claimed.id, "received", null);
+    await c.env.DB.prepare(
         `UPDATE agent_channel_connections
          SET last_outbound_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
       )
         .bind(connection.id)
-        .run();
-    }
+      .run();
 
     return c.json({
       ...response,
       streamChannelType: connection.provider_connection_id || "messaging",
       streamChannelId,
     });
+  });
+
+  app.post("/api/agent/channels/soulink/delivery", async (c) => {
+    const body = await c.req.json<SoulinkDeliveryBody>().catch((): SoulinkDeliveryBody => ({}));
+    const sourceEventId = typeof body.sourceEventId === "string" ? body.sourceEventId.trim() : "";
+    const streamChannelId = typeof body.streamChannelId === "string" ? body.streamChannelId.trim() : "";
+    const providerMessageId =
+      typeof body.providerMessageId === "string" ? body.providerMessageId.trim() : "";
+    const status = body.status === "sent" || body.status === "failed" ? body.status : null;
+    const errorMessage = typeof body.errorMessage === "string" ? body.errorMessage.trim() || null : null;
+    if (!sourceEventId || !streamChannelId || !providerMessageId || !status) {
+      return c.json({ ok: false, error: "Invalid Soulink delivery acknowledgement" }, 400);
+    }
+
+    const connection = await getActiveSoulinkConnectionForThread(c.env, streamChannelId);
+    if (!connection) {
+      return c.json({ ok: false, error: "Soulink is not connected to this ME3 installation" }, 404);
+    }
+    const authResult = verifySoulinkDispatchAuth(connection, c.req.header("authorization"));
+    if (!authResult.ok) {
+      return c.json({ ok: false, error: authResult.error }, authResult.status as any);
+    }
+
+    const result = await acknowledgeAgentChannelDelivery(c.env, {
+      connectionId: connection.id,
+      sourceEventId,
+      providerMessageId,
+      status,
+      errorMessage,
+    });
+    if (!result.found) return c.json({ ok: false, error: "Assistant reply was not found" }, 404);
+    if (!result.ok) return c.json({ ok: false, error: "Assistant delivery identity conflict" }, 409);
+    return c.json({ ok: true, deduped: result.deduped });
   });
 }
 
