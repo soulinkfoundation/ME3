@@ -1,5 +1,6 @@
 import app from "./app";
 import { dispatchDueCalendarSourceRefreshes } from "./calendar-sources";
+import { dispatchDueCalendarPushNotifications } from "./calendar-push-notifications";
 import {
   BOOKING_REMINDER_QUEUE_NAME,
   dispatchDueBookingReminders,
@@ -95,6 +96,7 @@ const worker = {
     if (shouldBlockManagedRuntimeBackground(env, lease)) return;
     try {
       await dispatchDueScheduledAssistantJobs(env);
+      await dispatchDueCalendarPushNotifications(env);
       await dispatchDueBookingReminders(env);
       await dispatchDueSocialPublications(env);
       await recoverStrandedQueuedSocialPublications(env);

@@ -11,7 +11,7 @@ describe("push notification relay client", () => {
 
   it("requires a linked ME3 Cloud installation", async () => {
     const env = envWithSecrets({});
-    await expect(registerPushNotificationDevice(env, {
+    await expect(registerPushNotificationDevice(env, "owner", {
       deviceId: "ios-device-123",
       token: "a".repeat(64),
     })).rejects.toEqual(expect.objectContaining<Partial<PushNotificationInputError>>({
@@ -25,7 +25,7 @@ describe("push notification relay client", () => {
     vi.stubGlobal("fetch", fetchMock);
     const env = envWithSecrets(linkedSecrets());
 
-    await registerPushNotificationDevice(env, {
+    await registerPushNotificationDevice(env, "owner", {
       deviceId: "ios-device-123",
       token: "a".repeat(64),
       environment: "sandbox",
@@ -43,6 +43,20 @@ describe("push notification relay client", () => {
         }),
       }),
     );
+    const body = JSON.parse(String(
+      (fetchMock.mock.calls as unknown as Array<[URL, RequestInit]>)[0]?.[1]?.body,
+    ));
+    expect(body.calendarNotifications).toEqual({
+      enabled: true,
+      categories: {
+        events: true,
+        bookings: true,
+        birthdays: true,
+        reminders: true,
+        tasks: true,
+        subscribed_calendars: true,
+      },
+    });
   });
 
   it("forwards bounded briefing summary metadata and never fails the completed briefing", async () => {
@@ -80,11 +94,17 @@ function linkedSecrets() {
 function envWithSecrets(secrets: Record<string, string>) {
   return {
     DB: {
-      prepare() {
+      prepare(sql: string) {
         return {
-          bind(name: string) {
+          bind(...values: unknown[]) {
             return {
-              first: async () => secrets[name] ? { value: secrets[name] } : null,
+              first: async () => {
+                const name = String(values[0] || "");
+                return sql.includes("install_secrets") && secrets[name]
+                  ? { value: secrets[name] }
+                  : null;
+              },
+              run: async () => ({ success: true, meta: { changes: 1 } }),
             };
           },
         };

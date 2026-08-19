@@ -11,7 +11,7 @@ export function registerPushNotificationRoutes(app: AppHono, deps: OwnerRouteDep
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
     try {
-      return c.json(await getPushNotificationDevice(c.env, c.req.param("deviceId")));
+      return c.json(await getPushNotificationDevice(c.env, ownerId, c.req.param("deviceId")));
     } catch (error) {
       return pushError(c, error);
     }
@@ -22,7 +22,11 @@ export function registerPushNotificationRoutes(app: AppHono, deps: OwnerRouteDep
     if (!ownerId) return deps.unauthorized(c);
     try {
       return c.json(
-        await registerPushNotificationDevice(c.env, await c.req.json().catch(() => ({}))),
+        await registerPushNotificationDevice(
+          c.env,
+          ownerId,
+          await c.req.json().catch(() => ({})),
+        ),
       );
     } catch (error) {
       return pushError(c, error);
@@ -33,7 +37,9 @@ export function registerPushNotificationRoutes(app: AppHono, deps: OwnerRouteDep
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
     try {
-      return c.json(await unregisterPushNotificationDevice(c.env, c.req.param("deviceId")));
+      return c.json(
+        await unregisterPushNotificationDevice(c.env, ownerId, c.req.param("deviceId")),
+      );
     } catch (error) {
       return pushError(c, error);
     }

@@ -13,29 +13,82 @@ export class PushNotificationInputError extends Error {
   }
 }
 
-export async function getPushNotificationDevice(env: Env, deviceIdValue: unknown) {
+export const CALENDAR_PUSH_CATEGORIES = [
+  "events",
+  "bookings",
+  "birthdays",
+  "reminders",
+  "tasks",
+  "subscribed_calendars",
+] as const;
+
+export type CalendarPushCategory = typeof CALENDAR_PUSH_CATEGORIES[number];
+
+export type CalendarPushPreferences = {
+  enabled: boolean;
+  categories: Record<CalendarPushCategory, boolean>;
+};
+
+export type CalendarPushAlert = {
+  category: CalendarPushCategory;
+  itemId: string;
+  occurrenceId: string;
+  alertOffsetMinutes: number;
+};
+
+export async function getPushNotificationDevice(
+  env: Env,
+  userId: string,
+  deviceIdValue: unknown,
+) {
   const deviceId = normalizeDeviceId(deviceIdValue);
-  return relayRequest(env, `/api/push/devices/${encodeURIComponent(deviceId)}`);
+  const [relay, preferences] = await Promise.all([
+    relayRequest(env, `/api/push/devices/${encodeURIComponent(deviceId)}`),
+    getLocalPushPreferences(env, userId, deviceId),
+  ]);
+  return {
+    ...relay,
+    dailyBriefingEnabled: preferences.dailyBriefingEnabled,
+    calendarNotifications: preferences.calendarNotifications,
+  };
 }
 
-export async function registerPushNotificationDevice(env: Env, input: unknown) {
+export async function registerPushNotificationDevice(
+  env: Env,
+  userId: string,
+  input: unknown,
+) {
   if (!isRecord(input)) throw new PushNotificationInputError("Invalid push device", 400);
   const deviceId = normalizeDeviceId(input.deviceId);
   const token = typeof input.token === "string" ? input.token.trim().toLowerCase() : "";
   if (!APNS_TOKEN.test(token)) throw new PushNotificationInputError("Invalid APNs token", 400);
+  const dailyBriefingEnabled = input.dailyBriefingEnabled !== false;
+  const calendarNotifications = normalizeCalendarPushPreferences(input.calendarNotifications);
+  await upsertLocalPushPreferences(env, userId, deviceId, {
+    dailyBriefingEnabled,
+    calendarNotifications,
+  });
   return relayRequest(env, "/api/push/devices", {
     method: "PUT",
     body: JSON.stringify({
       deviceId,
       token,
       environment: input.environment === "production" ? "production" : "sandbox",
-      dailyBriefingEnabled: input.dailyBriefingEnabled !== false,
+      dailyBriefingEnabled,
+      calendarNotifications,
     }),
   });
 }
 
-export async function unregisterPushNotificationDevice(env: Env, deviceIdValue: unknown) {
+export async function unregisterPushNotificationDevice(
+  env: Env,
+  userId: string,
+  deviceIdValue: unknown,
+) {
   const deviceId = normalizeDeviceId(deviceIdValue);
+  await env.DB.prepare(
+    "DELETE FROM mobile_push_preferences WHERE user_id = ? AND device_id = ?",
+  ).bind(userId, deviceId).run();
   return relayRequest(env, `/api/push/devices/${encodeURIComponent(deviceId)}`, {
     method: "DELETE",
   });
@@ -71,6 +124,83 @@ export async function notifyDailyBriefingReady(
     });
     return { ok: false, skipped: true };
   }
+}
+
+export async function notifyCalendarItemDue(env: Env, alert: CalendarPushAlert) {
+  try {
+    return await relayRequest(env, "/api/push/calendar-alerts", {
+      method: "POST",
+      body: JSON.stringify(alert),
+    });
+  } catch (error) {
+    console.warn("Calendar push was skipped", {
+      category: alert.category,
+      itemId: alert.itemId,
+      occurrenceId: alert.occurrenceId,
+      error: error instanceof Error ? error.message : "Unknown push relay error",
+    });
+    return { ok: false, skipped: true };
+  }
+}
+
+export function normalizeCalendarPushPreferences(value: unknown): CalendarPushPreferences {
+  const body = isRecord(value) ? value : {};
+  const categories = isRecord(body.categories) ? body.categories : {};
+  return {
+    enabled: body.enabled !== false,
+    categories: Object.fromEntries(
+      CALENDAR_PUSH_CATEGORIES.map((category) => [category, categories[category] !== false]),
+    ) as Record<CalendarPushCategory, boolean>,
+  };
+}
+
+async function upsertLocalPushPreferences(
+  env: Env,
+  userId: string,
+  deviceId: string,
+  preferences: {
+    dailyBriefingEnabled: boolean;
+    calendarNotifications: CalendarPushPreferences;
+  },
+) {
+  await env.DB.prepare(
+    `INSERT INTO mobile_push_preferences
+       (user_id, device_id, daily_briefing_enabled, calendar_notifications_json)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, device_id) DO UPDATE SET
+       daily_briefing_enabled = excluded.daily_briefing_enabled,
+       calendar_notifications_json = excluded.calendar_notifications_json,
+       updated_at = CURRENT_TIMESTAMP`,
+  ).bind(
+    userId,
+    deviceId,
+    preferences.dailyBriefingEnabled ? 1 : 0,
+    JSON.stringify(preferences.calendarNotifications),
+  ).run();
+}
+
+async function getLocalPushPreferences(env: Env, userId: string, deviceId: string) {
+  const row = await env.DB.prepare(
+    `SELECT daily_briefing_enabled, calendar_notifications_json
+     FROM mobile_push_preferences WHERE user_id = ? AND device_id = ?`,
+  ).bind(userId, deviceId).first<{
+    daily_briefing_enabled: number;
+    calendar_notifications_json: string;
+  }>();
+  let calendarNotifications = normalizeCalendarPushPreferences(null);
+  if (row?.calendar_notifications_json) {
+    try {
+      calendarNotifications = normalizeCalendarPushPreferences(
+        JSON.parse(row.calendar_notifications_json),
+      );
+    } catch {
+      // Keep the default-on policy if a legacy row is malformed.
+    }
+  }
+  return {
+    dailyBriefingEnabled: row ? row.daily_briefing_enabled === 1 : true,
+    calendarNotifications,
+  };
 }
 
 async function relayRequest(env: Env, path: string, init: RequestInit = {}) {
