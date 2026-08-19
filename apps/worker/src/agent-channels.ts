@@ -141,6 +141,21 @@ export async function updateAgentChannelInboundDispatchStatus(
     .run();
 }
 
+export async function updateAgentChannelInboundContent(
+  env: Env,
+  eventId: string,
+  textBody: string,
+  rawJson: unknown,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE agent_channel_events
+     SET text_body = ?, raw_json = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND direction = 'inbound'`,
+  )
+    .bind(textBody, JSON.stringify(rawJson), eventId)
+    .run();
+}
+
 export async function getAgentChannelDispatchReplay(
   env: Env,
   connectionId: string,

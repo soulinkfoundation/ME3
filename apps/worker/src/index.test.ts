@@ -2203,6 +2203,20 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("UPDATE agent_channel_events")) {
+                if (sql.includes("SET text_body = ?")) {
+                  const existing = state.agentEvents.find((event) => event.id === values[2]);
+                  if (!existing) return { success: true, meta: { changes: 0 } };
+                  state.agentEvents = state.agentEvents.map((event) =>
+                    event.id === values[2]
+                      ? {
+                          ...event,
+                          text_body: values[0] as string,
+                          raw_json: values[1] as string,
+                        }
+                      : event,
+                  );
+                  return { success: true, meta: { changes: 1 } };
+                }
                 if (sql.includes("direction = 'inbound'")) {
                   const existing = state.agentEvents.find((event) => event.id === values[2]);
                   if (!existing) return { success: true, meta: { changes: 0 } };
@@ -13930,6 +13944,163 @@ describe("ME3 Worker auth", () => {
     const failedRuntimeBody = JSON.parse(String(runtimeFetch.mock.calls[1]?.[1]?.body));
     const retriedRuntimeBody = JSON.parse(String(runtimeFetch.mock.calls[2]?.[1]?.body));
     expect(retriedRuntimeBody.sourceEventId).toBe(failedRuntimeBody.sourceEventId);
+  });
+
+  it("downloads and transcribes Soulink voice turns once across runtime retries", async () => {
+    const env = createEnv();
+    await bootstrap(env);
+    env.soulinkConnection = {
+      id: "soulink-voice-connection",
+      user_id: "owner",
+      channel: "soulink",
+      status: "active",
+      setup_token: "voice-setup-token",
+      provider_connection_id: "messaging",
+      provider_user_id: "node-owner",
+      provider_thread_id: "assistant-voice-channel",
+      provider_username: "assistant-owner",
+      provider_metadata_json: JSON.stringify({
+        ownerNodeId: "node-owner",
+        assistantNodeId: "assistant-owner",
+      }),
+      telegram_user_id: null,
+      telegram_chat_id: null,
+      telegram_username: null,
+      telegram_first_name: null,
+      telegram_last_name: null,
+      connected_at: "2026-08-19T10:01:00Z",
+      disconnected_at: null,
+      last_inbound_at: null,
+      last_outbound_at: null,
+      created_at: "2026-08-19T10:00:00Z",
+      updated_at: "2026-08-19T10:00:00Z",
+    };
+
+    const aiRun = vi.fn(async () => ({
+      text: "List my overdue tasks",
+      word_count: 4,
+      language: "en",
+    }));
+    env.AI = { run: aiRun } as unknown as Ai;
+    const assetFetch = vi.fn(async () =>
+      new Response(new Uint8Array([1, 2, 3, 4]), {
+        headers: {
+          "Content-Type": "audio/mp4",
+          "Content-Length": "4",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", assetFetch);
+
+    const successfulRuntimeResponse = {
+      ok: true,
+      auditId: "voice-audit-1",
+      turnId: "voice-turn-1",
+      specialist: "core.agent-chat",
+      replyText: "You have two overdue tasks.",
+      model: "test-model",
+      source: "provider",
+      fallbackReason: null,
+      debugError: null,
+      emailAction: null,
+      reminderAction: null,
+      contentAction: null,
+      contactsChanged: false,
+    };
+    const runtimeFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ ok: false, error: "Temporary agent runtime failure" }, { status: 503 }),
+      )
+      .mockResolvedValue(Response.json(successfulRuntimeResponse));
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const requestBody = {
+      sourceEventId: "stream-voice-message-1",
+      conversationId: "assistant-voice-channel",
+      streamChannelType: "messaging",
+      streamChannelId: "assistant-voice-channel",
+      messageText: "",
+      input: {
+        version: 1,
+        kind: "voice",
+        text: null,
+        attachments: [
+          {
+            type: "voiceRecording",
+            provider: "stream",
+            assetUrl: "https://dublin.stream-io-cdn.com/audio/voice-note.m4a",
+            mimeType: "audio/mp4",
+            title: "voice-note.m4a",
+            durationSeconds: 3.2,
+            fileSizeBytes: 4,
+          },
+        ],
+      },
+    };
+    const dispatchRequest = () =>
+      new Request("http://localhost/api/agent/channels/soulink/dispatch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer voice-setup-token",
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+    try {
+      const failedTurn = await app.fetch(dispatchRequest(), env);
+      expect(failedTurn.status).toBe(503);
+
+      const retriedTurn = await app.fetch(dispatchRequest(), env);
+      expect(retriedTurn.status).toBe(200);
+      await expect(retriedTurn.json()).resolves.toMatchObject({
+        ok: true,
+        replyText: "You have two overdue tasks.",
+      });
+
+      const replayedTurn = await app.fetch(dispatchRequest(), env);
+      expect(replayedTurn.status).toBe(200);
+      await expect(replayedTurn.json()).resolves.toMatchObject({
+        ok: true,
+        deduped: true,
+        replyText: "You have two overdue tasks.",
+      });
+
+      expect(assetFetch).toHaveBeenCalledOnce();
+      expect(aiRun).toHaveBeenCalledOnce();
+      expect(runtimeFetch).toHaveBeenCalledTimes(2);
+      for (const call of runtimeFetch.mock.calls) {
+        const runtimeRequest = call[1] as RequestInit;
+        expect(JSON.parse(String(runtimeRequest.body))).toMatchObject({
+          messageText: "List my overdue tasks",
+          threadId: "soulink:assistant-voice-channel",
+        });
+      }
+      const inboundEvent = env.agentEvents.find(
+        (event) => event.provider_event_id === "stream-voice-message-1",
+      );
+      expect(inboundEvent).toMatchObject({
+        text_body: "List my overdue tasks",
+        status: "received",
+      });
+      expect(JSON.parse(inboundEvent?.raw_json || "{}")).toMatchObject({
+        me3Resolution: {
+          version: 1,
+          kind: "voice",
+          messageText: "List my overdue tasks",
+          transcription: {
+            providerId: "cloudflare-whisper",
+            audioBytes: 4,
+          },
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("exposes privacy-safe Soulink Links to connected Core installs", async () => {

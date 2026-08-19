@@ -35,9 +35,18 @@ import {
   getAgentChannelDispatchReplay,
   insertProviderChannelEvent,
   insertProviderChannelEventOnce,
+  updateAgentChannelInboundContent,
   updateAgentChannelInboundDispatchStatus,
   verifySoulinkDispatchAuth,
 } from "../agent-channels";
+import {
+  parseSoulinkTurnInput,
+  readStoredSoulinkTurnResolution,
+  resolveSoulinkTurnInput,
+  soulinkTurnClaimText,
+  SoulinkTurnInputError,
+  type SoulinkTurnInput,
+} from "../soulink-turn-input";
 import { isCorePluginEnabled } from "../plugins";
 import { generateSiteHtml, type Me3SiteProfile } from "@me3-core/site-renderer";
 import { buildPublicMe3Profile } from "../public-me-profile";
@@ -172,6 +181,7 @@ type SoulinkDispatchBody = {
   streamChannelType?: unknown;
   streamChannelId?: unknown;
   messageText?: unknown;
+  input?: unknown;
   replyToMessageId?: unknown;
   createdAt?: unknown;
 };
@@ -4023,7 +4033,6 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     }
 
     const body = await c.req.json<SoulinkDispatchBody>().catch((): SoulinkDispatchBody => ({}));
-    const messageText = typeof body.messageText === "string" ? body.messageText.trim() : "";
     const sourceEventId = typeof body.sourceEventId === "string" ? body.sourceEventId.trim() : "";
     const streamChannelId = typeof body.streamChannelId === "string" ? body.streamChannelId.trim() : "";
     const conversationId = typeof body.conversationId === "string" ? body.conversationId.trim() : "";
@@ -4032,7 +4041,6 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         ? body.replyToMessageId
         : null;
 
-    if (!messageText) return c.json({ ok: false, error: "Message text is required" }, 400);
     if (!sourceEventId) return c.json({ ok: false, error: "sourceEventId is required" }, 400);
     if (!streamChannelId) return c.json({ ok: false, error: "streamChannelId is required" }, 400);
     if (!conversationId) return c.json({ ok: false, error: "conversationId is required" }, 400);
@@ -4050,16 +4058,16 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       return c.json({ ok: false, error: authResult.error }, authResult.status as any);
     }
 
-    const threadId = `soulink:${conversationId}`;
-    const threadReady = await ensureAgentChannelAssistantThread(c.env, {
-      userId: connection.user_id,
-      threadId,
-      messageText,
-    });
-    if (!threadReady) {
-      return c.json({ ok: false, error: "Soulink assistant thread could not be prepared" }, 409);
+    let turnInput: SoulinkTurnInput;
+    try {
+      turnInput = parseSoulinkTurnInput(body.input, body.messageText);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Soulink message input is invalid";
+      const status = error instanceof SoulinkTurnInputError ? error.status : 400;
+      return c.json({ ok: false, error: message }, status as any);
     }
 
+    const threadId = `soulink:${conversationId}`;
     const claimed = await claimAgentChannelInboundEvent(c.env, {
       channel: "soulink",
       connectionId: connection.id,
@@ -4069,8 +4077,8 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       providerEventId: sourceEventId,
       providerMessageId: sourceEventId,
       replyToMessageId,
-      textBody: messageText,
-      rawJson: body,
+      textBody: soulinkTurnClaimText(turnInput),
+      rawJson: { soulink: body },
       errorMessage: null,
     });
     if (!claimed.created) {
@@ -4108,6 +4116,33 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
     const turnId = crypto.randomUUID();
     await updateAgentChannelInboundDispatchStatus(c.env, claimed.id, "pending", null);
+    let resolution = readStoredSoulinkTurnResolution(claimed.event, turnInput);
+    if (!resolution) {
+      try {
+        resolution = await resolveSoulinkTurnInput(c.env, connection.user_id, turnInput);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Soulink message input failed";
+        const status = error instanceof SoulinkTurnInputError ? error.status : 503;
+        await updateAgentChannelInboundDispatchStatus(c.env, claimed.id, "failed", message);
+        return c.json({ ok: false, error: message }, status as any);
+      }
+      await updateAgentChannelInboundContent(c.env, claimed.id, resolution.messageText, {
+        soulink: body,
+        me3Resolution: resolution,
+      });
+    }
+    const messageText = resolution.messageText;
+    const threadReady = await ensureAgentChannelAssistantThread(c.env, {
+      userId: connection.user_id,
+      threadId,
+      messageText,
+    });
+    if (!threadReady) {
+      const error = "Soulink assistant thread could not be prepared";
+      await updateAgentChannelInboundDispatchStatus(c.env, claimed.id, "failed", error);
+      return c.json({ ok: false, error }, 409);
+    }
+
     const response = await dispatchAgentChannelTurn(c.env, {
       userId: connection.user_id,
       connectionId: connection.id,
