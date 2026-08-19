@@ -26,6 +26,8 @@ const props = withDefaults(
     cancellingBookingId?: string | null;
     canLoadMore?: boolean;
     loadingMore?: boolean;
+    /** On compact layouts, the page can present the selected event in a modal. */
+    showInlineDetail?: boolean;
     /** Sidebar-style layout: detail panel only (feed hidden). */
     variant?: "default" | "detail-only";
   }>(),
@@ -46,6 +48,7 @@ const props = withDefaults(
     cancellingBookingId: null,
     canLoadMore: false,
     loadingMore: false,
+    showInlineDetail: true,
     variant: "default",
   },
 );
@@ -56,6 +59,7 @@ const emit = defineEmits<{
   (e: "clear-focus"): void;
   (e: "consumed-prefer-select"): void;
   (e: "cancel-booking", event: CalendarAgendaEvent): void;
+  (e: "select-event", event: CalendarAgendaEvent): void;
   (e: "load-more"): void;
 }>();
 
@@ -163,6 +167,11 @@ const selectedEvent = computed(() =>
   focusFilteredEvents.value.find((event) => event.id === selectedEventId.value) ??
   null,
 );
+
+function selectEvent(event: CalendarAgendaEvent) {
+  selectedEventId.value = event.id;
+  emit("select-event", event);
+}
 
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("en-GB", {
@@ -373,7 +382,9 @@ watch(
     <div
       v-else-if="variant === 'default'"
       class="calendar-grid"
-      :class="{ 'calendar-grid--with-detail': selectedEvent }"
+      :class="{
+        'calendar-grid--with-detail': selectedEvent && showInlineDetail,
+      }"
     >
       <div class="calendar-feed">
         <div class="calendar-days">
@@ -413,7 +424,7 @@ watch(
                 }"
                 :aria-pressed="selectedEventId === event.id ? 'true' : 'false'"
                 :aria-label="eventAriaLabel(event)"
-                @click="selectedEventId = event.id"
+                @click="selectEvent(event)"
               >
                 <div class="calendar-item-time">
                   {{ formatTimeRange(event.startsAt, event.endsAt, event.allDay) }}
@@ -455,7 +466,7 @@ watch(
         </div>
       </div>
 
-      <aside v-if="selectedEvent" class="calendar-detail">
+      <aside v-if="selectedEvent && showInlineDetail" class="calendar-detail">
         <template v-if="selectedEvent">
           <h4>{{ selectedEvent.title }}</h4>
           <p class="calendar-detail-summary">{{ selectedEvent.summary }}</p>
@@ -667,6 +678,10 @@ watch(
   border-radius: 999px;
   background: var(--ui-accent-soft, var(--color-bg-subtle));
   color: var(--ui-accent-strong, var(--color-text));
+}
+
+.calendar-day.is-today .calendar-day-head {
+  background: transparent;
 }
 
 .calendar-day-head {

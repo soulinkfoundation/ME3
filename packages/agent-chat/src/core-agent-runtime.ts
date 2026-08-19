@@ -170,11 +170,56 @@ export type CoreSchedulingToolServices = {
   }>;
 };
 
+export type CoreNetworkDirectoryOffering = {
+  type: "service" | "product";
+  id: string;
+  title: string;
+  description: string | null;
+  url: string | null;
+  durationMinutes: number | null;
+  price: { amount: string; currency: string } | null;
+};
+
+export type CoreNetworkDirectoryResult = {
+  name: string;
+  handle: string | null;
+  kind: string;
+  bio: string | null;
+  avatarUrl: string | null;
+  profileUrl: string;
+  publicUrl: string | null;
+  location: {
+    label: string;
+    precision: string;
+    locality: string | null;
+    region: string | null;
+    country: string | null;
+    countryCode: string | null;
+  } | null;
+  offerings: CoreNetworkDirectoryOffering[];
+  reasons: string[];
+  indexedAt: string;
+};
+
+export type CoreNetworkDirectoryToolServices = {
+  search(input: {
+    query: string;
+    offeringType?: "service" | "product";
+    countryCode?: string;
+    limit?: number;
+  }): Promise<{
+    query: string;
+    results: CoreNetworkDirectoryResult[];
+    total: number;
+  }>;
+};
+
 const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
   (tool) =>
     tool.capabilityId === "core.calendar.events.list" ||
     tool.capabilityId === "core.bookings.lookup" ||
     tool.capabilityId === "core.contacts.search" ||
+    tool.capabilityId === "core.network.directory.search" ||
     tool.capabilityId.startsWith("core.scheduling.") ||
     tool.capabilityId.startsWith("core.reminders.") ||
     tool.capabilityId === "core.journal.read" ||
@@ -199,6 +244,7 @@ export async function runCoreAgentToolTurn(input: {
   messages: readonly AgentToolMessage[];
   mailboxServices?: CoreMailboxToolServices;
   schedulingServices?: CoreSchedulingToolServices;
+  networkDirectoryServices?: CoreNetworkDirectoryToolServices;
   streamOptions?: AgentChatRuntimeStreamOptions;
 }): Promise<AgentSandboxDispatchResponse> {
   const startedAt = performance.now();
@@ -229,6 +275,12 @@ export async function runCoreAgentToolTurn(input: {
       (tool.capabilityId === "core.contacts.search" ||
         tool.capabilityId.startsWith("core.scheduling.")) &&
       !input.schedulingServices
+    ) {
+      return false;
+    }
+    if (
+      tool.capabilityId === "core.network.directory.search" &&
+      !input.networkDirectoryServices
     ) {
       return false;
     }
@@ -322,6 +374,7 @@ export async function runCoreAgentToolTurn(input: {
                   tool: tool as CoreChatToolDefinition,
                   mailboxServices: input.mailboxServices,
                   schedulingServices: input.schedulingServices,
+                  networkDirectoryServices: input.networkDirectoryServices,
                   socialSources,
                 }),
             );
@@ -439,8 +492,12 @@ function executeCoreToolCall(input: {
   tool: CoreChatToolDefinition;
   mailboxServices?: CoreMailboxToolServices;
   schedulingServices?: CoreSchedulingToolServices;
+  networkDirectoryServices?: CoreNetworkDirectoryToolServices;
   socialSources: Map<string, AgentSocialSource>;
 }): Promise<CoreToolOutcome> {
+  if (input.tool.capabilityId === "core.network.directory.search") {
+    return executeNetworkDirectoryToolCall(input);
+  }
   if (
     input.tool.capabilityId === "core.contacts.search" ||
     input.tool.capabilityId.startsWith("core.scheduling.")
@@ -475,6 +532,42 @@ function executeCoreToolCall(input: {
     return executeSocialToolCall(input);
   }
   return executeMailboxToolCall(input);
+}
+
+async function executeNetworkDirectoryToolCall(input: {
+  call: AgentToolCall;
+  tool: CoreChatToolDefinition;
+  networkDirectoryServices?: CoreNetworkDirectoryToolServices;
+}): Promise<CoreToolOutcome> {
+  const services = input.networkDirectoryServices;
+  if (!services) throw new Error("This installation is not connected to me3.app.");
+  enforceNetworkDirectoryToolPolicy(input.tool);
+  assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+  const offeringType = input.call.arguments.offeringType;
+  if (
+    offeringType !== undefined &&
+    offeringType !== "service" &&
+    offeringType !== "product"
+  ) {
+    throw new Error('ME3 Network offeringType must be "service" or "product".');
+  }
+  const countryCode = optionalToolString(input.call.arguments.countryCode)?.toUpperCase();
+  if (countryCode && !/^[A-Z]{2}$/.test(countryCode)) {
+    throw new Error("ME3 Network countryCode must be a two-letter country code.");
+  }
+  const result = await services.search({
+    query: requiredToolString(input.call.arguments.query, "ME3 Network search query"),
+    offeringType,
+    countryCode,
+    limit: optionalToolNumber(input.call.arguments.limit),
+  });
+  return {
+    capabilityId: "core.network.directory.search",
+    result: { ok: true, ...result },
+    fallbackReply: formatNetworkDirectorySearchReply(result.results),
+    reminderAction: null,
+    actionCards: [],
+  };
 }
 
 async function executeSchedulingToolCall(input: {
@@ -1840,6 +1933,13 @@ function requiredPrivateReadTool(
     requiredCapabilities.add("core.mailbox.search");
   }
   if (
+    hasAny(["me3 network", "me3 directory", "network directory"]) ||
+    (hasAny(["find ", "search ", "who "]) &&
+      hasAny([" on me3", "in me3", "me3 user", "me3 profile"]))
+  ) {
+    requiredCapabilities.add("core.network.directory.search");
+  }
+  if (
     hasAny([
       "mission control task",
       "mission control tasks",
@@ -1891,6 +1991,12 @@ function withCoreToolInstructions(
     "- Use core_scheduling_approve only after the owner explicitly chooses a shown option or explicitly approves an incoming option selected by the other owner. Set confirmed=true only for that explicit approval.",
     "- Both owners must approve the exact selected time before either calendar is changed. Never claim a meeting is booked while the result says waiting_for_other_owner.",
     "- Never mention scheduling request IDs or internal Soulink identifiers in the user-facing reply.",
+    "ME3 Network directory rules:",
+    "- Use core_network_directory_search when the owner asks to find a person, service, product, provider, skill, or collaborator among opt-in ME3 Network profiles.",
+    "- Search with the owner's actual need in plain language. Use offeringType only when the owner clearly asks for a service or product, and countryCode only when a country is explicit.",
+    "- Treat matches as discovery candidates, not endorsements. Explain the public fields or offerings that made each result relevant and include its public profile link.",
+    "- Directory results are public profile data only. Never imply access to private ME3 memory, contacts, messages, assistant chats, or precise location.",
+    "- Location in v1 is a textual filter. Do not claim distance, travel time, or 'near me' ranking.",
     "Site blog read tool rules:",
     "- Use core_sites_blog_post_read to list profile-site blog posts or read one named post. Omit post to list; provide the title, slug, or file path to read the full markdown body.",
     "- Site blog access is read-only. No tool can create, draft, edit, publish, unpublish, archive, or delete a blog post.",
@@ -2069,6 +2175,44 @@ function enforceMailboxToolPolicy(tool: CoreChatToolDefinition): void {
   ) {
     throw new Error(`Tool "${tool.name}" is not allowed by the mailbox runtime policy.`);
   }
+}
+
+function enforceNetworkDirectoryToolPolicy(tool: CoreChatToolDefinition): void {
+  if (
+    tool.capabilityId !== "core.network.directory.search" ||
+    tool.handlerRoute !== tool.capabilityId ||
+    tool.approvalMode !== "none" ||
+    tool.requiredSetupChecks.some((check) => check !== "me3.app")
+  ) {
+    throw new Error(`Tool "${tool.name}" is not allowed by the ME3 Network runtime policy.`);
+  }
+}
+
+function formatNetworkDirectorySearchReply(
+  results: readonly CoreNetworkDirectoryResult[],
+): string {
+  if (!results.length) {
+    return "I couldn't find an opt-in ME3 Network profile matching that need. Try broader terms or remove the location filter.";
+  }
+  return results.map((result, index) => {
+    const handle = result.handle ? ` (@${result.handle.replace(/^@/, "")})` : "";
+    const location = result.location?.label ? ` — ${result.location.label}` : "";
+    const reasons = result.reasons.length
+      ? result.reasons.join("; ")
+      : result.bio || "Public profile matches the search";
+    const offerings = result.offerings.slice(0, 3).map((offering) => {
+      const price = offering.price
+        ? ` (${offering.price.amount} ${offering.price.currency})`
+        : "";
+      return `${offering.title}${price}`;
+    });
+    return [
+      `${index + 1}. ${result.name}${handle}${location}`,
+      reasons,
+      offerings.length ? `Offers: ${offerings.join(", ")}` : null,
+      result.publicUrl || result.profileUrl,
+    ].filter(Boolean).join("\n");
+  }).join("\n\n");
 }
 
 function enforceLandingPageToolPolicy(tool: CoreChatToolDefinition): void {

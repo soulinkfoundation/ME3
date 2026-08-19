@@ -2068,6 +2068,14 @@ function onBoardSelectEvent(id: string, anchor: CalendarContextAnchor) {
   focusedDayKey.value = null;
 }
 
+function onAgendaSelectEvent(event: CalendarAgendaEvent) {
+  if (!isCompactCalendar.value) return;
+  quickWeekSlot.value = null;
+  boardContextAnchor.value = null;
+  boardHighlightId.value = event.id;
+  preferSelectEventId.value = null;
+}
+
 function onWeekSelectSlot(
   slot: CalendarWeekSlot,
   anchor: CalendarContextAnchor,
@@ -3418,6 +3426,7 @@ onBeforeUnmount(() => {
                 :today-day-key="todayDayKey"
                 :prefer-select-event-id="preferSelectEventId"
                 :highlighted-event-id="transientHighlightId"
+                :show-inline-detail="!isCompactCalendar"
                 :cancelling-booking-id="cancellingBookingId"
                 :can-load-more="canLoadMoreSchedule"
                 :loading-more="calendarRefreshing"
@@ -3425,6 +3434,7 @@ onBeforeUnmount(() => {
                 description="Upcoming items across your visible calendars."
                 @clear-focus="focusedDayKey = null"
                 @consumed-prefer-select="preferSelectEventId = null"
+                @select-event="onAgendaSelectEvent"
                 @event-action="handleEventAction"
                 @event-danger-action="handleEventDangerAction"
                 @cancel-booking="handleCancelBooking"
@@ -3443,12 +3453,14 @@ onBeforeUnmount(() => {
                 :today-day-key="todayDayKey"
                 :prefer-select-event-id="preferSelectEventId"
                 :highlighted-event-id="transientHighlightId"
+                :show-inline-detail="!isCompactCalendar"
                 :cancelling-booking-id="cancellingBookingId"
                 @event-action="handleEventAction"
                 @event-danger-action="handleEventDangerAction"
                 @cancel-booking="handleCancelBooking"
                 @clear-focus="focusedDayKey = null"
                 @consumed-prefer-select="preferSelectEventId = null"
+                @select-event="onAgendaSelectEvent"
               />
               <CalendarWeekBoard
                 v-else-if="rangeMode === 'week'"

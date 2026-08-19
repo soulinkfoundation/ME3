@@ -256,6 +256,58 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.network.directory.search",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Search ME3 Network",
+    summary:
+      "Search public, opt-in ME3 profiles and offerings for people, services, or products that match the owner's need.",
+    category: "messaging",
+    handler: {
+      surface: "chat",
+      route: "core.network.directory.search",
+    },
+    sideEffect: "read_external",
+    approvalMode: "none",
+    requiresSetup: ["me3.app"],
+    inputSchema: {
+      type: "object",
+      required: ["query"],
+      properties: {
+        query: {
+          type: "string",
+          description: "Plain-language need, service, product, skill, or profile to find.",
+        },
+        offeringType: {
+          type: "string",
+          description: "Optional filter for services or products.",
+          enum: ["service", "product"],
+        },
+        countryCode: {
+          type: "string",
+          description: "Optional two-letter country code filter, such as IE or GB.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum matches to return, from 1 to 10. Defaults to 5.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_network_directory_searched",
+    examples: {
+      positive: [
+        "Find someone on the ME3 Network who can photograph an event.",
+        "Search ME3 for a product designer in Ireland.",
+      ],
+      negative: ["Find Sarah in my contacts."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.scheduling.request",
     owner: "core",
     pluginId: null,

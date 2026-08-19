@@ -49,6 +49,21 @@ describe("CalendarAgenda", () => {
     expect(wrapper.find(".calendar-item.is-highlighted").exists()).toBe(true);
   });
 
+  it("emits selected events while allowing compact layouts to use a modal", async () => {
+    const wrapper = mount(CalendarAgenda, {
+      props: {
+        events: [events[0]!],
+        rangeMode: "schedule",
+        showInlineDetail: false,
+      },
+    });
+
+    await wrapper.get(".calendar-item").trigger("click");
+
+    expect(wrapper.emitted("select-event")?.[0]).toEqual([events[0]]);
+    expect(wrapper.find(".calendar-detail").exists()).toBe(false);
+  });
+
   it("offers a useful empty state and emits load-more", async () => {
     const wrapper = mount(CalendarAgenda, {
       props: {

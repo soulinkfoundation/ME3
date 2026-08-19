@@ -8,6 +8,7 @@ import {
 import { isCorePluginEnabled } from "../plugins";
 import { generateSiteHtml, markdownToHtml, type Me3SiteProfile } from "@me3-core/site-renderer";
 import { buildPublicMe3Profile } from "../public-me-profile";
+import { syncPublishedProfileToMe3Network } from "../network-directory";
 import {
   bookingDetailsFromBooking,
   getOwnerContact,
@@ -974,6 +975,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       }
 
       const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
+      let networkProfile: unknown = null;
 
       for (const file of files) {
         if (isSiteMediaFile(file.name, file.type)) {
@@ -1003,11 +1005,8 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
           profile,
           Array.from(sourceFiles.entries()).map(([name, content]) => ({ name, content })),
         );
-        generatedFiles["me.json"] = JSON.stringify(
-          buildPublicMe3Profile(profile, getPublicSiteOrigin(c.env, site)),
-          null,
-          2,
-        );
+        networkProfile = buildPublicMe3Profile(profile, getPublicSiteOrigin(c.env, site));
+        generatedFiles["me.json"] = JSON.stringify(networkProfile, null, 2);
         for (const [name, content] of Object.entries(generatedFiles)) {
           await putSiteFile(
             c.env,
@@ -1027,6 +1026,8 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       )
         .bind(site.id)
         .run();
+
+      if (networkProfile) queueNetworkDirectoryProfileSync(c, networkProfile);
 
       return c.json({ ok: true, publishedAt: new Date().toISOString() });
     } catch (error) {
@@ -1508,6 +1509,15 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     )
       .bind(site.id)
       .run();
+    const publicProfileJson = await getSiteFileText(c.env, site.id, "public/me.json");
+    if (publicProfileJson) {
+      try {
+        queueNetworkDirectoryProfileSync(c, JSON.parse(publicProfileJson));
+      } catch {
+        // The already-published site remains authoritative if its public file
+        // is unexpectedly invalid. A later valid publish can retry the index.
+      }
+    }
     return c.json({ ok: true, publishedAt: new Date().toISOString() });
   });
 
@@ -1541,6 +1551,21 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     return c.json({ ok: true });
   });
+}
+
+function queueNetworkDirectoryProfileSync(c: AppContext, profile: unknown): void {
+  let executionCtx: { waitUntil(promise: Promise<unknown>): void };
+  try {
+    executionCtx = c.executionCtx;
+  } catch {
+    // Local/unit Hono invocations do not always provide an ExecutionContext.
+    return;
+  }
+  executionCtx.waitUntil(
+    syncPublishedProfileToMe3Network(c.env, profile).catch((error) => {
+      console.error("Failed to sync published profile to the ME3 Network:", error);
+    }),
+  );
 }
 
 function isD1SiteFileLimitError(error: unknown): boolean {

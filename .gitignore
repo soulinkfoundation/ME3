@@ -13,6 +13,7 @@ dist/
 
 # Local issue tracker state
 .beads/
+.agents/
 
 # Owner-private portability staging
 .me3-portable/
