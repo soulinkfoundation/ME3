@@ -20,7 +20,7 @@ test("binds attempt identity and a fresh request UUID through broker and exact r
     if (calls.length === 1 || calls.length === 3) {
       return jsonResponse({
         ok: true,
-        origin: "https://me3-mi-1234567890abcdef.workers.dev",
+        origin: "https://test002.me3.app",
         token: "header.payload.signature",
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
       });
@@ -63,6 +63,8 @@ test("binds attempt identity and a fresh request UUID through broker and exact r
   assert.equal(runtimeBody.requestId, brokerBody.requestId);
   assert.equal(runtimeBody.expectedGeneration, 7);
   assert.equal(result.requestId, brokerBody.requestId);
+  assert.equal(calls[1].url, "https://test002.me3.app/api/managed/lifecycle");
+  assert.equal(calls[3].url, "https://test002.me3.app/api/managed/lifecycle");
   assert.equal(calls[2].init.headers.Authorization, "Bearer lifecycle-secret");
   assert.equal(calls[3].init.headers.Authorization, "Bearer header.payload.signature");
 });

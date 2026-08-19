@@ -193,13 +193,15 @@ function isUuid(value) {
 function isManagedOrigin(value) {
   try {
     const url = new URL(value);
+    const isManagedCustomHostname =
+      /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\.me3\.app$/.test(url.hostname);
     return (
       url.protocol === "https:" &&
       url.origin === value &&
       url.username === "" &&
       url.password === "" &&
       url.port === "" &&
-      url.hostname.endsWith(".workers.dev")
+      (url.hostname.endsWith(".workers.dev") || isManagedCustomHostname)
     );
   } catch {
     return false;
