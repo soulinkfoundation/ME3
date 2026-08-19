@@ -4,6 +4,7 @@ import {
   isAgentSandboxDispatchInput,
   type AgentChatRuntimeStreamEvent,
 } from "./agent-chat";
+import { createAgentSchedulingToolServices } from "./agent-scheduling";
 
 const RECONSTRUCTABLE_STORAGE_KEYS = new Set([
   "userId",
@@ -76,6 +77,8 @@ export class Me3UserAgent {
         this.env,
         this.cacheStorage,
         input,
+        undefined,
+        createAgentSchedulingToolServices(this.env, input.userId),
       );
       return Response.json(response, { status: response.ok ? 200 : 500 });
     }
@@ -115,6 +118,7 @@ export class Me3UserAgent {
               this.cacheStorage,
               input,
               { signal: request.signal, onEvent: forward },
+              createAgentSchedulingToolServices(this.env, input.userId),
             );
             const finalText = response.replyText || "";
             if (visibleText !== finalText) {

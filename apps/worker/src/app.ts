@@ -89,6 +89,7 @@ import { registerCommerceRoutes } from "./routes/commerce";
 import { registerCalendarRoutes } from "./routes/calendar";
 import { registerCalendarSourceRoutes } from "./routes/calendar-sources";
 import { registerChannelRoutes } from "./routes/channels";
+import { registerAgentSchedulingRoutes } from "./routes/agent-scheduling";
 import { registerAssistantJobsRoutes } from "./routes/assistant-jobs";
 import { registerAssistantSkillsRoutes } from "./routes/assistant-skills";
 import { registerContactsRoutes } from "./routes/contacts";
@@ -1369,6 +1370,8 @@ registerSiteRoutes(app, { requireOwner, unauthorized });
 registerMailboxRoutes(app, { requireOwner, unauthorized });
 
 registerChannelRoutes(app, { requireOwner, unauthorized });
+
+registerAgentSchedulingRoutes(app);
 
 registerSchedulingRoutes(app, { requireOwner, unauthorized });
 

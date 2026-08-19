@@ -217,6 +217,146 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.contacts.search",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Search contacts",
+    summary:
+      "Search the owner's contacts by name and report whether each contact has a connected ME3 assistant available through Soulink.",
+    category: "messaging",
+    handler: {
+      surface: "chat",
+      route: "core.contacts.search",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["soulink"],
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional contact name to search for. Omit to list recent active contacts.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum contacts to return, from 1 to 10. Defaults to 5.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_contacts_searched",
+    examples: {
+      positive: ["Find Sarah in my contacts.", "Which contacts have a ME3 assistant?"],
+      negative: ["Arrange a catch-up with Sarah."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.scheduling.request",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Request time with a contact",
+    summary:
+      "Ask a Soulink contact's ME3 assistant for mutual availability. Duration defaults to 30 minutes and the date window defaults to the next seven local calendar days.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.scheduling.request",
+    },
+    sideEffect: "external_send",
+    approvalMode: "none",
+    requiresSetup: ["soulink", "calendar.events"],
+    inputSchema: {
+      type: "object",
+      required: ["contact"],
+      properties: {
+        contact: {
+          type: "string",
+          description: "Contact name from the owner's synced contacts.",
+        },
+        durationMinutes: {
+          type: "integer",
+          description: "Optional meeting duration from 15 to 180 minutes. Defaults to 30.",
+        },
+        dateFrom: {
+          type: "string",
+          description: "Optional inclusive start date as YYYY-MM-DD in the owner's timezone.",
+          format: "date",
+        },
+        dateTo: {
+          type: "string",
+          description: "Optional inclusive end date as YYYY-MM-DD in the owner's timezone.",
+          format: "date",
+        },
+        reason: {
+          type: "string",
+          description: "Optional short reason or agenda to share with the other assistant.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_scheduling_requested",
+    examples: {
+      positive: [
+        "Arrange a catch-up with Sarah.",
+        "Find 45 minutes with Chris next week to discuss the launch.",
+      ],
+      negative: ["Book the first option you showed me."],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.scheduling.approve",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Approve a scheduling option",
+    summary:
+      "Approve a mutual scheduling option after the owner explicitly chooses it, or approve an incoming option selected by the other owner.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.scheduling.approve",
+    },
+    sideEffect: "external_write",
+    approvalMode: "approval_required",
+    requiresSetup: ["soulink", "calendar.events"],
+    inputSchema: {
+      type: "object",
+      required: ["confirmed"],
+      properties: {
+        contact: {
+          type: "string",
+          description: "Optional contact name used to identify the open scheduling request.",
+        },
+        option: {
+          type: "integer",
+          description: "Optional 1-based option number previously shown to the owner.",
+        },
+        confirmed: {
+          type: "boolean",
+          description: "True only after the owner explicitly approves this scheduling action.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_scheduling_approved",
+    examples: {
+      positive: ["Book option 2 with Sarah.", "Approve the time Chris chose."],
+      negative: ["What times could work with Sarah?"],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.reminders.list",
     owner: "core",
     pluginId: null,

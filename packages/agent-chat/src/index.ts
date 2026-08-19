@@ -73,13 +73,19 @@ export {
   type CreateAgentMissionTaskInput,
   type UpdateAgentMissionTaskInput,
 } from "@me3-core/plugin-mission-control";
-import { runCoreAgentToolTurn } from "./core-agent-runtime";
+import {
+  runCoreAgentToolTurn,
+  type CoreSchedulingToolServices,
+} from "./core-agent-runtime";
 import { loadOwnerSnapshotContext } from "./owner-snapshot";
 import type { AgentModelUsage } from "./tool-runtime";
 
 export {
   buildReminderActionCard,
   runCoreAgentToolTurn,
+  type CoreSchedulingContact,
+  type CoreSchedulingOption,
+  type CoreSchedulingToolServices,
 } from "./core-agent-runtime";
 export {
   searchAgentOwnerContent,
@@ -2046,6 +2052,7 @@ export async function dispatchAgentSandboxTurn(
   storage: StorageLike,
   input: AgentSandboxDispatchInput,
   streamOptions?: AgentChatRuntimeStreamOptions,
+  schedulingServices?: CoreSchedulingToolServices,
 ): Promise<AgentSandboxDispatchResponse> {
   const mode = normalizeAgentChatMode(input.mode);
   const resultKey = agentTurnResultStorageKey(input.requestId);
@@ -2279,6 +2286,7 @@ export async function dispatchAgentSandboxTurn(
             createDraft: (draft, idempotencyKey) =>
               createAgentMailboxDraft(env, input.userId, draft, { idempotencyKey }),
           },
+          schedulingServices,
           streamOptions,
         })
       : await runModelTurn(route, messages, input.turnId, imageInputs);
@@ -5255,6 +5263,8 @@ function isCoreRuntimeToolSpecialist(specialist: string | null): boolean {
   return Boolean(
     specialist === "core.calendar.events.list" ||
       specialist === "core.bookings.lookup" ||
+      specialist === "core.contacts.search" ||
+      specialist?.startsWith("core.scheduling.") ||
       specialist === "core.sites.blog_post.read" ||
       specialist?.startsWith("core.reminders.") ||
       specialist?.startsWith("core.mission.task.") ||

@@ -46,6 +46,32 @@ describe("Core chat tool contracts", () => {
     });
   });
 
+  it("keeps initial agent scheduling non-blocking with explicit safe approval", () => {
+    expect(getCoreChatToolByName("core_scheduling_request")).toMatchObject({
+      capabilityId: "core.scheduling.request",
+      approvalMode: "none",
+      sideEffect: "external_send",
+      parameters: {
+        required: ["contact"],
+        properties: {
+          contact: { type: "string" },
+          durationMinutes: { type: "integer" },
+          dateFrom: { type: "string", format: "date" },
+          dateTo: { type: "string", format: "date" },
+        },
+      },
+    });
+    expect(getCoreChatToolByName("core_scheduling_approve")).toMatchObject({
+      capabilityId: "core.scheduling.approve",
+      approvalMode: "approval_required",
+      sideEffect: "external_write",
+      parameters: {
+        required: ["confirmed"],
+        properties: { confirmed: { type: "boolean" } },
+      },
+    });
+  });
+
   it("keeps retired Mission Control wording out of model-facing tool copy", () => {
     const modelFacingCopy = CORE_CHAT_CAPABILITIES.map((capability) => ({
       ownerFacingLabel: capability.ownerFacingLabel,

@@ -123,10 +123,59 @@ export type CoreMailboxToolServices = {
   ): Promise<{ draft: AgentMailboxMessage } | { error: string; status: number }>;
 };
 
+export type CoreSchedulingContact = {
+  name: string;
+  relationship: "client" | "prospect" | "contact";
+  me3AssistantAvailable: boolean;
+};
+
+export type CoreSchedulingOption = {
+  option: number;
+  label: string;
+  startsAt: string;
+  endsAt: string;
+};
+
+export type CoreSchedulingToolServices = {
+  searchContacts(input: {
+    query?: string;
+    limit?: number;
+  }): Promise<{
+    contacts: CoreSchedulingContact[];
+    total: number;
+  }>;
+  request(input: {
+    contact: string;
+    durationMinutes?: number;
+    dateFrom?: string;
+    dateTo?: string;
+    reason?: string;
+  }, idempotencyKey: string): Promise<{
+    contactName: string;
+    durationMinutes: number;
+    dateRange: { start: string; end: string };
+    usedDefaultDuration: boolean;
+    usedDefaultDateRange: boolean;
+    status: "options_ready" | "no_owner_availability" | "no_mutual_availability";
+    options: CoreSchedulingOption[];
+  }>;
+  approve(input: {
+    contact?: string;
+    option?: number;
+    confirmed: boolean;
+  }, idempotencyKey: string): Promise<{
+    contactName: string;
+    status: "waiting_for_other_owner" | "booked";
+    selectedOption: CoreSchedulingOption;
+  }>;
+};
+
 const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
   (tool) =>
     tool.capabilityId === "core.calendar.events.list" ||
     tool.capabilityId === "core.bookings.lookup" ||
+    tool.capabilityId === "core.contacts.search" ||
+    tool.capabilityId.startsWith("core.scheduling.") ||
     tool.capabilityId.startsWith("core.reminders.") ||
     tool.capabilityId === "core.journal.read" ||
     tool.capabilityId === "core.owner_content.search" ||
@@ -149,6 +198,7 @@ export async function runCoreAgentToolTurn(input: {
   route: AgentChatAiRoute;
   messages: readonly AgentToolMessage[];
   mailboxServices?: CoreMailboxToolServices;
+  schedulingServices?: CoreSchedulingToolServices;
   streamOptions?: AgentChatRuntimeStreamOptions;
 }): Promise<AgentSandboxDispatchResponse> {
   const startedAt = performance.now();
@@ -171,11 +221,19 @@ export async function runCoreAgentToolTurn(input: {
   const outcomes: CoreToolOutcome[] = [];
   const socialSources = new Map<string, AgentSocialSource>();
   const modelAttempts: AgentChatModelAttemptTrace[] = [];
-  const tools = input.mailboxServices
-    ? ACTIVE_CORE_TOOLS
-    : ACTIVE_CORE_TOOLS.filter(
-      (tool) => !tool.capabilityId.startsWith("core.mailbox."),
-    );
+  const tools = ACTIVE_CORE_TOOLS.filter((tool) => {
+    if (tool.capabilityId.startsWith("core.mailbox.") && !input.mailboxServices) {
+      return false;
+    }
+    if (
+      (tool.capabilityId === "core.contacts.search" ||
+        tool.capabilityId.startsWith("core.scheduling.")) &&
+      !input.schedulingServices
+    ) {
+      return false;
+    }
+    return true;
+  });
   const requiredReadTool = requiredPrivateReadTool(input.messages, tools);
   let requiredReadToolAttempted = false;
   const models = input.route.backupModel && input.route.backupModel !== input.route.model
@@ -263,6 +321,7 @@ export async function runCoreAgentToolTurn(input: {
                   call,
                   tool: tool as CoreChatToolDefinition,
                   mailboxServices: input.mailboxServices,
+                  schedulingServices: input.schedulingServices,
                   socialSources,
                 }),
             );
@@ -379,8 +438,15 @@ function executeCoreToolCall(input: {
   call: AgentToolCall;
   tool: CoreChatToolDefinition;
   mailboxServices?: CoreMailboxToolServices;
+  schedulingServices?: CoreSchedulingToolServices;
   socialSources: Map<string, AgentSocialSource>;
 }): Promise<CoreToolOutcome> {
+  if (
+    input.tool.capabilityId === "core.contacts.search" ||
+    input.tool.capabilityId.startsWith("core.scheduling.")
+  ) {
+    return executeSchedulingToolCall(input);
+  }
   if (input.tool.capabilityId === "core.calendar.events.list") {
     return executeCalendarEventsListToolCall(input);
   }
@@ -409,6 +475,92 @@ function executeCoreToolCall(input: {
     return executeSocialToolCall(input);
   }
   return executeMailboxToolCall(input);
+}
+
+async function executeSchedulingToolCall(input: {
+  idempotencyKey: string;
+  call: AgentToolCall;
+  tool: CoreChatToolDefinition;
+  schedulingServices?: CoreSchedulingToolServices;
+}): Promise<CoreToolOutcome> {
+  const services = input.schedulingServices;
+  if (!services) throw new Error("Soulink scheduling is not connected.");
+  assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+
+  if (input.tool.capabilityId === "core.contacts.search") {
+    enforceSchedulingToolPolicy(input.tool, "contacts");
+    const result = await services.searchContacts({
+      query: optionalToolString(input.call.arguments.query),
+      limit: optionalToolNumber(input.call.arguments.limit),
+    });
+    const available = result.contacts.filter((contact) => contact.me3AssistantAvailable);
+    const lines = result.contacts.map(
+      (contact) =>
+        `${contact.name}${contact.me3AssistantAvailable ? " — ME3 assistant connected" : ""}`,
+    );
+    return {
+      capabilityId: "core.contacts.search",
+      result: { ok: true, ...result },
+      fallbackReply: lines.length
+        ? `${lines.join("\n")}\n${available.length} of ${result.contacts.length} shown contact${result.contacts.length === 1 ? " has" : "s have"} a connected ME3 assistant.`
+        : "I couldn't find an active contact matching that search.",
+      reminderAction: null,
+      actionCards: [],
+    };
+  }
+
+  if (input.tool.capabilityId === "core.scheduling.request") {
+    enforceSchedulingToolPolicy(input.tool, "request");
+    const result = await services.request({
+      contact: requiredToolString(input.call.arguments.contact, "Scheduling contact"),
+      durationMinutes: optionalToolNumber(input.call.arguments.durationMinutes),
+      dateFrom: optionalToolString(input.call.arguments.dateFrom),
+      dateTo: optionalToolString(input.call.arguments.dateTo),
+      reason: optionalToolString(input.call.arguments.reason),
+    }, input.idempotencyKey);
+    const defaults = [
+      result.usedDefaultDuration ? `${result.durationMinutes} minutes` : null,
+      result.usedDefaultDateRange
+        ? `${result.dateRange.start} to ${result.dateRange.end}`
+        : null,
+    ].filter(Boolean);
+    const defaultNote = defaults.length
+      ? ` I used the streamlined defaults: ${defaults.join(" and ")}.`
+      : "";
+    const optionLines = result.options.map(
+      (option) => `${option.option}. ${option.label}`,
+    );
+    return {
+      capabilityId: "core.scheduling.request",
+      result: { ok: true, ...result },
+      fallbackReply: result.status === "options_ready"
+        ? `I checked with ${result.contactName}'s ME3 assistant and found these mutual options:${defaultNote}\n${optionLines.join("\n")}\nTell me which option to book. Nothing has been added to either calendar yet.`
+        : result.status === "no_owner_availability"
+          ? `I couldn't find an open ${result.durationMinutes}-minute slot on your calendar from ${result.dateRange.start} to ${result.dateRange.end}.${defaultNote} Try a wider date window; I did not contact ${result.contactName}'s assistant or book anything.`
+          : `I checked with ${result.contactName}'s ME3 assistant but found no mutual availability from ${result.dateRange.start} to ${result.dateRange.end}.${defaultNote} Try a wider date window; nothing was booked.`,
+      reminderAction: null,
+      actionCards: [],
+    };
+  }
+
+  enforceSchedulingToolPolicy(input.tool, "approve");
+  if (input.call.arguments.confirmed !== true) {
+    throw new Error("Scheduling approval requires the owner's explicit confirmation.");
+  }
+  const result = await services.approve({
+    contact: optionalToolString(input.call.arguments.contact),
+    option: optionalToolNumber(input.call.arguments.option),
+    confirmed: true,
+  }, input.idempotencyKey);
+  return {
+    capabilityId: "core.scheduling.approve",
+    result: { ok: true, ...result },
+    fallbackReply: result.status === "booked"
+      ? `${result.contactName} approved ${result.selectedOption.label}. It is now on both calendars.`
+      : `I sent ${result.selectedOption.label} to ${result.contactName}'s ME3 assistant for final approval. It will only be added after they approve.`,
+    reminderAction: null,
+    actionCards: [],
+  };
 }
 
 async function executeBookingLookupToolCall(input: {
@@ -1730,6 +1882,15 @@ function withCoreToolInstructions(
     "Booking tool rules:",
     "- Use core_bookings_lookup whenever the owner asks about upcoming confirmed bookings, appointments, client sessions, or booked calls. Do not answer from calendar events or email.",
     "- Booking lookup is read-only and returns the next confirmed bookings in chronological order. It does not include reminders, ordinary calendar events, or cancelled bookings.",
+    "Contact and agent-assisted scheduling tool rules:",
+    "- Use core_contacts_search to find owner contacts and whether a contact has a connected ME3 assistant through Soulink. Do not expose contact IDs, connection tokens, node IDs, or private chat history.",
+    "- Use core_scheduling_request when the owner asks to arrange time with a contact. The contact name is the only required input.",
+    "- A missing duration is not ambiguous: omit durationMinutes and ME3 will default to 30 minutes. A missing date window is not ambiguous: omit dateFrom and dateTo and ME3 will default to the next seven local calendar days. Do not ask a clarification question for either omission.",
+    "- The request tool exchanges only structured availability with the other ME3 assistant. It does not open, read, or write either owner's private assistant chat.",
+    "- The request tool never books immediately. Show the returned numbered mutual options and wait for the owner to choose one.",
+    "- Use core_scheduling_approve only after the owner explicitly chooses a shown option or explicitly approves an incoming option selected by the other owner. Set confirmed=true only for that explicit approval.",
+    "- Both owners must approve the exact selected time before either calendar is changed. Never claim a meeting is booked while the result says waiting_for_other_owner.",
+    "- Never mention scheduling request IDs or internal Soulink identifiers in the user-facing reply.",
     "Site blog read tool rules:",
     "- Use core_sites_blog_post_read to list profile-site blog posts or read one named post. Omit post to list; provide the title, slug, or file path to read the full markdown body.",
     "- Site blog access is read-only. No tool can create, draft, edit, publish, unpublish, archive, or delete a blog post.",
@@ -1824,6 +1985,31 @@ function enforceBookingLookupToolPolicy(tool: CoreChatToolDefinition): void {
   ) {
     throw new Error(
       `Tool "${tool.name}" is not allowed by the booking read runtime policy.`,
+    );
+  }
+}
+
+function enforceSchedulingToolPolicy(
+  tool: CoreChatToolDefinition,
+  operation: "contacts" | "request" | "approve",
+): void {
+  const expectedCapability = operation === "contacts"
+    ? "core.contacts.search"
+    : operation === "request"
+      ? "core.scheduling.request"
+      : "core.scheduling.approve";
+  const expectedApproval = operation === "approve" ? "approval_required" : "none";
+  const allowedChecks = operation === "contacts"
+    ? new Set(["soulink"])
+    : new Set(["soulink", "calendar.events"]);
+  if (
+    tool.capabilityId !== expectedCapability ||
+    tool.handlerRoute !== expectedCapability ||
+    tool.approvalMode !== expectedApproval ||
+    tool.requiredSetupChecks.some((check) => !allowedChecks.has(check))
+  ) {
+    throw new Error(
+      `Tool "${tool.name}" is not allowed by the agent scheduling runtime policy.`,
     );
   }
 }
