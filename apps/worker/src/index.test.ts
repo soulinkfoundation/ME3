@@ -13808,6 +13808,7 @@ describe("ME3 Worker auth", () => {
     const runtimeRequest = runtimeFetch.mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(String(runtimeRequest.body))).toMatchObject({
       threadId: "soulink:assistant-channel",
+      attachmentTextContext: null,
     });
     expect(env.assistantThreads).toEqual([
       expect.objectContaining({
@@ -14078,6 +14079,9 @@ describe("ME3 Worker auth", () => {
         expect(JSON.parse(String(runtimeRequest.body))).toMatchObject({
           messageText: "List my overdue tasks",
           threadId: "soulink:assistant-voice-channel",
+          attachmentTextContext: expect.stringContaining(
+            "successfully processed and transcribed",
+          ),
         });
       }
       const inboundEvent = env.agentEvents.find(

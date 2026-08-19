@@ -4150,6 +4150,10 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       turnId,
       threadId,
       messageText,
+      attachmentTextContext:
+        resolution.kind === "voice"
+          ? "ME3 channel context: This turn arrived as a voice note. ME3 successfully processed and transcribed the audio before agent dispatch. Treat the user text as the voice-note transcript."
+          : null,
       replyToMessageId,
     });
 

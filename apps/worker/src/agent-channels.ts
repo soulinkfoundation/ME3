@@ -228,6 +228,7 @@ export async function dispatchAgentChannelTurn(
     turnId: string;
     threadId?: string | null;
     messageText: string;
+    attachmentTextContext?: string | null;
     replyToMessageId: unknown;
   },
 ): Promise<AgentSandboxDispatchResponse> {
@@ -260,6 +261,7 @@ export async function dispatchAgentChannelTurn(
         turnId: input.turnId,
         threadId: input.threadId ?? null,
         messageText: input.messageText,
+        attachmentTextContext: input.attachmentTextContext ?? null,
         replyToMessageId:
           typeof input.replyToMessageId === "string" ||
           typeof input.replyToMessageId === "number"
