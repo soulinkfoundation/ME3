@@ -14191,6 +14191,7 @@ describe("ME3 Worker auth", () => {
               sourceChatTitle: "Ada chat",
               sourceChatKind: "direct",
               streamChannelId: "direct-ada",
+              directMessageUrl: "https://soulink.test/?node=node-ada",
               lastActiveAt: "2026-06-05T09:00:00Z",
               label: "Shared 1:1 chat",
             },
@@ -14243,8 +14244,9 @@ describe("ME3 Worker auth", () => {
         soulinkLinkId: "link-ada",
         soulinkNodeId: "node-ada",
         soulinkChatUrl:
-          "https://soulink.test/?chat=messaging%3Adirect-ada",
+          "https://soulink.test/?node=node-ada",
         soulinkSourceChatId: "chat-ada",
+        soulinkStreamChannelId: "direct-ada",
       });
     } finally {
       vi.unstubAllGlobals();

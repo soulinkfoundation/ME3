@@ -77,6 +77,7 @@ type SoulinkLinkContextRecord = {
   sourceChatTitle?: unknown;
   sourceChatKind?: unknown;
   streamChannelId?: unknown;
+  directMessageUrl?: unknown;
   soulinkChatUrl?: unknown;
   chatUrl?: unknown;
   lastActiveAt?: unknown;
@@ -757,6 +758,7 @@ async function soulinkLinkToContactInput(
       soulinkOrigin,
       soulinkSourceChatId:
         stringValue(context?.sourceChatId) || stringValue(link.sourceChatId),
+      soulinkStreamChannelId: stringValue(context?.streamChannelId),
       soulinkContextLabel: stringValue(context?.label),
       soulinkSourceChatTitle: stringValue(context?.sourceChatTitle),
       soulinkSourceChatKind: stringValue(context?.sourceChatKind),
@@ -826,6 +828,12 @@ function buildSoulinkContactChatUrl(
   link: SoulinkLinkRecord,
   context: SoulinkLinkContextRecord | null,
 ): string | null {
+  const directMessageUrl = stringValue(context?.directMessageUrl);
+  if (directMessageUrl) return directMessageUrl;
+  const nodeId = stringValue(link.otherNode?.id);
+  if (nodeId) {
+    return `${soulinkOrigin}/?node=${encodeURIComponent(nodeId)}`;
+  }
   const explicitUrl = stringValue(context?.soulinkChatUrl) || stringValue(context?.chatUrl);
   if (explicitUrl) return explicitUrl;
   const streamChannelId = stringValue(context?.streamChannelId);

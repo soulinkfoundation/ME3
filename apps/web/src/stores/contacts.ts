@@ -52,6 +52,7 @@ export type ContactOutreachMeta = {
   soulinkChatUrl?: string | null;
   soulinkOrigin?: string | null;
   soulinkSourceChatId?: string | null;
+  soulinkStreamChannelId?: string | null;
   soulinkContextLabel?: string | null;
   soulinkSourceChatTitle?: string | null;
   soulinkSourceChatKind?: string | null;

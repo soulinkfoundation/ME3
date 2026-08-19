@@ -52,6 +52,7 @@ const soulinkSyncing = ref(false);
 const soulinkSyncError = ref("");
 const soulinkSyncNotice = ref("");
 const soulinkContactsConnected = ref(false);
+const failedContactAvatarUrls = ref(new Set<string>());
 
 const contactSearchQuery = computed({
   get: () => props.searchQuery ?? internalContactSearchQuery.value,
@@ -234,14 +235,17 @@ async function saveManualContact() {
   }
 }
 
-function contactInitial(contact: Contact): string {
-  const source = contact.name || contact.email || "?";
-  return source.trim().slice(0, 1).toUpperCase() || "?";
-}
-
 function contactAvatarUrl(contact: Contact): string | null {
   const avatar = contact.metadata?.avatarUrl;
-  return typeof avatar === "string" && avatar.trim() ? avatar.trim() : null;
+  const url = typeof avatar === "string" && avatar.trim() ? avatar.trim() : null;
+  return url && !failedContactAvatarUrls.value.has(url) ? url : null;
+}
+
+function handleContactAvatarError(contact: Contact) {
+  const avatar = contact.metadata?.avatarUrl;
+  const url = typeof avatar === "string" ? avatar.trim() : "";
+  if (!url) return;
+  failedContactAvatarUrls.value = new Set(failedContactAvatarUrls.value).add(url);
 }
 
 function contactHasSoulink(contact: Contact): boolean {
@@ -258,10 +262,7 @@ function contactSoulinkUrl(contact: Contact): string | null {
 
 function contactMetaLine(contact: Contact): string {
   if (contact.email) return contact.email;
-  if (contact.metadata?.soulinkContextLabel) {
-    return String(contact.metadata.soulinkContextLabel);
-  }
-  if (contactHasSoulink(contact)) return "Soulink contact";
+  if (contactHasSoulink(contact)) return "";
   return "No email yet";
 }
 
@@ -364,8 +365,9 @@ defineExpose({
             v-if="contactAvatarUrl(contact)"
             :src="contactAvatarUrl(contact) || ''"
             alt=""
+            @error="handleContactAvatarError(contact)"
           />
-          <span v-else>{{ contactInitial(contact) }}</span>
+          <UiIcon v-else name="UserRound" :size="20" aria-hidden="true" />
         </div>
         <div class="contact-row__body">
           <div class="contact-row__title">
@@ -374,7 +376,7 @@ defineExpose({
               Soulink
             </span>
           </div>
-          <p>{{ contactMetaLine(contact) }}</p>
+          <p v-if="contactMetaLine(contact)">{{ contactMetaLine(contact) }}</p>
         </div>
         <div class="contact-row__actions">
           <button
