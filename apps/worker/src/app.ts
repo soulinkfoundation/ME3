@@ -98,6 +98,7 @@ import { registerFilesRoutes } from "./routes/files";
 import { registerJournalRoutes } from "./routes/journal";
 import { registerLocalExecutorRoutes } from "./routes/local-executor";
 import { registerManagedRuntimeRoutes } from "./routes/managed-runtime";
+import { registerManagedSetupSessionRoutes } from "./routes/managed-setup-session";
 import {
   getPendingOnboardingStartStep,
   registerOnboardingRoutes,
@@ -548,6 +549,7 @@ app.get("/health", async (c) => {
 });
 
 registerManagedRuntimeRoutes(app);
+registerManagedSetupSessionRoutes(app, { setOwnerSession });
 
 app.get("/api/config", async (c) => {
   const deploymentMode = normalizeMe3DeploymentMode(c.env.ME3_DEPLOYMENT_MODE);
@@ -2122,14 +2124,18 @@ async function deleteStoredMe3CloudOwnerId(env: Env): Promise<void> {
     .run();
 }
 
-async function setOwnerSession(c: AppContext, ownerId: string) {
+async function setOwnerSession(
+  c: AppContext,
+  ownerId: string,
+  ttlSeconds = SESSION_TTL_SECONDS,
+) {
   const sessionSecret = await getOrCreateInstallSessionSecret(c.env);
 
   const token = await signSessionToken(
     {
       sub: ownerId,
       iat: currentUnixTime(),
-      exp: currentUnixTime() + SESSION_TTL_SECONDS,
+      exp: currentUnixTime() + ttlSeconds,
     },
     sessionSecret,
   );
@@ -2139,7 +2145,7 @@ async function setOwnerSession(c: AppContext, ownerId: string) {
     secure: shouldUseSecureCookie(c.env),
     sameSite: "Lax",
     path: "/",
-    maxAge: SESSION_TTL_SECONDS,
+    maxAge: ttlSeconds,
   });
 }
 
