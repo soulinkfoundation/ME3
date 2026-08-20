@@ -26,6 +26,10 @@ const SUPPORTED_AUDIO_MIME_TYPES = new Set([
   "audio/x-m4a",
   "audio/x-wav",
 ]);
+const SUPPORTED_STREAM_VOICE_RESPONSE_MIME_TYPES = new Set([
+  ...SUPPORTED_AUDIO_MIME_TYPES,
+  "video/webm",
+]);
 
 export type SoulinkVoiceAttachment = {
   type: "voiceRecording";
@@ -232,12 +236,15 @@ async function fetchSoulinkVoiceRecording(
   if (
     responseMimeType &&
     responseMimeType !== "application/octet-stream" &&
-    !SUPPORTED_AUDIO_MIME_TYPES.has(responseMimeType)
+    !SUPPORTED_STREAM_VOICE_RESPONSE_MIME_TYPES.has(responseMimeType)
   ) {
     throw new SoulinkTurnInputError("Voice recording response was not audio", 422);
   }
 
-  return readBoundedAudioBlob(response, responseMimeType || attachment.mimeType);
+  return readBoundedAudioBlob(
+    response,
+    responseMimeType === "video/webm" ? "audio/webm" : responseMimeType || attachment.mimeType,
+  );
 }
 
 async function readBoundedAudioBlob(response: Response, mimeType: string): Promise<Blob> {

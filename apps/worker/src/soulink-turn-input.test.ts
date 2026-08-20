@@ -91,4 +91,50 @@ describe("Soulink turn input", () => {
       resolveSoulinkTurnInput({} as Env, "owner", input, fetcher),
     ).rejects.toMatchObject({ status: 503, message: "Voice recording download failed (503)" });
   });
+
+  it("accepts valid WebM audio when Stream serves it as video/webm", async () => {
+    const input = parseSoulinkTurnInput(
+      {
+        version: 1,
+        kind: "voice",
+        text: null,
+        attachments: [
+          {
+            type: "voiceRecording",
+            provider: "stream",
+            assetUrl: "https://dublin.stream-io-cdn.com/audio/voice-note.webm",
+            mimeType: "audio/webm;codecs=opus",
+            title: null,
+            durationSeconds: 9,
+            fileSizeBytes: 4,
+          },
+        ],
+      },
+      "",
+    );
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      new Response(new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]), {
+        status: 200,
+        headers: {
+          "content-length": "4",
+          "content-type": "video/webm",
+        },
+      }));
+    const run = vi.fn().mockResolvedValue({
+      text: "Create a task from this voice note.",
+      word_count: 7,
+      language: "en",
+    });
+
+    const result = await resolveSoulinkTurnInput(
+      { AI: { run } } as unknown as Env,
+      "owner",
+      input,
+      fetcher,
+    );
+
+    expect(result.messageText).toBe("Create a task from this voice note.");
+    expect(result.transcription).toMatchObject({ audioBytes: 4, language: "en" });
+    expect(run).toHaveBeenCalledOnce();
+  });
 });
