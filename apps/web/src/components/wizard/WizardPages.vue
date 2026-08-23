@@ -13,6 +13,7 @@ const selectedPageIndex = ref<number | null>(null);
 // Page title input for editing
 const editingTitle = ref("");
 const editingSlug = ref("");
+const editingNavigationGroup = ref("");
 const routeTouched = ref(false);
 const showRouteEditor = ref(false);
 const routeInputRef = ref<HTMLInputElement | null>(null);
@@ -86,6 +87,7 @@ watch(selectedPageIndex, (newIndex) => {
     const page = wizard.pages[newIndex];
     editingTitle.value = page.title;
     editingSlug.value = page.slug;
+    editingNavigationGroup.value = page.navigationGroup || "";
     routeTouched.value = false;
     showRouteEditor.value = false;
     editorContent.value = page.content || "";
@@ -142,6 +144,7 @@ function persistPageMeta() {
   if (routeTouched.value || selectedPage.value?.slugCustomized) {
     updates.slug = editingSlug.value;
   }
+  updates.navigationGroup = editingNavigationGroup.value;
   if (Object.keys(updates).length === 0) return;
 
   wizard.updatePage(selectedPageIndex.value, updates);
@@ -257,6 +260,16 @@ const adminPages = computed(() =>
     .map((page, index) => ({ page, index }))
     .filter(({ page }) => page.visible === false),
 );
+const navigationGroups = computed(() =>
+  Array.from(
+    new Set(
+      wizard.pages
+        .filter((page) => page.visible !== false)
+        .map((page) => page.navigationGroup?.trim())
+        .filter((group): group is string => Boolean(group)),
+    ),
+  ),
+);
 
 // Expose editing state to parent
 const isEditingPage = computed(() => selectedPageIndex.value !== null);
@@ -296,6 +309,9 @@ defineExpose({
             </span>
             <div class="page-details">
               <span class="page-title">{{ page.title }}</span>
+              <span v-if="page.navigationGroup" class="page-group">
+                {{ page.navigationGroup }} menu
+              </span>
               <span class="page-slug">/{{ page.slug }}</span>
             </div>
 
@@ -602,6 +618,31 @@ defineExpose({
           </template>
         </div>
 
+        <div
+          v-if="selectedPage.visible !== false"
+          class="form-group navigation-group-input"
+        >
+          <label for="page-navigation-group" class="field-label">
+            Navigation group <span>(optional)</span>
+          </label>
+          <input
+            id="page-navigation-group"
+            v-model="editingNavigationGroup"
+            type="text"
+            list="page-navigation-groups"
+            placeholder="e.g. Services"
+            maxlength="40"
+            @blur="persistPageMeta"
+            @keyup.enter="($event.target as HTMLInputElement).blur()"
+          />
+          <datalist id="page-navigation-groups">
+            <option v-for="group in navigationGroups" :key="group" :value="group" />
+          </datalist>
+          <p>
+            Pages with the same group appear together in one dropdown menu.
+          </p>
+        </div>
+
         <!-- Tiptap Editor -->
         <TiptapEditor
           ref="editorRef"
@@ -679,6 +720,12 @@ defineExpose({
 .page-slug {
   font-size: 12px;
   color: var(--color-text-muted);
+}
+
+.page-group {
+  color: var(--ui-accent-strong, var(--color-primary));
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .field-label {
@@ -892,6 +939,29 @@ defineExpose({
 .form-group input:focus {
   outline: none;
   border-color: var(--color-text);
+}
+
+.navigation-group-input {
+  max-width: 360px;
+}
+
+.navigation-group-input .field-label span {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.navigation-group-input input {
+  min-height: 42px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.navigation-group-input p {
+  margin: 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .slug-preview {

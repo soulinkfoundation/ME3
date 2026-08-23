@@ -41,4 +41,17 @@ describe("createContentTurndownService", () => {
     expect(markdown).toContain("- [x] Finished");
     expect(markdown).toContain("- [ ] Pending");
   });
+
+  it("preserves reusable site and call-to-action block markers", () => {
+    const markdown = createContentTurndownService().turndown(`
+      <div data-me3-site-block="newsletter">​</div>
+      <div data-me3-site-block="testimonials">​</div>
+      <div data-me3-cta-button="true" data-text="Book now" data-url="/book" data-style="primary">​</div>
+    `);
+
+    expect(markdown).toContain('data-me3-site-block="newsletter"');
+    expect(markdown).toContain('data-me3-site-block="testimonials"');
+    expect(markdown).toContain('data-me3-cta-button="true"');
+    expect(markdown).toContain('data-url="/book"');
+  });
 });

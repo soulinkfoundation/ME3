@@ -85,6 +85,7 @@ import { verifyMe3CloudJwt } from "./me3-cloud-jwt";
 import { registerAccountsRoutes } from "./routes/accounts";
 import { registerAssistantRoutes } from "./routes/assistant";
 import { registerBookingRoutes } from "./routes/booking";
+import { registerEventBookingRoutes } from "./routes/event-booking";
 import { registerCommerceRoutes } from "./routes/commerce";
 import { registerCalendarRoutes } from "./routes/calendar";
 import { registerCalendarSourceRoutes } from "./routes/calendar-sources";
@@ -604,6 +605,7 @@ app.get("/api/core/version", (c) => {
 });
 
 registerBookingRoutes(app);
+registerEventBookingRoutes(app);
 registerCommerceRoutes(app, { requireOwner, unauthorized, getCoreWebOrigin });
 registerUsernameRoutes(app);
 

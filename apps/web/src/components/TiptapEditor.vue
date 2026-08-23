@@ -21,6 +21,8 @@ import UiIcon from "./UiIcon.vue";
 import TiptapImageNode from "./TiptapImageNode.vue";
 import TiptapFaqNode from "./TiptapFaqNode.vue";
 import TiptapCarouselNode from "./TiptapCarouselNode.vue";
+import TiptapSiteBlockNode from "./TiptapSiteBlockNode.vue";
+import TiptapCtaNode from "./TiptapCtaNode.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -97,6 +99,9 @@ type CarouselImageProvider = {
   uploadFile: (file: File) => Promise<CarouselImageResult>;
   uploadRandom: () => Promise<CarouselImageResult>;
 };
+
+type SiteBlockType = "newsletter" | "testimonials";
+type CtaButtonStyle = "primary" | "secondary" | "outline";
 
 function parseImageWidth(value: string | null): number | string | null {
   if (!value) return null;
@@ -405,6 +410,108 @@ const CarouselBlock = Node.create({
   },
 });
 
+const SiteBlock = Node.create({
+  name: "siteBlock",
+  group: "block",
+  atom: true,
+  isolating: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      blockType: {
+        default: "newsletter",
+        renderHTML: () => ({}),
+      },
+    };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: "div[data-me3-site-block]",
+        getAttrs: (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const blockType = element.getAttribute("data-me3-site-block");
+          if (blockType !== "newsletter" && blockType !== "testimonials") {
+            return false;
+          }
+          return { blockType };
+        },
+      },
+    ];
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    const blockType: SiteBlockType =
+      node.attrs.blockType === "testimonials" ? "testimonials" : "newsletter";
+    return [
+      "div",
+      mergeAttributes(HTMLAttributes, {
+        "data-me3-site-block": blockType,
+      }),
+      "\u200b",
+    ];
+  },
+  addNodeView() {
+    return VueNodeViewRenderer(TiptapSiteBlockNode as Component<NodeViewProps>);
+  },
+});
+
+const CtaButtonBlock = Node.create({
+  name: "ctaButtonBlock",
+  group: "block",
+  atom: true,
+  isolating: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      text: { default: "Learn more", renderHTML: () => ({}) },
+      url: { default: "", renderHTML: () => ({}) },
+      style: { default: "primary", renderHTML: () => ({}) },
+      icon: { default: "", renderHTML: () => ({}) },
+    };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: "div[data-me3-cta-button]",
+        getAttrs: (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const rawStyle = element.getAttribute("data-style");
+          const style: CtaButtonStyle =
+            rawStyle === "secondary" || rawStyle === "outline"
+              ? rawStyle
+              : "primary";
+          return {
+            text: element.getAttribute("data-text") || "Learn more",
+            url: element.getAttribute("data-url") || "",
+            style,
+            icon: element.getAttribute("data-icon") || "",
+          };
+        },
+      },
+    ];
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    const style: CtaButtonStyle =
+      node.attrs.style === "secondary" || node.attrs.style === "outline"
+        ? node.attrs.style
+        : "primary";
+    return [
+      "div",
+      mergeAttributes(HTMLAttributes, {
+        "data-me3-cta-button": "true",
+        "data-text": String(node.attrs.text || ""),
+        "data-url": String(node.attrs.url || ""),
+        "data-style": style,
+        "data-icon": String(node.attrs.icon || ""),
+      }),
+      "\u200b",
+    ];
+  },
+  addNodeView() {
+    return VueNodeViewRenderer(TiptapCtaNode as Component<NodeViewProps>);
+  },
+});
+
 function parseYouTubeTimestamp(value: string | null): number | null {
   if (!value) return null;
   const raw = value.trim().toLowerCase();
@@ -638,6 +745,8 @@ const editor = useEditor({
     Gallery,
     FaqBlock,
     CarouselBlock,
+    SiteBlock,
+    CtaButtonBlock,
     YouTubeEmbed,
     ImageWithId.configure({
       inline: false,
@@ -822,6 +931,30 @@ function insertCarouselBlock() {
     .insertContent({
       type: "carouselBlock",
       attrs: { items: DEFAULT_CAROUSEL_ITEMS },
+    })
+    .run();
+}
+
+function insertSiteBlock(blockType: SiteBlockType) {
+  editor.value
+    ?.chain()
+    .focus()
+    .insertContent({ type: "siteBlock", attrs: { blockType } })
+    .run();
+}
+
+function insertCtaButton() {
+  editor.value
+    ?.chain()
+    .focus()
+    .insertContent({
+      type: "ctaButtonBlock",
+      attrs: {
+        text: "Learn more",
+        url: "",
+        style: "primary",
+        icon: "",
+      },
     })
     .run();
 }
@@ -1318,6 +1451,42 @@ defineExpose({
           title="Insert card carousel"
         >
           <UiIcon name="LayoutGrid" :size="16" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="toolbar-btn"
+          :class="{ active: editor?.isActive('ctaButtonBlock') }"
+          @click="insertCtaButton"
+          title="Insert call-to-action button"
+          aria-label="Insert call-to-action button"
+        >
+          <UiIcon name="ExternalLink" :size="16" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="toolbar-btn"
+          :class="{
+            active:
+              editor?.isActive('siteBlock', { blockType: 'newsletter' }),
+          }"
+          @click="insertSiteBlock('newsletter')"
+          title="Insert newsletter signup"
+          aria-label="Insert newsletter signup"
+        >
+          <UiIcon name="Mail" :size="16" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="toolbar-btn"
+          :class="{
+            active:
+              editor?.isActive('siteBlock', { blockType: 'testimonials' }),
+          }"
+          @click="insertSiteBlock('testimonials')"
+          title="Insert testimonials"
+          aria-label="Insert testimonials"
+        >
+          <UiIcon name="MessageSquare" :size="16" aria-hidden="true" />
         </button>
       </template>
     </div>

@@ -73,6 +73,10 @@ vi.mock("@tiptap/vue-3", () => {
   };
 });
 
+vi.mock("vue3-emoji-picker", () => ({
+  default: { name: "EmojiPicker", template: "<div />" },
+}));
+
 vi.mock("@tiptap/starter-kit", () => ({
   default: { configure: vi.fn(() => ({})) },
 }));
@@ -230,6 +234,9 @@ describe("TiptapEditor", () => {
     expect(wrapper.find('[title="Insert gallery"]').exists()).toBe(true);
     expect(wrapper.find('[title="Insert FAQ accordion"]').exists()).toBe(true);
     expect(wrapper.find('[title="Insert card carousel"]').exists()).toBe(true);
+    expect(wrapper.find('[title="Insert call-to-action button"]').exists()).toBe(true);
+    expect(wrapper.find('[title="Insert newsletter signup"]').exists()).toBe(true);
+    expect(wrapper.find('[title="Insert testimonials"]').exists()).toBe(true);
   });
 
   it("should hide site-builder toolbar blocks in workspace variant", () => {
@@ -242,6 +249,38 @@ describe("TiptapEditor", () => {
 
     expect(wrapper.find('[title="Insert FAQ accordion"]').exists()).toBe(false);
     expect(wrapper.find('[title="Insert card carousel"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Insert call-to-action button"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Insert newsletter signup"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Insert testimonials"]').exists()).toBe(false);
+  });
+
+  it("should insert reusable site and call-to-action blocks", async () => {
+    const wrapper = mount(TiptapEditor, {
+      props: { modelValue: "" },
+    });
+
+    await wrapper.find('[title="Insert newsletter signup"]').trigger("click");
+    expect(mockInsertContent).toHaveBeenLastCalledWith({
+      type: "siteBlock",
+      attrs: { blockType: "newsletter" },
+    });
+
+    await wrapper.find('[title="Insert testimonials"]').trigger("click");
+    expect(mockInsertContent).toHaveBeenLastCalledWith({
+      type: "siteBlock",
+      attrs: { blockType: "testimonials" },
+    });
+
+    await wrapper.find('[title="Insert call-to-action button"]').trigger("click");
+    expect(mockInsertContent).toHaveBeenLastCalledWith({
+      type: "ctaButtonBlock",
+      attrs: {
+        text: "Learn more",
+        url: "",
+        style: "primary",
+        icon: "",
+      },
+    });
   });
 
   it("should configure links to open in a new tab", () => {

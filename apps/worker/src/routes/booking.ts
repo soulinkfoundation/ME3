@@ -43,6 +43,10 @@ import type { DbBooking, DbSite, Env } from "../types";
 import { finalizeStripeProductCheckout } from "../commerce-orders";
 import { getManagedCommerceBridgeConfig } from "../commerce-bridge";
 import { isCommerceReady } from "../commerce-settings";
+import {
+  finalizePaidEventBookingCheckout,
+  isEventBookingType,
+} from "../event-booking";
 
 const PAYMENTS_UNAVAILABLE_MESSAGE =
   "Payments are not available for this booking right now. Please contact the site owner.";
@@ -498,7 +502,9 @@ export function registerBookingRoutes(app: AppHono) {
     const session = stripe
       ? await stripe.checkout.sessions.retrieve(sessionId)
       : await retrieveManagedBookingCheckout(c.env, sessionId);
-    const result = await finalizePaidBookingCheckout(c.env, site, session);
+    const result = isEventBookingType(session.metadata?.booking_type)
+      ? await finalizePaidEventBookingCheckout(c.env, site, session)
+      : await finalizePaidBookingCheckout(c.env, site, session);
     if ("error" in result) return c.json({ error: result.error }, result.status as any);
     return c.json(result);
   });
@@ -541,7 +547,9 @@ export function registerBookingRoutes(app: AppHono) {
       return c.json({ received: true });
     }
 
-    const result = await finalizePaidBookingCheckout(c.env, site, session);
+    const result = isEventBookingType(session.metadata?.booking_type)
+      ? await finalizePaidEventBookingCheckout(c.env, site, session)
+      : await finalizePaidBookingCheckout(c.env, site, session);
     if ("error" in result) {
       console.error("Stripe booking webhook failed:", result.error);
       return c.json({ received: true, error: result.error });

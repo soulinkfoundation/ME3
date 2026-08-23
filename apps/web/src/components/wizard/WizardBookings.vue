@@ -298,6 +298,7 @@ const activeClassOfferFrequency = computed({
         ...(activeClassOffer.value?.recurrence || {
           weekday: "monday",
           startTime: "18:00",
+          startDate: "",
         }),
         frequency: val,
       },
@@ -312,6 +313,7 @@ const activeClassOfferWeekday = computed({
         ...(activeClassOffer.value?.recurrence || {
           frequency: "weekly",
           startTime: "18:00",
+          startDate: "",
         }),
         weekday: val,
       },
@@ -326,8 +328,25 @@ const activeClassOfferStartTime = computed({
         ...(activeClassOffer.value?.recurrence || {
           frequency: "weekly",
           weekday: "monday",
+          startDate: "",
         }),
         startTime: val,
+      },
+    }),
+});
+
+const activeClassOfferStartDate = computed({
+  get: () => activeClassOffer.value?.recurrence.startDate || "",
+  set: (val: string) =>
+    updateActiveClassOffer({
+      recurrence: {
+        ...(activeClassOffer.value?.recurrence || {
+          frequency: "weekly",
+          weekday: "monday",
+          startTime: "18:00",
+          startDate: "",
+        }),
+        startDate: val,
       },
     }),
 });
@@ -1225,6 +1244,17 @@ onMounted(() => {
               </div>
 
               <div class="form-row">
+                <div class="form-group">
+                  <label :for="`class-offer-start-date-${activeClassOffer.id}`">
+                    First session date <span class="optional-label">(optional)</span>
+                  </label>
+                  <input
+                    :id="`class-offer-start-date-${activeClassOffer.id}`"
+                    v-model="activeClassOfferStartDate"
+                    type="date"
+                  />
+                </div>
+
                 <div class="form-group">
                   <label :for="`class-offer-timezone-${activeClassOffer.id}`">
                     Timezone

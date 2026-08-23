@@ -161,6 +161,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-08-19-calendar-push-notifications-v1",
     apply: applyCalendarPushNotificationsMigration,
   },
+  {
+    id: "0037_event_booking_capacity",
+    checksum: "2026-08-21-event-booking-capacity-v1",
+    apply: applyEventBookingCapacityMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -2188,6 +2193,38 @@ async function applyCalendarPushNotificationsMigration(
   } else {
     for (const statement of statements) await statement.run();
   }
+}
+
+async function applyEventBookingCapacityMigration(db: D1Database): Promise<void> {
+  if (!(await tableExists(db, "bookings")) || !(await tableExists(db, "booking_holds"))) {
+    return;
+  }
+  if (!(await columnExists(db, "bookings", "quantity"))) {
+    await db
+      .prepare(
+        "ALTER TABLE bookings ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 1)",
+      )
+      .run();
+  }
+  if (!(await columnExists(db, "booking_holds", "quantity"))) {
+    await db
+      .prepare(
+        "ALTER TABLE booking_holds ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 1)",
+      )
+      .run();
+  }
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_bookings_event_capacity
+       ON bookings(site_id, booking_type, offer_id, starts_at, ends_at, status)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_booking_holds_event_capacity
+       ON booking_holds(site_id, booking_type, offer_id, slot_start, slot_end, status, expires_at)`,
+    )
+    .run();
 }
 
 async function tableExists(db: D1Database, tableName: string): Promise<boolean> {

@@ -199,6 +199,7 @@ export interface DbBooking {
   currency: "usd" | "gbp" | "eur" | "cad" | "aud" | "chf" | "sgd" | "inr" | "pkr" | null;
   payment_status: "pending" | "succeeded" | "failed" | "not_required" | null;
   is_free_booking: number;
+  quantity?: number | null;
   paid_at: string | null;
   page_id?: string | null;
   action_id?: string | null;

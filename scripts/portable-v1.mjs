@@ -58,6 +58,9 @@ export const RUNTIME_MIGRATIONS = [
   ["0032_social_version_publishing_settings", "2026-07-29-social-version-publishing-settings-v1"],
   ["0033_manual_payments", "2026-07-31-manual-payments-v1"],
   ["0034_owner_onboarding", "2026-07-31-owner-onboarding-v1"],
+  ["0035_calendar_source_event_dismissals", "2026-08-18-calendar-source-event-dismissals-v1"],
+  ["0036_calendar_push_notifications", "2026-08-19-calendar-push-notifications-v1"],
+  ["0037_event_booking_capacity", "2026-08-21-event-booking-capacity-v1"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];
@@ -80,6 +83,7 @@ const EXCLUDED_TABLES = [
   "assistant_job_ingress_events",
   "auth_rate_limits",
   "booking_holds",
+  "calendar_push_dispatches",
   "drive_multipart_parts",
   "drive_multipart_uploads",
   "local_executor_audit_events",
@@ -96,6 +100,7 @@ const EXCLUDED_TABLES = [
   "mission_daemon_audit_events",
   "mission_daemon_pairings",
   "mobile_pairings",
+  "mobile_push_preferences",
   "mobile_refresh_tokens",
   "social_media_delivery_grants",
   "social_oauth_states",
@@ -129,6 +134,7 @@ const COPIED_TABLES = [
   "assistant_threads",
   "booking_reminders",
   "bookings",
+  "calendar_source_event_dismissals",
   "calendar_source_events",
   "calendar_sources",
   "commerce_orders",

@@ -5,6 +5,7 @@ import { useWizardStore, type Me3Button } from "../../stores/wizard";
 import UiIcon from "../UiIcon.vue";
 import IconPicker from "../IconPicker.vue";
 import { isUiIconName, type UiIconName } from "../../utils/icons";
+import { normalizeCtaUrl } from "../../utils/cta-url";
 
 const wizard = useWizardStore();
 
@@ -86,17 +87,10 @@ function saveButton() {
     return;
   }
 
-  // Ensure URL has protocol
-  let url = buttonUrl.value.trim();
-  if (!url.startsWith("http://") && !url.startsWith("https://")) {
-    url = "https://" + url;
-  }
-
-  // Validate URL
-  try {
-    new URL(url);
-  } catch {
-    formError.value = "Please enter a valid URL";
+  const url = normalizeCtaUrl(buttonUrl.value);
+  if (!url) {
+    formError.value =
+      "Use an https:// URL, /page path, #section, mailto:, or tel: link";
     return;
   }
 

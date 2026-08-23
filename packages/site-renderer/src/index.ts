@@ -20,6 +20,7 @@ type Me3Page = {
   title?: string;
   file?: string;
   visible?: boolean;
+  navigationGroup?: string;
 };
 
 type Me3Post = Me3Page & {
@@ -75,6 +76,7 @@ type BookingClass = BookingOffer & {
     frequency?: "weekly" | "biweekly" | string;
     weekday?: string;
     startTime?: string;
+    startDate?: string;
   };
   capacity?: number | null;
 };
@@ -304,10 +306,15 @@ function generateContentPageHtml(
   basePath: string,
   capabilities: SiteRenderCapabilities,
 ): string {
-  const htmlContent = markdownToHtml(markdown, basePath);
+  const htmlContent = expandReusableContentBlocks(
+    profile,
+    markdownToHtml(markdown, basePath),
+    basePath,
+    capabilities,
+  );
   return pageShell(profile, {
     title: `${title} | ${profile.name || "ME3"}`,
-    description: markdownToText(markdown).slice(0, 160),
+    description: contentToPlainText(markdown).slice(0, 160),
     activeSlug,
     basePath,
     body: `<header class="page-header"><a class="back-link" href="${basePath}">${profile.avatar ? `<img src="${escapeHtml(filePathForHtml(profile.avatar, basePath))}" alt="" class="avatar-small">` : ""}<span>${escapeHtml(profile.name || "Home")}</span></a></header>
@@ -400,7 +407,7 @@ function pageShell(
   <title>${escapeHtml(options.title)}</title>
   <meta name="description" content="${escapeHtml(options.description)}">
   ${headLinks}
-  <style>${siteCss(options.vibe, profile.links?._accent)}${siteCssOverrides(options.vibe)}${contentImageCss()}.main.no-banner .profile-header{margin-top:0}</style>
+  <style>${siteCss(options.vibe, profile.links?._accent)}${siteCssOverrides(options.vibe)}${contentImageCss()}${navigationGroupCss()}${bookingControlsCss()}.main.no-banner .profile-header{margin-top:0}</style>
 </head>
 <body data-vibe="${escapeHtml(options.vibe)}">
   <div class="container">
@@ -419,14 +426,101 @@ function generateNav(profile: Me3SiteProfile, activeSlug: string, basePath: stri
   const hasProducts = (profile.products || []).length > 0;
   if (pages.length === 0 && !hasPosts && !hasProducts) return "";
 
+  const pageLinks: string[] = [];
+  const renderedGroups = new Set<string>();
+  for (const page of pages) {
+    const groupLabel = page.navigationGroup?.trim();
+    if (!groupLabel) {
+      pageLinks.push(generateNavPageLink(page, activeSlug, basePath));
+      continue;
+    }
+
+    const groupKey = groupLabel.toLocaleLowerCase();
+    if (renderedGroups.has(groupKey)) continue;
+    renderedGroups.add(groupKey);
+
+    const children = pages.filter(
+      (candidate) =>
+        candidate.navigationGroup?.trim().toLocaleLowerCase() === groupKey,
+    );
+    const groupActive = children.some((child) => child.slug === activeSlug);
+    pageLinks.push(
+      `<details class="nav-group${groupActive ? " active" : ""}"><summary class="nav-link nav-group-toggle${groupActive ? " active" : ""}">${escapeHtml(groupLabel)}<span class="nav-group-chevron" aria-hidden="true">⌄</span></summary><div class="nav-submenu">${children.map((child) => generateNavPageLink(child, activeSlug, basePath)).join("")}</div></details>`,
+    );
+  }
+
   const links = [
     `<a href="${basePath}" class="nav-link${activeSlug ? "" : " active"}">Home</a>`,
-    ...pages.map((page) => `<a href="${basePath}${escapeHtml(normalizeSitePath(page.slug || ""))}" class="nav-link${page.slug === activeSlug ? " active" : ""}">${escapeHtml(page.title || titleFromSlug(page.slug || ""))}</a>`),
+    ...pageLinks,
     hasPosts ? `<a href="${basePath}${escapeHtml(sectionPaths.blog)}/" class="nav-link${activeSlug === "blog" ? " active" : ""}">${escapeHtml(profile.blogTitle || "Blog")}</a>` : "",
     hasProducts ? `<a href="${basePath}${escapeHtml(sectionPaths.shop)}/" class="nav-link${activeSlug === "shop" ? " active" : ""}">${escapeHtml(profile.shopTitle || "Shop")}</a>` : "",
   ].join("");
 
   return `<nav class="nav">${links}</nav>`;
+}
+
+function generateNavPageLink(
+  page: Me3Page,
+  activeSlug: string,
+  basePath: string,
+): string {
+  const slug = page.slug || "";
+  return `<a href="${basePath}${escapeHtml(normalizeSitePath(slug))}" class="nav-link${slug === activeSlug ? " active" : ""}">${escapeHtml(page.title || titleFromSlug(slug))}</a>`;
+}
+
+function expandReusableContentBlocks(
+  profile: Me3SiteProfile,
+  html: string,
+  basePath: string,
+  capabilities: SiteRenderCapabilities,
+): string {
+  const withSiteBlocks = html.replace(
+    /<div\b([^>]*\bdata-me3-site-block=(?:"[^"]*"|'[^']*')[^>]*)>[^<]*<\/div>/gi,
+    (_match, attributes: string) => {
+      const blockType = htmlAttribute(attributes, "data-me3-site-block");
+      if (blockType === "newsletter") {
+        return capabilities.newsletterSignup
+          ? generateNewsletter(profile, { embedded: true })
+          : "";
+      }
+      if (blockType === "testimonials") {
+        return generateTestimonials(profile, basePath);
+      }
+      return "";
+    },
+  );
+
+  return withSiteBlocks.replace(
+    /<div\b([^>]*\bdata-me3-cta-button=(?:"[^"]*"|'[^']*')[^>]*)>[^<]*<\/div>/gi,
+    (_match, attributes: string) => generateEmbeddedCtaButton(attributes),
+  );
+}
+
+function htmlAttribute(attributes: string, name: string): string {
+  const match = attributes.match(
+    new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "i"),
+  );
+  return decodeHtmlEntities(match?.[1] ?? match?.[2] ?? "");
+}
+
+function generateEmbeddedCtaButton(attributes: string): string {
+  const text = htmlAttribute(attributes, "data-text").trim();
+  const rawUrl = htmlAttribute(attributes, "data-url").trim();
+  if (!text || !rawUrl) return "";
+
+  const href = formatHref(rawUrl);
+  if (href === "#") return "";
+  const rawStyle = htmlAttribute(attributes, "data-style");
+  const style =
+    rawStyle === "secondary" || rawStyle === "outline"
+      ? rawStyle
+      : "primary";
+  const iconHtml = iconMarkup(htmlAttribute(attributes, "data-icon"));
+  const icon = iconHtml ? `<span class="btn-icon">${iconHtml}</span>` : "";
+  const external = /^https?:\/\//i.test(href)
+    ? ' target="_blank" rel="noopener"'
+    : "";
+  return `<div class="buttons content-buttons"><a class="cta-button ${style}" href="${escapeHtml(href)}"${external}>${icon}${escapeHtml(text)}</a></div>`;
 }
 
 function generateButtons(profile: Me3SiteProfile): string {
@@ -500,12 +594,12 @@ function normalizeIconName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function generateTestimonials(profile: Me3SiteProfile): string {
+function generateTestimonials(profile: Me3SiteProfile, basePath = "./"): string {
   const testimonials = (profile.testimonials || []).filter((item) => item.name && item.quote);
   if (testimonials.length === 0 || profile.testimonialDisplay === "standalone") return "";
   const cards = testimonials.map((item) => {
     const avatar = item.avatar
-      ? `<img class="testimonial-avatar" src="${escapeHtml(filePathForHtml(item.avatar))}" alt="${escapeHtml(item.name || "")}" loading="lazy" decoding="async">`
+      ? `<img class="testimonial-avatar" src="${escapeHtml(filePathForHtml(item.avatar, basePath))}" alt="${escapeHtml(item.name || "")}" loading="lazy" decoding="async">`
       : `<div class="testimonial-avatar placeholder" aria-hidden="true"><span>${escapeHtml(initialsForName(item.name || ""))}</span></div>`;
     const profileLink = item.profileUrl
       ? `<a class="testimonial-link" href="${escapeHtml(formatHref(item.profileUrl))}" target="_blank" rel="noopener">View site</a>`
@@ -569,16 +663,40 @@ function generateBooking(profile: Me3SiteProfile): string {
   const bookingTypes = normalizeBookingTypes(book);
   if (bookingTypes.length === 0) return "";
   const activeType = bookingTypes[0];
-  const title = normalizeBookingHeading(activeType.title || book.title);
-  const description = activeType.description || book.description || "";
+  const title = normalizeBookingHeading(book.title || activeType.title);
+  const description = plainTextFromMaybeHtml(
+    activeType.description || book.description || "",
+  );
   const tabs =
     bookingTypes.length > 1
-      ? `<div class="booking-type-tablist">${bookingTypes
-          .map((type, index) => `<button type="button" class="booking-type-tab${index === 0 ? " active" : ""}" disabled>${escapeHtml(type.label || bookingTypeLabel(type.type))}</button>`)
+      ? `<div class="booking-type-tablist" role="tablist" aria-label="Booking types">${bookingTypes
+          .map((type, index) => `<button type="button" class="booking-type-tab${index === 0 ? " active" : ""}" role="tab" aria-selected="${index === 0}" data-booking-type-tab="${escapeHtml(type.type || "one_to_one")}">${escapeHtml(type.label || bookingTypeLabel(type.type))}</button>`)
           .join("")}</div>`
       : "";
+  const panels = bookingTypes
+    .map(
+      (type, index) =>
+        `<div class="booking-type-panel" data-booking-type-panel="${escapeHtml(type.type || "one_to_one")}"${index === 0 ? "" : " hidden"}>${generateBookingTypeBody(type, book, profile)}</div>`,
+    )
+    .join("");
+  const tabScript = bookingTypes.length > 1 ? `<script>${bookingTypeTabsScript()}</script>` : "";
 
-  return `<section class="booking" id="booking"><h2>${escapeHtml(title || "Book a session")}</h2>${description ? `<p>${escapeHtml(description)}</p>` : ""}${tabs}${generateBookingTypeBody(activeType, book, profile)}</section>`;
+  return `<section class="booking" id="booking"><h2>${escapeHtml(title || "Book a session")}</h2>${description ? `<p>${escapeHtml(description)}</p>` : ""}${tabs}${panels}${tabScript}</section>`;
+}
+
+function bookingTypeTabsScript(): string {
+  return `(function(){
+  var script=document.currentScript;
+  var root=script&&script.closest('.booking');
+  if(!root)return;
+  var tabs=Array.prototype.slice.call(root.querySelectorAll('[data-booking-type-tab]'));
+  var panels=Array.prototype.slice.call(root.querySelectorAll('[data-booking-type-panel]'));
+  tabs.forEach(function(tab){tab.addEventListener('click',function(){
+    var type=tab.getAttribute('data-booking-type-tab');
+    tabs.forEach(function(item){var active=item===tab;item.classList.toggle('active',active);item.setAttribute('aria-selected',String(active));});
+    panels.forEach(function(panel){panel.hidden=panel.getAttribute('data-booking-type-panel')!==type;});
+  });});
+})();`;
 }
 
 function normalizeBookingHeading(value?: string): string {
@@ -675,9 +793,15 @@ function generateBookingTypeBody(
     const cards = classes.map((offer, index) => {
       const recurrence = offer.recurrence;
       const capacity = typeof offer.capacity === "number" ? `${offer.capacity} seats` : "Unlimited seats";
-      return `<div class="booking-card${index === 0 ? " active" : ""}"><strong>${escapeHtml(offer.title || "Class")}</strong><span>${escapeHtml(recurrence?.weekday || "Weekly")} · ${escapeHtml(recurrence?.startTime || "--:--")} · ${offer.duration || 60} min</span><small>${escapeHtml(capacity)}</small></div>`;
+      const price = formatPricing(offer.pricing);
+      return `<button type="button" class="booking-card${index === 0 ? " active" : ""}" aria-pressed="${index === 0}"><strong>${escapeHtml(offer.title || "Class")}</strong><span>${escapeHtml(recurrence?.frequency === "biweekly" ? "Every 2 weeks" : "Weekly")} · ${escapeHtml(recurrence?.weekday || "")} · ${escapeHtml(recurrence?.startTime || "--:--")} · ${offer.duration || 60} min${price ? ` · ${escapeHtml(price)}` : ""}</span><small>${escapeHtml(capacity)}</small></button>`;
     }).join("");
-    return `<div class="booking-session-preview">${cards}</div><p class="booking-note">Visitors will choose a class, then an upcoming session.</p>`;
+    return generateEventBookingWidget({
+      username: profile.handle || "owner",
+      bookingType: "class",
+      offers: classes,
+      cards,
+    });
   }
 
   if (type.type === "retreat") {
@@ -685,9 +809,15 @@ function generateBookingTypeBody(
     const cards = retreats.map((offer, index) => {
       const dates = offer.startDate && offer.endDate ? ` · ${offer.startDate} → ${offer.endDate}` : "";
       const capacity = typeof offer.capacity === "number" ? `${offer.capacity} spaces` : "Unlimited spaces";
-      return `<div class="booking-card${index === 0 ? " active" : ""}"><strong>${escapeHtml(offer.title || "Retreat")}</strong><span>${offer.durationDays || 1} days${escapeHtml(dates)}</span><small>${escapeHtml(capacity)}</small></div>`;
+      const price = formatPricing(offer.pricing);
+      return `<button type="button" class="booking-card${index === 0 ? " active" : ""}" aria-pressed="${index === 0}"><strong>${escapeHtml(offer.title || "Retreat")}</strong><span>${offer.durationDays || 1} days${escapeHtml(dates)}${price ? ` · ${escapeHtml(price)}` : ""}</span><small>${escapeHtml(capacity)}</small></button>`;
     }).join("");
-    return `<div class="booking-session-preview">${cards}</div><p class="booking-note">Visitors book the fixed retreat dates shown on your live site.</p>`;
+    return generateEventBookingWidget({
+      username: profile.handle || "owner",
+      bookingType: "retreat",
+      offers: retreats,
+      cards,
+    });
   }
 
   const offers =
@@ -715,6 +845,107 @@ function generateBookingTypeBody(
     fallbackDuration: book?.duration || 30,
     cards,
   });
+}
+
+function generateEventBookingWidget(input: {
+  username: string;
+  bookingType: "class" | "retreat";
+  offers: Array<BookingClass | BookingRetreat>;
+  cards: string;
+}): string {
+  if (input.offers.length === 0) return "";
+  const offers = input.offers.map((offer, index) => ({
+    id:
+      offer.id ||
+      slugify(offer.title || `${input.bookingType}-${index + 1}`) ||
+      `${input.bookingType}-${index + 1}`,
+    title: offer.title || (input.bookingType === "class" ? "Class" : "Retreat"),
+    timezone: offer.timezone || "UTC",
+    capacity: typeof offer.capacity === "number" ? offer.capacity : null,
+    startDate:
+      input.bookingType === "class"
+        ? (offer as BookingClass).recurrence?.startDate || ""
+        : (offer as BookingRetreat).startDate || "",
+    pricing: {
+      enabled: offer.pricing?.enabled === true,
+      suggestedAmount: offer.pricing?.suggestedAmount || 0,
+      currency: offer.pricing?.currency || "USD",
+      allowFlexiblePricing: offer.pricing?.allowFlexiblePricing !== false,
+      minimumAmount: offer.pricing?.minimumAmount || 5,
+      paymentMethod:
+        offer.pricing?.paymentMethod === "manual" ? "manual" : "stripe",
+    },
+  }));
+  const first = offers[0];
+  const config = {
+    username: input.username,
+    bookingType: input.bookingType,
+    offers,
+  };
+  const datePicker =
+    input.bookingType === "class"
+      ? `<div class="booking-date-picker"><label for="booking-date-class">Choose a class date:</label><div class="booking-date-input-wrap" data-event-date-wrap><input id="booking-date-class" name="localDate" type="date" required></div></div>`
+      : `<input name="localDate" type="hidden" value="${escapeHtml(first?.startDate || "")}">`;
+  const amountInput = `<input name="amount" type="hidden" min="${escapeHtml(String(first?.pricing.minimumAmount || 5))}" step="1" value="${escapeHtml(String(first?.pricing.suggestedAmount || 0))}">`;
+
+  return `<h3 class="booking-subtitle">Choose ${input.bookingType === "class" ? "a class" : "a retreat"}</h3>
+    <div class="booking-widget event-booking-widget" data-event-booking-widget>
+      <script type="application/json" data-event-booking-config>${jsonForScript(config)}</script>
+      <div class="booking-session-preview">${input.cards}</div>
+      ${datePicker}
+      <p class="booking-status" data-event-booking-status role="status" aria-live="polite"></p>
+      <form class="booking-form" data-event-booking-form>
+        ${amountInput}
+        <div class="booking-selected-time" data-event-occurrence></div>
+        <label>Attendees<input name="quantity" type="number" min="1" max="${escapeHtml(String(first?.capacity || 20))}" step="1" value="1" required></label>
+        <input name="guestName" type="text" autocomplete="name" required placeholder="Your name" aria-label="Your name">
+        <input name="guestEmail" type="email" autocomplete="email" inputmode="email" required pattern="[^\\s@]+@[^\\s@]+\\.[^\\s@]+" title="Enter a valid email address." placeholder="Your email" aria-label="Your email">
+        <textarea name="notes" rows="3" placeholder="Notes (optional)" aria-label="Notes"></textarea>
+        <p class="booking-payment-later" data-event-payment-later hidden>Payment is not taken now. You’ll receive payment details by email after booking.</p>
+        <button type="submit" class="booking-submit">Book ${input.bookingType === "class" ? "class" : "retreat"}</button>
+      </form>
+    </div>
+    <script>${eventBookingWidgetScript()}</script>`;
+}
+
+function eventBookingWidgetScript(): string {
+  return `(function(){
+  var script=document.currentScript;
+  var root=script&&script.previousElementSibling;
+  if(!root||!root.matches('[data-event-booking-widget]'))return;
+  var config=JSON.parse(root.querySelector('[data-event-booking-config]').textContent||'{}');
+  var form=root.querySelector('[data-event-booking-form]');
+  var statusEl=root.querySelector('[data-event-booking-status]');
+  var occurrenceEl=root.querySelector('[data-event-occurrence]');
+  var dateInput=root.querySelector('input[name="localDate"]');
+  var quantityInput=form.elements.quantity;
+  var amountInput=form.elements.amount;
+  var paymentLaterEl=root.querySelector('[data-event-payment-later]');
+  var selectedOfferId=(config.offers[0]&&config.offers[0].id)||'';
+  var occurrence=null;
+  function offer(){return config.offers.find(function(item){return item.id===selectedOfferId;})||config.offers[0];}
+  function setStatus(message,isError){statusEl.textContent=message||'';statusEl.classList.toggle('is-error',!!isError);}
+  function clearParams(){try{var url=new URL(window.location.href);['event_booking','event_booking_pending','purchase','session_id'].forEach(function(key){url.searchParams.delete(key);});window.history.replaceState({},'',url.pathname+(url.search||'')+url.hash);}catch(_error){}}
+  function updateOfferFields(){var selected=offer();if(!selected)return;if(config.bookingType==='retreat')dateInput.value=selected.startDate||'';else if(dateInput&&selected.startDate&&selected.startDate>dateInput.min)dateInput.min=selected.startDate;quantityInput.max=String(selected.capacity||20);amountInput.value=String(selected.pricing.suggestedAmount||0);amountInput.min=String(selected.pricing.minimumAmount||5);paymentLaterEl.hidden=!(selected.pricing.enabled&&selected.pricing.paymentMethod==='manual');}
+  function occurrenceLabel(data){var selected=offer();try{var start=new Date(data.startsAt);var end=new Date(data.endsAt);var options={dateStyle:'medium',timeStyle:'short',timeZone:selected.timezone};return start.toLocaleString(undefined,options)+' – '+end.toLocaleString(undefined,options)+(data.remaining===null?'':data.remaining+' space'+(data.remaining===1?'':'s')+' left');}catch(_error){return data.localDate+' '+data.localTime;}}
+  function loadAvailability(){
+    var selected=offer();var localDate=dateInput&&dateInput.value;
+    occurrence=null;form.classList.remove('is-visible');
+    if(!selected||config.bookingType==='class'&&!localDate){setStatus('Choose a scheduled date.');return;}
+    setStatus('Checking availability...');
+    var endpoint='/api/book/'+encodeURIComponent(config.username)+'/events/'+encodeURIComponent(config.bookingType)+'/'+encodeURIComponent(selected.id)+'/availability';
+    if(localDate)endpoint+='?date='+encodeURIComponent(localDate);
+    fetch(endpoint,{headers:{Accept:'application/json'}})
+      .then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Could not check availability.');return data;});})
+      .then(function(data){if(data.soldOut)throw new Error('This event is sold out.');occurrence=data.occurrence;quantityInput.max=String(data.remaining===null?(selected.capacity||20):Math.max(1,data.remaining));occurrenceEl.textContent=occurrenceLabel({startsAt:data.occurrence.startsAt,endsAt:data.occurrence.endsAt,localDate:data.occurrence.localDate,localTime:data.occurrence.localTime,remaining:data.remaining});form.classList.add('is-visible');setStatus('');})
+      .catch(function(error){setStatus(error.message||'This event is not available.',true);});
+  }
+  root.querySelectorAll('.booking-card').forEach(function(button,index){if(config.offers[index])button.dataset.offerId=config.offers[index].id;button.addEventListener('click',function(){selectedOfferId=button.dataset.offerId||selectedOfferId;root.querySelectorAll('.booking-card').forEach(function(item){var active=item===button;item.classList.toggle('active',active);item.setAttribute('aria-pressed',String(active));});updateOfferFields();loadAvailability();});});
+  if(dateInput&&config.bookingType==='class'){var today=new Date();dateInput.min=String(today.getFullYear())+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');dateInput.addEventListener('change',loadAvailability);}
+  form.addEventListener('submit',function(event){event.preventDefault();if(!occurrence){setStatus('Check availability before booking.',true);return;}if(!form.checkValidity()){form.reportValidity();return;}var selected=offer();var payload={localDate:dateInput.value,quantity:Number(quantityInput.value),guestName:form.elements.guestName.value,guestEmail:form.elements.guestEmail.value,notes:form.elements.notes.value,amount:Number(amountInput.value),returnUrl:window.location.href.split('#')[0]};var paid=selected.pricing&&selected.pricing.enabled&&selected.pricing.paymentMethod!=='manual';var endpoint='/api/book/'+encodeURIComponent(config.username)+'/events/'+encodeURIComponent(config.bookingType)+'/'+encodeURIComponent(selected.id)+'/'+(paid?'checkout-session':'register');setStatus(paid?'Preparing checkout...':'Confirming booking...');fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Booking failed.');return data;});}).then(function(data){if(paid){if(data.url){window.location.href=data.url;return;}throw new Error('Checkout URL missing.');}form.reset();form.classList.remove('is-visible');occurrence=null;setStatus(selected.pricing&&selected.pricing.paymentMethod==='manual'?'Your booking is confirmed. Check your email for payment details.':'Your booking is confirmed.');}).catch(function(error){setStatus(error.message||'Booking failed.',true);});});
+  updateOfferFields();if(config.bookingType==='retreat')loadAvailability();
+  var params=new URLSearchParams(window.location.search);var pending=(config.bookingType+':'+selectedOfferId);var matches=params.get('event_booking_pending')===pending;var success=(params.get('event_booking')==='success'||params.get('purchase')==='success')&&params.get('session_id');if(matches&&success){setStatus('Confirming your paid booking...');fetch('/api/book/'+encodeURIComponent(config.username)+'/events/complete-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:params.get('session_id')})}).then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Payment succeeded, but booking confirmation failed.');return data;});}).then(function(){setStatus('Payment successful. Your booking is confirmed.');clearParams();}).catch(function(error){setStatus(error.message,true);});}else if(matches&&(params.get('event_booking')==='cancelled'||params.get('purchase')==='cancelled')){setStatus('Checkout cancelled. No payment was taken.',true);clearParams();}
+})();`;
 }
 
 function generatePaidBookingWidget(input: {
@@ -805,7 +1036,7 @@ function paidBookingWidgetScript(): string {
   var dayNames=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
   function setStatus(message,isError){statusEl.textContent=message||'';statusEl.classList.toggle('is-error',!!isError);}
   function showReturnStatus(message,isError){setStatus(message,isError);try{root.scrollIntoView({block:'start'});}catch(_error){}}
-  function clearBookingParams(){try{var url=new URL(window.location.href);url.searchParams.delete('booking');url.searchParams.delete('session_id');window.history.replaceState({},'',url.pathname+(url.search||'')+url.hash);}catch(_error){}}
+  function clearBookingParams(){try{var url=new URL(window.location.href);url.searchParams.delete('booking');url.searchParams.delete('purchase');url.searchParams.delete('session_id');window.history.replaceState({},'',url.pathname+(url.search||'')+url.hash);}catch(_error){}}
   function isValidEmail(value){return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(value||'').trim().toLowerCase());}
   function validateForm(){
     var hasInvalidEmail=emailInput&&emailInput.value&&!isValidEmail(emailInput.value);
@@ -962,13 +1193,13 @@ function paidBookingWidgetScript(): string {
       .catch(function(error){setStatus(error.message||'Failed to create checkout.',true);});
   });
   var params=new URLSearchParams(window.location.search);
-  if(params.get('booking')==='success'&&params.get('session_id')){
+  if((params.get('booking')==='success'||params.get('purchase')==='success')&&params.get('session_id')){
     showReturnStatus('Confirming your booking...');
     fetch('/api/book/'+encodeURIComponent(config.username)+'/complete-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:params.get('session_id')})})
       .then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Payment succeeded, but booking confirmation failed.');return data;});})
       .then(function(){showReturnStatus('Payment successful. Your booking is confirmed. A confirmation email will be sent soon');clearBookingParams();})
       .catch(function(error){showReturnStatus(error.message,true);});
-  } else if(params.get('booking')==='cancelled'){
+  } else if(params.get('booking')==='cancelled'||params.get('purchase')==='cancelled'){
     showReturnStatus('Checkout cancelled. No payment was taken.',true);
     clearBookingParams();
   }
@@ -994,7 +1225,10 @@ function slugify(value: string): string {
   return slugifyAscii(value, 48);
 }
 
-function generateNewsletter(profile: Me3SiteProfile): string {
+function generateNewsletter(
+  profile: Me3SiteProfile,
+  options: { embedded?: boolean } = {},
+): string {
   const subscribe = profile.intents?.subscribe;
   if (!subscribe?.enabled) return "";
   const description = subscribe.description
@@ -1003,7 +1237,8 @@ function generateNewsletter(profile: Me3SiteProfile): string {
   const username = profile.handle?.trim();
   if (!username) return "";
   const action = `/api/sites/${encodeURIComponent(username)}/subscribe`;
-  return `<section class="newsletter" id="newsletter"><h2 class="newsletter-title">${escapeHtml(subscribe.title || "Newsletter")}</h2>${description}<form class="newsletter-form" data-newsletter-form action="${escapeHtml(action)}" method="POST"><input type="email" name="email" autocomplete="email" inputmode="email" placeholder="Enter your email" required aria-label="Email address"><label class="newsletter-honeypot" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label><button type="submit">Subscribe</button></form><p class="newsletter-status" role="status" aria-live="polite"></p><p class="newsletter-privacy">No spam. Unsubscribe anytime.</p><script>(function(){var script=document.currentScript;var root=script&&script.parentElement;var form=root&&root.querySelector('[data-newsletter-form]');var statusEl=root&&root.querySelector('.newsletter-status');if(!form||!statusEl)return;form.addEventListener('submit',async function(event){event.preventDefault();var button=form.querySelector('button[type=submit]');var originalLabel=button?button.textContent:'Subscribe';statusEl.classList.remove('is-error');statusEl.textContent='Joining…';if(button){button.disabled=true;button.textContent='Joining…';}try{var response=await fetch(form.action,{method:'POST',headers:{Accept:'application/json'},body:new FormData(form)});var data={};try{data=await response.json();}catch(_error){}if(!response.ok)throw new Error(data.error||'Could not subscribe right now.');form.reset();statusEl.textContent=data.message||'You’re subscribed.';}catch(error){statusEl.classList.add('is-error');statusEl.textContent=error&&error.message?error.message:'Could not subscribe right now.';}finally{if(button){button.disabled=false;button.textContent=originalLabel;}}});})();</script></section>`;
+  const id = options.embedded ? "" : ' id="newsletter"';
+  return `<section class="newsletter"${id}><h2 class="newsletter-title">${escapeHtml(subscribe.title || "Newsletter")}</h2>${description}<form class="newsletter-form" data-newsletter-form action="${escapeHtml(action)}" method="POST"><input type="email" name="email" autocomplete="email" inputmode="email" placeholder="Enter your email" required aria-label="Email address"><label class="newsletter-honeypot" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label><button type="submit">Subscribe</button></form><p class="newsletter-status" role="status" aria-live="polite"></p><p class="newsletter-privacy">No spam. Unsubscribe anytime.</p><script>(function(){var script=document.currentScript;var root=script&&script.parentElement;var form=root&&root.querySelector('[data-newsletter-form]');var statusEl=root&&root.querySelector('.newsletter-status');if(!form||!statusEl)return;form.addEventListener('submit',async function(event){event.preventDefault();var button=form.querySelector('button[type=submit]');var originalLabel=button?button.textContent:'Subscribe';statusEl.classList.remove('is-error');statusEl.textContent='Joining…';if(button){button.disabled=true;button.textContent='Joining…';}try{var response=await fetch(form.action,{method:'POST',headers:{Accept:'application/json'},body:new FormData(form)});var data={};try{data=await response.json();}catch(_error){}if(!response.ok)throw new Error(data.error||'Could not subscribe right now.');form.reset();statusEl.textContent=data.message||'You’re subscribed.';}catch(error){statusEl.classList.add('is-error');statusEl.textContent=error&&error.message?error.message:'Could not subscribe right now.';}finally{if(button){button.disabled=false;button.textContent=originalLabel;}}});})();</script></section>`;
 }
 
 function generateFooter(profile: Me3SiteProfile, allowCustom: boolean): string {
@@ -1271,9 +1506,15 @@ function filePathForHtml(url: string, basePath = "./"): string {
 }
 
 function formatHref(value: string): string {
-  if (/^(https?:|mailto:|tel:|#)/i.test(value)) return value;
-  if (value.includes("@") && !value.includes("/")) return `mailto:${value}`;
-  return `https://${value}`;
+  const trimmed = value.trim();
+  if (!trimmed) return "#";
+  if (/^(https?:|mailto:|tel:|#)/i.test(trimmed)) return trimmed;
+  if (/^(?:\/|\.\.?\/)(?!\/)/.test(trimmed)) return trimmed;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return "#";
+  if (trimmed.includes("@") && !trimmed.includes("/")) {
+    return `mailto:${trimmed}`;
+  }
+  return `https://${trimmed}`;
 }
 
 function formatLinkHref(platform: string, value: string): string {
@@ -1341,6 +1582,42 @@ function getCollectionExcerpt(explicitExcerpt: string | undefined, source: strin
 function contentToPlainText(value: string): string {
   if (!value) return "";
   return markdownToText(stripHtmlTags(value));
+}
+
+function plainTextFromMaybeHtml(value: string): string {
+  if (!value) return "";
+  const withoutMarkup = /<\/?[a-z][^>]*>/i.test(value)
+    ? stripHtmlTags(value)
+    : value;
+  return decodeHtmlEntities(withoutMarkup).replace(/\s+/g, " ").trim();
+}
+
+function decodeHtmlEntities(value: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: " ",
+    quot: '"',
+  };
+  return value.replace(
+    /&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi,
+    (entity, decimal: string | undefined, hex: string | undefined, name: string | undefined) => {
+      if (decimal || hex) {
+        const point = Number.parseInt(decimal || hex || "", hex ? 16 : 10);
+        if (Number.isFinite(point) && point >= 0 && point <= 0x10ffff) {
+          try {
+            return String.fromCodePoint(point);
+          } catch {
+            return entity;
+          }
+        }
+        return entity;
+      }
+      return named[(name || "").toLowerCase()] ?? entity;
+    },
+  );
 }
 
 function stripHtmlTags(value: string): string {
@@ -1538,6 +1815,34 @@ function contentImageCss(): string {
 .content-lightbox-close:focus-visible,.content-lightbox-arrow:focus-visible{outline:3px solid #fff;outline-offset:3px}
 .content-lightbox-count{position:absolute;left:50%;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%);margin:0;color:rgba(255,255,255,.72);font-size:13px}
 @media(max-width:520px){.content .tiptap-gallery{column-count:1}.content-lightbox-stage{padding:64px 16px 88px}.content-lightbox-image{max-height:calc(100dvh - 185px)}.content-lightbox-arrow{top:auto;bottom:max(16px,env(safe-area-inset-bottom));transform:none}.content-lightbox-previous{left:max(16px,env(safe-area-inset-left))}.content-lightbox-next{right:max(16px,env(safe-area-inset-right))}}
+`;
+}
+
+function navigationGroupCss(): string {
+  return `
+.nav{align-items:flex-start}
+.nav-group{position:relative}
+.nav-group>summary{list-style:none;cursor:pointer}
+.nav-group>summary::-webkit-details-marker{display:none}
+.nav-group-toggle{display:flex;align-items:center;gap:6px}
+.nav-group-chevron{display:inline-block;font-size:14px;transition:transform .18s ease}
+.nav-group[open] .nav-group-chevron{transform:rotate(180deg)}
+.nav-submenu{position:absolute;z-index:20;top:calc(100% + 6px);left:50%;display:grid;min-width:180px;padding:7px;transform:translateX(-50%);border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);box-shadow:0 12px 30px rgba(0,0,0,.12)}
+.nav-submenu .nav-link{display:block;border-radius:var(--radius-sm);white-space:nowrap}
+.nav-group-toggle:focus-visible,.nav-submenu .nav-link:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+@media(max-width:560px){.nav-group{width:100%}.nav-group-toggle{justify-content:center}.nav-submenu{position:static;width:100%;box-sizing:border-box;margin-top:4px;transform:none;box-shadow:none}.nav-submenu .nav-link{text-align:center;white-space:normal}}
+`;
+}
+
+function bookingControlsCss(): string {
+  return `
+.booking-type-tablist{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin:20px 0}
+.booking-type-tab{font:inherit;font-weight:800;border:1px solid var(--border);border-radius:999px;padding:10px 16px;background:var(--surface);color:var(--text);cursor:pointer}
+.booking-type-tab.active{border-color:var(--text);background:var(--text);color:var(--surface)}
+.booking-type-tab:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.booking-type-panel[hidden]{display:none}
+.event-booking-widget .booking-form{margin-top:18px}
+.event-booking-widget .booking-submit{width:100%}
 `;
 }
 

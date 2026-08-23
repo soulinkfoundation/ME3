@@ -467,6 +467,17 @@ describe("wizard store", () => {
       expect(store.pages[0].title).toBe("New Title");
     });
 
+    it("normalizes one-level navigation group labels", () => {
+      const store = useWizardStore();
+      store.addPage("Private Sessions");
+
+      store.updatePage(0, { navigationGroup: "  Services   and offers  " });
+      expect(store.pages[0].navigationGroup).toBe("Services and offers");
+
+      store.updatePage(0, { navigationGroup: "" });
+      expect(store.pages[0].navigationGroup).toBeUndefined();
+    });
+
     it("keeps auto-generated page slugs in sync with title changes", () => {
       const store = useWizardStore();
       store.addPage("Old Title");
@@ -732,6 +743,18 @@ describe("wizard store", () => {
 
       expect(me3.pages).toHaveLength(1);
       expect(me3.pages?.[0].slug).toBe("about");
+    });
+
+    it("includes page navigation groups in the private site source", () => {
+      const store = useWizardStore();
+      store.profile.name = "Test User";
+      store.pagesEnabled = true;
+      store.addPage("Private Sessions");
+      store.updatePage(0, { navigationGroup: "Services" });
+
+      const me3 = store.generateMe3Json() as any;
+
+      expect(me3.pages?.[0].navigationGroup).toBe("Services");
     });
 
     it("should include custom blog and shop titles when set", () => {
@@ -1140,7 +1163,7 @@ describe("wizard store", () => {
       const siteProfile = {
         name: "Existing User",
         pages: [
-          { slug: "services", title: "Services", file: "services.md", visible: true },
+          { slug: "services", title: "Services", file: "services.md", visible: true, navigationGroup: "Work with me" },
           { slug: "about", title: "About", file: "about.md", visible: true },
         ],
       };
@@ -1155,6 +1178,7 @@ describe("wizard store", () => {
         "services",
         "about",
       ]);
+      expect(store.pages[0].navigationGroup).toBe("Work with me");
     });
   });
 
@@ -1605,6 +1629,69 @@ describe("wizard store", () => {
         requires: ["localDate", "localTime", "guestName", "guestEmail"],
         description: "Create a checkout session for a paid booking offer.",
       });
+    });
+
+    it("publishes bookable class recurrence anchors and retreat dates", () => {
+      const store = useWizardStore();
+      store.profile.name = "Event Host";
+      store.setBooking({
+        enabled: true,
+        oneToOneEnabled: false,
+        classEnabled: true,
+        retreatEnabled: true,
+      });
+      const classOffer = store.profile.booking.classOffers[0];
+      const retreatOffer = store.profile.booking.retreatOffers[0];
+      store.updateClassOffer(classOffer.id, {
+        title: "Movement class",
+        recurrence: {
+          frequency: "biweekly",
+          weekday: "monday",
+          startTime: "18:00",
+          startDate: "2026-09-07",
+        },
+        timezone: "Europe/Dublin",
+        capacity: 12,
+      });
+      store.updateRetreatOffer(retreatOffer.id, {
+        title: "Autumn retreat",
+        startDate: "2026-10-24",
+        startTime: "10:00",
+        endDate: "2026-10-25",
+        endTime: "16:00",
+        timezone: "Europe/Dublin",
+        capacity: 6,
+      });
+
+      const book = (store.generateMe3Json() as any).intents.book;
+      expect(book.bookingTypes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "class",
+            classes: [
+              expect.objectContaining({
+                recurrence: {
+                  frequency: "biweekly",
+                  weekday: "monday",
+                  startTime: "18:00",
+                  startDate: "2026-09-07",
+                },
+                capacity: 12,
+              }),
+            ],
+          }),
+          expect.objectContaining({
+            type: "retreat",
+            retreats: [
+              expect.objectContaining({
+                startDate: "2026-10-24",
+                endDate: "2026-10-25",
+                capacity: 6,
+              }),
+            ],
+          }),
+        ]),
+      );
     });
 
     it("should load booking config from site content", () => {

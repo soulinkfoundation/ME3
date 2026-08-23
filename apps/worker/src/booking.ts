@@ -834,6 +834,7 @@ export function serializeBooking(booking: DbBooking) {
     startsAt: booking.starts_at,
     endsAt: booking.ends_at,
     durationMinutes: booking.duration_minutes,
+    quantity: booking.quantity || 1,
     status: booking.status,
     notes: booking.notes,
     paymentStatus: booking.payment_status || "not_required",

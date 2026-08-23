@@ -185,6 +185,7 @@ export interface WizardClassOffer {
     frequency: "weekly" | "biweekly";
     weekday: WizardBookingWeekday;
     startTime: string;
+    startDate: string;
   };
   pricing?: WizardBookingPricing;
   capacity: number | null;
@@ -248,6 +249,7 @@ export interface WizardPage {
   title: string;
   slug: string;
   slugCustomized?: boolean;
+  navigationGroup?: string;
   content: string;
   images: WizardPageImage[];
   visible?: boolean;
@@ -523,6 +525,7 @@ type PublishedBookingClass = {
     frequency?: "weekly" | "biweekly";
     weekday?: WizardBookingWeekday;
     startTime?: string;
+    startDate?: string;
   };
   pricing?: WizardBookingPricing;
   capacity?: number | null;
@@ -753,6 +756,11 @@ function createDefaultClassOffer(
         /^\d{2}:\d{2}$/.test(recurrence.startTime)
           ? recurrence.startTime
           : "18:00",
+      startDate:
+        typeof recurrence?.startDate === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(recurrence.startDate)
+          ? recurrence.startDate
+          : "",
     },
     ...(pricing ? { pricing } : {}),
     capacity: (() => {
@@ -1232,6 +1240,12 @@ function inferSlugCustomized(
 ): boolean {
   if (typeof stored === "boolean") return stored;
   return slug !== (generateSlug(title) || fallback);
+}
+
+function normalizeNavigationGroup(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().replace(/\s+/g, " ").slice(0, 40);
+  return normalized || undefined;
 }
 
 function normalizeBusinessField(value: unknown): string {
@@ -2403,6 +2417,12 @@ export const useWizardStore = defineStore("wizard", () => {
     const nextPage = {
       ...current,
       ...updates,
+      navigationGroup: Object.prototype.hasOwnProperty.call(
+        updates,
+        "navigationGroup",
+      )
+        ? normalizeNavigationGroup(updates.navigationGroup)
+        : normalizeNavigationGroup(current.navigationGroup),
       slug: nextSlug,
       slugCustomized: nextSlugCustomized,
     };
@@ -3164,6 +3184,9 @@ export const useWizardStore = defineStore("wizard", () => {
         title: p.title,
         file: `${p.slug}.md`,
         visible: p.visible !== false,
+        ...(normalizeNavigationGroup(p.navigationGroup)
+          ? { navigationGroup: normalizeNavigationGroup(p.navigationGroup) }
+          : {}),
       }));
     }
 
@@ -3925,6 +3948,7 @@ export const useWizardStore = defineStore("wizard", () => {
         };
         pages.value = (state.pages || []).map((p: any) => ({
           ...p,
+          navigationGroup: normalizeNavigationGroup(p.navigationGroup),
           slugCustomized: inferSlugCustomized(
             typeof p.title === "string" ? p.title : "",
             typeof p.slug === "string" ? p.slug : "",
@@ -4211,6 +4235,7 @@ export const useWizardStore = defineStore("wizard", () => {
         title: string;
         file: string;
         visible: boolean;
+        navigationGroup?: string;
       }>;
       footer?: any;
       buttons?: Array<{
@@ -4479,6 +4504,7 @@ export const useWizardStore = defineStore("wizard", () => {
                   : "weekly",
               weekday: offer.recurrence?.weekday || "monday",
               startTime: offer.recurrence?.startTime || "18:00",
+              startDate: offer.recurrence?.startDate || "",
             },
             pricing: offer.pricing
               ? {
@@ -4606,10 +4632,18 @@ export const useWizardStore = defineStore("wizard", () => {
     };
 
     // Map pages
-    const pageVisibility = new Map<string, boolean>();
+    const pageMetadata = new Map<
+      string,
+      { visible: boolean; navigationGroup?: string }
+    >();
     if (Array.isArray(siteProfile.pages)) {
       for (const page of siteProfile.pages) {
-        if (page?.slug) pageVisibility.set(page.slug, page.visible !== false);
+        if (page?.slug) {
+          pageMetadata.set(page.slug, {
+            visible: page.visible !== false,
+            navigationGroup: normalizeNavigationGroup(page.navigationGroup),
+          });
+        }
       }
     }
 
@@ -4639,7 +4673,8 @@ export const useWizardStore = defineStore("wizard", () => {
       slugCustomized: inferSlugCustomized(p.title, p.slug, "page"),
       content: resolveLoadedContentAssetUrls(p.content),
       images: [],
-      visible: pageVisibility.get(p.slug) ?? true,
+      visible: pageMetadata.get(p.slug)?.visible ?? true,
+      navigationGroup: pageMetadata.get(p.slug)?.navigationGroup,
     }));
 
     const siteBlogPosts = sitePosts.filter(

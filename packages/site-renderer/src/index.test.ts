@@ -25,6 +25,121 @@ describe("site generator", () => {
     expect(files["me.json"]).toBeUndefined();
   });
 
+  it("renders one-level navigation groups without changing page URLs", async () => {
+    const files = await generateSiteHtml(
+      {
+        name: "Grouped Site",
+        pages: [
+          {
+            slug: "about",
+            title: "About",
+            file: "about.md",
+          },
+          {
+            slug: "private-sessions",
+            title: "Private Sessions",
+            file: "private-sessions.md",
+            navigationGroup: "Services",
+          },
+          {
+            slug: "monthly-events",
+            title: "Monthly Events",
+            file: "monthly-events.md",
+            navigationGroup: "Services",
+          },
+        ],
+      },
+      [
+        { name: "about.md", content: "About" },
+        { name: "private-sessions.md", content: "Sessions" },
+        { name: "monthly-events.md", content: "Events" },
+      ],
+    );
+
+    expect(files["index.html"].match(/<details class="nav-group/g)).toHaveLength(1);
+    expect(files["index.html"]).toContain(
+      '<summary class="nav-link nav-group-toggle">Services',
+    );
+    expect(files["index.html"]).toContain('href="./private-sessions"');
+    expect(files["index.html"]).toContain('href="./monthly-events"');
+    expect(files["index.html"]).toContain('href="./about"');
+    expect(files["private-sessions.html"]).toContain(
+      'class="nav-group active"',
+    );
+    expect(files["private-sessions.html"]).toContain(
+      'class="nav-link active">Private Sessions</a>',
+    );
+  });
+
+  it("expands reusable editor blocks from the global site configuration", async () => {
+    const files = await generateSiteHtml(
+      {
+        name: "Reusable Blocks",
+        handle: "reusable-blocks",
+        testimonials: [
+          { name: "Jamie", quote: "This was exactly what I needed." },
+        ],
+        intents: {
+          subscribe: {
+            enabled: true,
+            title: "Monthly notes",
+            description: "One useful note each month.",
+          },
+        },
+        pages: [{ slug: "services", title: "Services", file: "services.md" }],
+      },
+      [
+        {
+          name: "services.md",
+          content: `<p>Choose your next step.</p>
+            <div data-me3-cta-button="true" data-text="Book &amp; begin" data-url="/book" data-style="outline" data-icon=""></div>
+            <div data-me3-site-block="testimonials"></div>
+            <div data-me3-site-block="newsletter"></div>`,
+        },
+      ],
+    );
+
+    const services = files["services.html"];
+    expect(services).toContain(
+      '<a class="cta-button outline" href="/book">Book &amp; begin</a>',
+    );
+    expect(services).toContain("This was exactly what I needed.");
+    expect(services).toContain("Monthly notes");
+    expect(services).toContain(
+      'action="/api/sites/reusable-blocks/subscribe"',
+    );
+    expect(services).not.toContain("data-me3-site-block");
+    expect(services).not.toContain("data-me3-cta-button");
+    expect(services).not.toContain('id="newsletter"');
+  });
+
+  it("renders legacy rich booking intros as plain text", async () => {
+    const files = await generateSiteHtml(
+      {
+        name: "Booking Intro",
+        handle: "booking-intro",
+        intents: {
+          book: {
+            enabled: true,
+            title: "Book a session",
+            description: "<p>Choose a path &amp; begin.</p>",
+            availability: {
+              timezone: "Europe/Dublin",
+              windows: { monday: ["09:00"] },
+            },
+          },
+        },
+      },
+      [],
+    );
+
+    expect(files["index.html"]).toContain(
+      "<p>Choose a path &amp; begin.</p>",
+    );
+    expect(files["index.html"]).not.toContain("&lt;p&gt;");
+    expect(files["index.html"]).not.toContain("&amp;amp;");
+  });
+
   it("keeps captions attached and adds one accessible gallery to image pages", async () => {
     const files = await generateSiteHtml(
       {
@@ -432,6 +547,80 @@ describe("site generator", () => {
     expect(html).toContain("'/free'");
     expect(html).not.toContain("Private payment link");
     expect(html).toContain("Confirm Booking");
+  });
+
+  it("renders functional class and retreat registration flows with attendee quantities", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        handle: "events",
+        name: "Events",
+        intents: {
+          book: {
+            enabled: true,
+            bookingTypes: [
+              {
+                type: "class",
+                label: "Classes",
+                classes: [
+                  {
+                    id: "movement-class",
+                    title: "Movement class",
+                    duration: 60,
+                    timezone: "Europe/Dublin",
+                    recurrence: {
+                      frequency: "weekly",
+                      weekday: "monday",
+                      startTime: "18:00",
+                      startDate: "2026-09-07",
+                    },
+                    capacity: 12,
+                  },
+                ],
+              },
+              {
+                type: "retreat",
+                label: "Retreats",
+                retreats: [
+                  {
+                    id: "autumn-retreat",
+                    title: "Autumn retreat",
+                    durationDays: 2,
+                    startDate: "2026-10-24",
+                    startTime: "10:00",
+                    endDate: "2026-10-25",
+                    endTime: "16:00",
+                    timezone: "Europe/Dublin",
+                    capacity: 6,
+                    pricing: {
+                      enabled: true,
+                      suggestedAmount: 300,
+                      currency: "EUR",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      [],
+    );
+
+    const html = files["index.html"];
+    expect(html).toContain('data-booking-type-tab="class"');
+    expect(html).toContain('data-booking-type-tab="retreat"');
+    expect(html).not.toContain("data-booking-type-tab=\"class\" disabled");
+    expect(html).toContain('data-event-booking-widget');
+    expect(html).toContain('name="quantity"');
+    expect(html).toContain(
+      "'/events/'+encodeURIComponent(config.bookingType)+'/'+encodeURIComponent(selected.id)+'/availability'",
+    );
+    expect(html).toContain("(paid?'checkout-session':'register')");
+    expect(html).toContain("event_booking_pending");
+    expect(html).toContain("params.get('purchase')==='success'");
+    expect(html).toContain('"bookingType":"class"');
+    expect(html).toContain('"bookingType":"retreat"');
   });
 
   it("publishes me3 vibe with rounded green CTAs and rounded blocks", async () => {
