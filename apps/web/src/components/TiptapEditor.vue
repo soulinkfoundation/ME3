@@ -717,7 +717,7 @@ const editor = useEditor({
       bulletList: {},
       orderedList: {},
       blockquote: {},
-      horizontalRule: {},
+      horizontalRule: false,
     }),
     Placeholder.configure({
       placeholder: props.placeholder ?? "Start writing...",
@@ -730,7 +730,11 @@ const editor = useEditor({
       },
     }),
     Underline,
-    HorizontalRule,
+    HorizontalRule.configure({
+      HTMLAttributes: {
+        class: "tiptap-divider",
+      },
+    }),
     TaskList.configure({
       HTMLAttributes: {
         class: "tiptap-task-list",
@@ -1765,6 +1769,13 @@ defineExpose({
   padding: 0.1em 0 0.1em 1em;
   border-left: 3px solid var(--ui-border-strong, var(--color-border, #ddd));
   color: var(--ui-text-muted, var(--color-text-muted, #5d6368));
+}
+
+.editor-content-wrapper :deep(.ProseMirror hr.tiptap-divider) {
+  margin: 1.5em 0;
+  border: 0;
+  border-top: 1px solid
+    var(--ui-border-strong, var(--color-border, #d5d8d7));
 }
 
 .editor-content-wrapper :deep(.ProseMirror) img {

@@ -125,6 +125,7 @@ vi.mock("@/utils/imageCompression", () => ({
 }));
 
 import Link from "@tiptap/extension-link";
+import HorizontalRule from "@tiptap/extension-horizontal-rule";
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
@@ -300,7 +301,7 @@ describe("TiptapEditor", () => {
     );
   });
 
-  it("should allow markdown shortcut input rules for h1 through h3 headings", () => {
+  it("should configure markdown shortcuts without duplicating the divider extension", () => {
     mount(TiptapEditor, {
       props: {
         modelValue: "",
@@ -313,9 +314,14 @@ describe("TiptapEditor", () => {
         bulletList: {},
         orderedList: {},
         blockquote: {},
-        horizontalRule: {},
+        horizontalRule: false,
       })
     );
+    expect(HorizontalRule.configure).toHaveBeenCalledWith({
+      HTMLAttributes: {
+        class: "tiptap-divider",
+      },
+    });
   });
 
   it("should configure task list support", () => {
