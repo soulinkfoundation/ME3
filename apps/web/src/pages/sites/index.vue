@@ -118,6 +118,7 @@ function editSiteRoute(site: Site, step?: "basics" | "publish") {
   return {
     path: "/create",
     query: {
+      siteId: site.id,
       site: site.username,
       return: "/sites",
       ...(step ? { step } : {}),

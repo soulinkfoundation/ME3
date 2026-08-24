@@ -316,6 +316,110 @@ describe("wizard store", () => {
     });
   });
 
+  describe("site-scoped drafts", () => {
+    it("keeps profile and two organization drafts isolated by stable site id", () => {
+      const store = useWizardStore();
+      store.reconcileSession("owner-1");
+
+      expect(
+        store.activateDraftContext({
+          siteId: "site-profile",
+          username: "owner",
+          role: "profile",
+        }).restored,
+      ).toBe(false);
+      store.updateProfile({ name: "Owner", bio: "Profile draft" });
+      store.pages = [
+        {
+          title: "Profile page",
+          slug: "profile-page",
+          content: "profile",
+          images: [],
+          visible: true,
+        },
+      ];
+      store.saveToStorage();
+
+      store.activateDraftContext({
+        siteId: "site-studio",
+        username: "studio",
+        role: "organization",
+      });
+      expect(store.profile.name).toBe("");
+      expect(store.pages).toEqual([]);
+      store.updateProfile({ name: "Studio", bio: "Studio draft" });
+
+      store.activateDraftContext({
+        siteId: "site-community",
+        username: "community",
+        role: "organization",
+      });
+      expect(store.profile.name).toBe("");
+      expect(store.username).toBe("community");
+      store.updateProfile({ name: "Community", bio: "Community draft" });
+
+      store.activateDraftContext({
+        siteId: "site-studio",
+        username: "studio",
+        role: "organization",
+      });
+      expect(store.profile.name).toBe("Studio");
+      expect(store.profile.bio).toBe("Studio draft");
+      expect(store.pages).toEqual([]);
+
+      store.activateDraftContext({
+        siteId: "site-profile",
+        username: "owner",
+        role: "profile",
+      });
+      expect(store.profile.name).toBe("Owner");
+      expect(store.profile.bio).toBe("Profile draft");
+      expect(store.pages.map((page) => page.slug)).toEqual(["profile-page"]);
+    });
+
+    it("migrates a matching legacy profile draft into its scoped key once", () => {
+      localStorage.setItem(
+        "me3_wizard_state",
+        JSON.stringify({
+          ownerUserId: "owner-1",
+          siteRole: "profile",
+          username: "owner-new",
+          profile: { name: "Recovered Owner", handle: "owner-new" },
+        }),
+      );
+      const store = useWizardStore();
+      store.reconcileSession("owner-1");
+
+      const result = store.activateDraftContext({
+        siteId: "site-profile",
+        username: "owner",
+        role: "profile",
+      });
+
+      expect(result).toEqual({ restored: true, migratedLegacy: true });
+      expect(store.profile.name).toBe("Recovered Owner");
+      expect(store.username).toBe("owner-new");
+      expect(store.selectedSiteId).toBe("site-profile");
+      expect(localStorage.getItem("me3_wizard_state")).toBeNull();
+    });
+
+    it("uses role-appropriate core steps without duplicating the wizard", () => {
+      const store = useWizardStore();
+      store.activateDraftContext({ role: "organization" });
+
+      expect(store.stepIds).not.toContain("goals");
+      expect(store.stepIds).not.toContain("wheel-of-life");
+      expect(store.stepNames).toContain("Logo");
+      expect(store.stepNames).toContain("Positioning");
+
+      store.activateDraftContext({ role: "profile" });
+      expect(store.stepIds).toContain("goals");
+      expect(store.stepIds).toContain("wheel-of-life");
+      expect(store.stepNames).toContain("Avatar");
+      expect(store.stepNames).toContain("Mission");
+    });
+  });
+
   describe("profile updates", () => {
     it("should update profile", () => {
       const store = useWizardStore();

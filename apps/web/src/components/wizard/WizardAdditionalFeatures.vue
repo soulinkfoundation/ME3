@@ -4,6 +4,7 @@ import { useWizardStore } from "../../stores/wizard";
 import UiIcon from "../UiIcon.vue";
 
 const wizard = useWizardStore();
+const isOrganization = computed(() => wizard.siteRole === "organization");
 
 // Feature toggles
 const linksEnabled = computed({
@@ -98,8 +99,11 @@ const productsEnabled = computed({
   <div class="step-additional-features">
     <h2>Enable additional features</h2>
     <p class="section-desc">
-      Your ME3 profile can also work as a fully functional website. Enable any
-      features you want to add.
+      {{
+        isOrganization
+          ? "Choose the website features this site needs."
+          : "Your ME3 profile can also work as a fully functional website. Enable any features you want to add."
+      }}
     </p>
 
     <div class="feature-cards">
@@ -112,12 +116,16 @@ const productsEnabled = computed({
           <div class="feature-text">
             <span class="feature-name">Links</span>
             <span class="feature-desc">
-              Add social profiles and other places people can find you online.
+              {{
+                isOrganization
+                  ? "Add social channels and other places people can find this site online."
+                  : "Add social profiles and other places people can find you online."
+              }}
             </span>
           </div>
         </div>
         <label class="feature-toggle">
-          <input v-model="linksEnabled" type="checkbox" />
+          <input v-model="linksEnabled" type="checkbox" aria-label="Enable links" />
           <span class="feature-toggle-ui" />
         </label>
       </div>
@@ -136,7 +144,11 @@ const productsEnabled = computed({
           </div>
         </div>
         <label class="feature-toggle">
-          <input v-model="callToActionEnabled" type="checkbox" />
+          <input
+            v-model="callToActionEnabled"
+            type="checkbox"
+            aria-label="Enable call-to-action"
+          />
           <span class="feature-toggle-ui" />
         </label>
       </div>
@@ -155,7 +167,7 @@ const productsEnabled = computed({
           </div>
         </div>
         <label class="feature-toggle">
-          <input v-model="pagesEnabled" type="checkbox" />
+          <input v-model="pagesEnabled" type="checkbox" aria-label="Enable pages" />
           <span class="feature-toggle-ui" />
         </label>
       </div>
@@ -175,7 +187,11 @@ const productsEnabled = computed({
           </div>
         </div>
         <label class="feature-toggle">
-          <input type="checkbox" v-model="newsletterEnabled" />
+          <input
+            v-model="newsletterEnabled"
+            type="checkbox"
+            aria-label="Enable newsletter"
+          />
           <span class="feature-toggle-ui" />
         </label>
       </div>
@@ -189,13 +205,20 @@ const productsEnabled = computed({
           <div class="feature-text">
             <span class="feature-name"> Bookings </span>
             <span class="feature-desc">
-              Let people book time with you and keep availability in sync with
-              your calendar.
+              {{
+                isOrganization
+                  ? "Let visitors book with this organization and keep its availability in sync."
+                  : "Let people book time with you and keep availability in sync with your calendar."
+              }}
             </span>
           </div>
         </div>
         <label class="feature-toggle">
-          <input type="checkbox" v-model="bookingsEnabled" />
+          <input
+            v-model="bookingsEnabled"
+            type="checkbox"
+            aria-label="Enable bookings"
+          />
           <span class="feature-toggle-ui" />
         </label>
       </div>
@@ -209,7 +232,7 @@ const productsEnabled = computed({
           <div class="feature-text">
             <span class="feature-name">Blog</span>
             <span class="feature-desc">
-              Publish articles, notes, videos, or updates. Your main menu title
+              Publish articles, notes, videos, or updates. The main menu title
               also becomes the page URL.
             </span>
             <div v-if="blogEnabled" class="feature-field">
@@ -229,7 +252,7 @@ const productsEnabled = computed({
           </div>
         </div>
         <label class="feature-toggle">
-          <input type="checkbox" v-model="blogEnabled" />
+          <input v-model="blogEnabled" type="checkbox" aria-label="Enable blog" />
           <span class="feature-toggle-ui" />
         </label>
       </div>
@@ -249,7 +272,11 @@ const productsEnabled = computed({
           </div>
         </div>
         <label class="feature-toggle">
-          <input v-model="productsEnabled" type="checkbox" />
+          <input
+            v-model="productsEnabled"
+            type="checkbox"
+            aria-label="Enable products"
+          />
           <span class="feature-toggle-ui" />
         </label>
       </div>
@@ -269,7 +296,11 @@ const productsEnabled = computed({
           </div>
         </div>
         <label class="feature-toggle">
-          <input type="checkbox" v-model="testimonialsEnabled" />
+          <input
+            v-model="testimonialsEnabled"
+            type="checkbox"
+            aria-label="Enable testimonials"
+          />
           <span class="feature-toggle-ui" />
         </label>
       </div>

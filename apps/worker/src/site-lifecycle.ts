@@ -148,6 +148,27 @@ export async function renameProfileSite(
       "Only the ME3 Profile can be renamed through this flow.",
     );
   }
+  return renamePersistentSite(env, {
+    ownerId: input.ownerId,
+    siteId: site.id,
+    expectedRole: "profile",
+    toUsername: input.toUsername,
+  });
+}
+
+export async function renamePersistentSite(
+  env: Env,
+  input: {
+    ownerId: string;
+    siteId: string;
+    expectedRole: SiteRole;
+    toUsername: string;
+  },
+): Promise<DbSite> {
+  const site = await getSiteById(env, input.siteId, input.ownerId);
+  if (!site || site.site_role !== input.expectedRole) {
+    throw new SiteLifecycleError("site_not_found", "Site not found");
+  }
   if (site.username === input.toUsername) return site;
 
   const usernameOwner = await getSiteByUsername(env, input.ownerId, input.toUsername);
@@ -165,9 +186,9 @@ export async function renameProfileSite(
     await env.DB.prepare(
       `UPDATE sites
        SET username = ?, updated_at = datetime('now')
-       WHERE id = ? AND user_id = ? AND site_role = 'profile'`,
+       WHERE id = ? AND user_id = ? AND site_role = ?`,
     )
-      .bind(input.toUsername, site.id, input.ownerId)
+      .bind(input.toUsername, site.id, input.ownerId, input.expectedRole)
       .run();
   } catch (error) {
     await deleteSiteAssetKeys(env, copiedAssetKeys).catch((cleanupError) => {
@@ -178,7 +199,7 @@ export async function renameProfileSite(
 
   const renamed = await getSiteById(env, site.id, input.ownerId);
   if (!renamed) {
-    throw new Error("Renamed profile site could not be loaded");
+    throw new Error("Renamed site could not be loaded");
   }
   await deleteSiteAssetKeys(
     env,
@@ -186,7 +207,7 @@ export async function renameProfileSite(
       key.replace(siteAssetPrefix(input.toUsername), siteAssetPrefix(site.username)),
     ),
   ).catch((error) => {
-    console.warn("Profile rename left obsolete site asset copies:", error);
+    console.warn("Site rename left obsolete site asset copies:", error);
   });
   return renamed;
 }

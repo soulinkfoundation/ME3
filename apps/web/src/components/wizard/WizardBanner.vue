@@ -161,7 +161,7 @@ function removeBanner() {
         <img
           v-if="wizard.profile.banner"
           :src="wizard.profile.banner"
-          alt="Your banner"
+          alt="Site banner"
         />
         <span v-else class="placeholder">
           <UiIcon name="Image" :size="18" aria-hidden="true" />
@@ -224,7 +224,7 @@ function removeBanner() {
     <!-- Cropper Modal -->
     <div v-if="showCropper" class="cropper-modal">
       <div class="cropper-container">
-        <h3>Crop your banner</h3>
+        <h3>Crop the site banner</h3>
 
         <div class="cropper-wrapper">
           <Cropper

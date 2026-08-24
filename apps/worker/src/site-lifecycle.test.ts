@@ -213,6 +213,50 @@ describe("site role API lifecycle", () => {
     });
   });
 
+  it("renames only the organization selected by stable site id", async () => {
+    const profile = await postSite(app, env, { username: "owner" });
+    const studio = await postSite(app, env, {
+      username: "studio",
+      siteRole: "organization",
+    });
+    const community = await postSite(app, env, {
+      username: "community",
+      siteRole: "organization",
+    });
+
+    const renamed = await postSite(app, env, {
+      username: "new-studio",
+      siteRole: "organization",
+      renameFromSiteId: studio.body.site.id,
+    });
+
+    expect(renamed.response.status).toBe(200);
+    expect(renamed.body).toMatchObject({
+      renamed: true,
+      site: {
+        id: studio.body.site.id,
+        username: "new-studio",
+        site_role: "organization",
+      },
+    });
+    expect(
+      db.raw.prepare("SELECT username FROM sites WHERE id = ?").get(profile.body.site.id),
+    ).toEqual({ username: "owner" });
+    expect(
+      db.raw.prepare("SELECT username FROM sites WHERE id = ?").get(community.body.site.id),
+    ).toEqual({ username: "community" });
+
+    const wrongRole = await postSite(app, env, {
+      username: "should-not-rename",
+      siteRole: "profile",
+      renameFromSiteId: studio.body.site.id,
+    });
+    expect(wrongRole.response.status).toBe(404);
+    expect(
+      db.raw.prepare("SELECT username FROM sites WHERE id = ?").get(studio.body.site.id),
+    ).toEqual({ username: "new-studio" });
+  });
+
   it("enforces three additional sites and releases quota after deletion", async () => {
     const siteAssets = new MemoryR2Bucket();
     env.SITE_ASSETS = siteAssets as unknown as R2Bucket;

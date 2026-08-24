@@ -5,6 +5,7 @@ import ConfirmationDialog from "./ConfirmationDialog.vue";
 import { permanentPublicSiteUrl } from "../utils/publicSiteUrl";
 
 const props = defineProps<{
+  siteId?: string;
   username: string;
   showSettingsLink?: boolean;
   sitePublished?: boolean;
@@ -406,7 +407,12 @@ watch(
             class="button secondary"
             :to="{
               path: '/create',
-              query: { site: username, step: 'publish', return: `/sites/${username}` },
+              query: {
+                ...(siteId ? { siteId } : {}),
+                site: username,
+                step: 'publish',
+                return: `/sites/${username}`,
+              },
             }"
           >
             Publish site

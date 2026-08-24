@@ -12,7 +12,7 @@ import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
-import { useWizardStore, type WizardStepId } from "../stores/wizard";
+import type { WizardStepId } from "../stores/wizard";
 import { resolveUiIconName, type UiIconName } from "../utils/icons";
 
 definePage({
@@ -228,7 +228,6 @@ const dashboardCardRegistry = new Set([
 const { toastFromUnknown, toastSuccess } = useAppToast();
 const auth = useAuthStore();
 const sites = useSitesStore();
-const wizard = useWizardStore();
 const router = useRouter();
 const dashboard = ref<MissionDashboardResponse | null>(null);
 const liveDailyBriefing = ref<DailyBriefingCardData>(null);
@@ -524,34 +523,16 @@ async function openWizardEditor(step: WizardStepId) {
   try {
     await sites.ensureSites();
     const profileSite = sites.sites.find(
-      (site) => (site.site_type || "profile") === "profile",
+      (site) => site.site_role === "profile",
     );
-    if (profileSite?.username) {
-      const localHandle = (wizard.username || wizard.profile.handle)
-        .trim()
-        .toLowerCase();
-      const preserveLocalDraft =
-        wizard.needsPublish &&
-        localHandle === profileSite.username.trim().toLowerCase() &&
-        Boolean(wizard.profile.name.trim());
-      if (!preserveLocalDraft) {
-        const content = await sites.getSiteContent(profileSite.username);
-        if (content?.ok && content.profile) {
-          wizard.loadFromSiteContent(
-            content.profile,
-            content.pages,
-            content.posts,
-            content.products || [],
-            profileSite.username,
-            profileSite.published_at || null,
-          );
-        }
-      }
-    }
-    wizard.goToStepId(step, { enableOptional: true });
     await router.push({
       path: "/create",
-      query: { step, return: "/mission-control" },
+      query: {
+        ...(profileSite?.id ? { siteId: profileSite.id } : {}),
+        ...(profileSite?.username ? { site: profileSite.username } : {}),
+        step,
+        return: "/mission-control",
+      },
     });
   } catch (err) {
     toastFromUnknown(err, "The ME3 profile editor could not be opened");

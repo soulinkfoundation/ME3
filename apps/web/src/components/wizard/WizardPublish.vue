@@ -156,6 +156,7 @@ function exportProductToMarkdown(product: WizardProduct) {
 }
 
 const wizard = useWizardStore();
+const isOrganization = computed(() => wizard.siteRole === "organization");
 const auth = useAuthStore();
 const router = useRouter();
 const {
@@ -429,14 +430,14 @@ async function downloadZip() {
     }
 
     // Add a README
-    const readme = `# ${wizard.profile.name}'s me3 site
+    const readme = `# ${wizard.profile.name} ME3 site
 
-This folder contains your portable me3 site.
+This folder contains a portable ME3 site.
 
 ## Files
 - \`index.html\` - Self-contained site viewer
-- \`me.json\` - Your profile data (me3 protocol)
-- \`files/\` - Your images
+- \`me.json\` - Site data (ME3 protocol)
+- \`files/\` - Site images
 ${wizard.pagesEnabled && wizard.pages.length > 0 ? wizard.pages.map((p) => `- \`${p.slug}.md\` - ${p.title}`).join("\n") : ""}
 ${wizard.blogEnabled && wizard.posts.length > 0 ? wizard.posts.map((p) => `- \`blog/${p.slug}.md\` - ${p.title}`).join("\n") : ""}
 ${wizard.shopEnabled && wizard.products.length > 0 ? wizard.products.map((p) => `- \`shop/${p.slug}.md\` - ${p.title}`).join("\n") : ""}
@@ -445,7 +446,7 @@ ${wizard.shopEnabled && wizard.products.length > 0 ? wizard.products.map((p) => 
 
 ### Option 1: ME3
 1. Open your ME3 app
-2. Sign in and claim your username
+2. Sign in and claim the site's username
 3. Upload this zip or the extracted folder
 
 ### Option 2: Self-host anywhere
@@ -456,7 +457,7 @@ Upload these files to any static hosting:
 - Cloudflare Pages
 - Any web server
 
-Your site is fully portable - no lock-in!
+The site is fully portable - no lock-in!
 
 ## How to view locally
 
@@ -524,7 +525,7 @@ function closeFooterModal() {
 
 <template>
   <div class="step-publish">
-    <h2>Your site is ready!</h2>
+    <h2>{{ isOrganization ? "This site is ready!" : "Your site is ready!" }}</h2>
     <p class="step-desc">Choose a vibe, then publish or download.</p>
 
     <!-- Vibe Selector -->
@@ -599,8 +600,8 @@ function closeFooterModal() {
       <div class="site-logo-copy">
         <h3 id="site-logo-title">Site logo</h3>
         <p>
-          Used in browser tabs and bookmarks. If you don’t add one, your avatar
-          is used automatically.
+          Used in browser tabs and bookmarks. If you don’t add one, the
+          {{ isOrganization ? "site logo" : "avatar" }} is used automatically.
         </p>
       </div>
       <div class="site-logo-control">

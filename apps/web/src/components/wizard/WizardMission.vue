@@ -5,6 +5,7 @@ import { useWizardStore } from "../../stores/wizard";
 import UiIcon from "../UiIcon.vue";
 
 const wizard = useWizardStore();
+const isOrganization = computed(() => wizard.siteRole === "organization");
 
 type BusinessSuggestion = {
   positioningStatement: string;
@@ -46,7 +47,9 @@ function buildPositioningStatement(
 
   if (!trimmedAudience) return "";
 
-  const parts = [`I help ${trimmedAudience}`];
+  const parts = [
+    `${isOrganization.value ? "We" : "I"} help ${trimmedAudience}`,
+  ];
   if (trimmedProblem) {
     parts.push(`with ${trimmedProblem}`);
   }
@@ -284,9 +287,10 @@ function buildSuggestionPrompt() {
     '{"suggestions":[{"positioningStatement":"string","audience":"string","primaryProblem":"string","solution":"string","targetMarket":"string","primaryOutcome":"string","rationale":"string","clarityScore":1,"confidence":"low|medium|high"}]}',
     "Use 1 to 3 suggestions max.",
     "Write positioningStatement as one natural sentence. Do not force it into a fixed formula.",
+    `Write for a ${isOrganization.value ? "business, project, brand, community, or organization" : "person and their professional profile"}.`,
     "Audience should be a concrete group of people.",
     "Primary problem should be the pain, blocker, or job-to-be-done.",
-    "Solution should explain how the person helps.",
+    "Solution should explain how the person or organization helps.",
     "Target market should be a tight routing label agents can use.",
     "Primary outcome should describe the progress the buyer gets.",
     "Clarity score should be an integer from 1 to 10.",
@@ -453,16 +457,19 @@ async function suggestBusinessPositioning() {
 
 <template>
   <div class="step-mission">
-    <h2>Mission</h2>
+    <h2>{{ isOrganization ? "Positioning" : "Mission" }}</h2>
     <p class="step-desc">
-      Define who you help and how so ME3 can understand your work and support
-      your goals.
+      {{
+        isOrganization
+          ? "Define who this site serves and how so ME3 can describe the organization clearly."
+          : "Define who you help and how so ME3 can understand your work and support your goals."
+      }}
     </p>
 
     <section class="business-positioning-card">
       <div class="business-positioning-header">
         <div>
-          <h3>Who you help and how</h3>
+          <h3>{{ isOrganization ? "Who this site helps and how" : "Who you help and how" }}</h3>
           <p>
             Answer three short questions. ME3 uses them to understand your
             work, describe it clearly, and make more relevant suggestions.
@@ -473,7 +480,7 @@ async function suggestBusinessPositioning() {
       <div class="positioning-builder">
         <div class="business-clarity-fields">
           <label class="business-clarity-field" for="business-audience">
-            <span>Who do you help?</span>
+            <span>{{ isOrganization ? "Who does this site help?" : "Who do you help?" }}</span>
             <input
               id="business-audience"
               v-model="businessAudience"
@@ -493,7 +500,7 @@ async function suggestBusinessPositioning() {
             />
           </label>
           <label class="business-clarity-field" for="business-solution">
-            <span>How do you help?</span>
+            <span>{{ isOrganization ? "How does it help?" : "How do you help?" }}</span>
             <input
               id="business-solution"
               v-model="businessSolution"

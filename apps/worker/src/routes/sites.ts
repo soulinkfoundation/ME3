@@ -123,6 +123,7 @@ import {
   deleteAdditionalSite,
   getSiteQuota,
   parseSiteRole,
+  renamePersistentSite,
   renameProfileSite,
 } from "../site-lifecycle";
 
@@ -689,6 +690,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         siteType?: unknown;
         siteRole?: unknown;
         templateId?: unknown;
+        renameFromSiteId?: unknown;
         renameFromUsername?: unknown;
       }>()
       .catch(
@@ -697,6 +699,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
           siteType?: unknown;
           siteRole?: unknown;
           templateId?: unknown;
+          renameFromSiteId?: unknown;
           renameFromUsername?: unknown;
         } => ({}),
       );
@@ -721,6 +724,13 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       return c.json({ error: "Site role must be profile or organization" }, 400);
     }
     const siteRole = requestedRole || "profile";
+    const renameFromSiteId =
+      typeof body.renameFromSiteId === "string"
+        ? body.renameFromSiteId.trim()
+        : "";
+    if (body.renameFromSiteId !== undefined && !renameFromSiteId) {
+      return c.json({ error: "The site being renamed is invalid" }, 400);
+    }
     const renameFromUsername = normalizeUsername(body.renameFromUsername);
     if (body.renameFromUsername !== undefined && !renameFromUsername) {
       return c.json({ error: "The profile being renamed is invalid" }, 400);
@@ -728,11 +738,23 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (renameFromUsername && siteRole !== "profile") {
       return c.json({ error: "Only the ME3 Profile can be renamed" }, 400);
     }
+    if (renameFromSiteId && renameFromUsername) {
+      return c.json({ error: "Choose one site rename target" }, 400);
+    }
 
     const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(c.env, username);
     if (cloudUsernameError) return c.json({ error: cloudUsernameError }, 409);
 
     try {
+      if (renameFromSiteId) {
+        const site = await renamePersistentSite(c.env, {
+          ownerId,
+          siteId: renameFromSiteId,
+          expectedRole: siteRole,
+          toUsername: username,
+        });
+        return c.json({ site, renamed: true });
+      }
       if (renameFromUsername) {
         const site = await renameProfileSite(c.env, {
           ownerId,

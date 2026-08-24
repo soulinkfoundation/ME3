@@ -52,6 +52,9 @@ const requestedSiteRole = computed<WizardSiteRole>(() =>
   route.query.siteRole === "organization" ? "organization" : "profile",
 );
 const startingNewSite = computed(() => route.query.new === "1");
+const requestedSiteId = computed(() =>
+  typeof route.query.siteId === "string" ? route.query.siteId.trim() : "",
+);
 const isAdditionalSite = computed(() =>
   startingNewSite.value
     ? requestedSiteRole.value === "organization"
@@ -273,31 +276,38 @@ function clearImportedDraft() {
   router.push("/sites");
 }
 
-onMounted(async () => {
+let wizardOpenRequest = 0;
+let wizardMounted = false;
+
+async function openWizardTarget() {
+  const requestId = ++wizardOpenRequest;
+  isOpeningWizard.value = true;
   try {
     await sites.ensureSites();
+    if (requestId !== wizardOpenRequest) return;
     const requestedUsername =
       typeof route.query.site === "string" ? route.query.site.trim() : "";
-    const targetSite = requestedUsername
-      ? sites.sites.find((site) => site.username === requestedUsername)
-      : sites.sites.find((site) => site.site_role === "profile");
+    const targetSite = requestedSiteId.value
+      ? sites.sites.find((site) => site.id === requestedSiteId.value)
+      : requestedUsername
+        ? sites.sites.find((site) => site.username === requestedUsername)
+        : sites.sites.find((site) => site.site_role === "profile");
 
     if (startingNewSite.value) {
-      wizard.reset();
-      wizard.setSiteRole(requestedSiteRole.value);
+      wizard.activateDraftContext({ role: requestedSiteRole.value });
     } else if (targetSite?.username) {
       const targetRole: WizardSiteRole =
         targetSite.site_role === "organization" ? "organization" : "profile";
-      const localHandle = (wizard.username || wizard.profile.handle)
-        .trim()
-        .toLowerCase();
+      const draft = wizard.activateDraftContext({
+        siteId: targetSite.id,
+        username: targetSite.username,
+        role: targetRole,
+      });
       const preserveLocalDraft =
-        wizard.needsPublish &&
-        wizard.siteRole === targetRole &&
-        localHandle === targetSite.username.trim().toLowerCase() &&
-        Boolean(wizard.profile.name.trim());
+        draft.restored && (draft.migratedLegacy || wizard.needsPublish);
       if (!preserveLocalDraft) {
         const content = await sites.getSiteContent(targetSite.username);
+        if (requestId !== wizardOpenRequest) return;
         if (content?.ok && content.profile) {
           wizard.loadFromSiteContent(
             content.profile,
@@ -311,22 +321,37 @@ onMounted(async () => {
           );
         }
       }
-    } else if (requestedUsername) {
-      wizard.reset();
-      wizard.setSiteRole(requestedSiteRole.value);
+    } else if (requestedSiteId.value || requestedUsername) {
+      wizard.activateDraftContext({ role: requestedSiteRole.value });
     } else {
-      if (wizard.siteRole !== "profile") wizard.reset();
-      wizard.setSiteRole("profile");
+      wizard.activateDraftContext({ role: "profile" });
     }
   } finally {
+    if (requestId !== wizardOpenRequest) return;
     showIntroScreen.value = !wizard.lastPublishedAt;
     applyRouteStep();
     isOpeningWizard.value = false;
   }
+}
+
+onMounted(async () => {
+  wizardMounted = true;
+  await openWizardTarget();
 });
 
 watch(() => route.query.step, applyRouteStep);
 watch(() => wizard.currentStepId, syncRouteStep);
+watch(
+  () => [
+    route.query.siteId,
+    route.query.site,
+    route.query.new,
+    route.query.siteRole,
+  ],
+  () => {
+    if (wizardMounted) void openWizardTarget();
+  },
+);
 </script>
 
 <template>
@@ -334,6 +359,14 @@ watch(() => wizard.currentStepId, syncRouteStep);
   <div v-else class="wizard-page">
     <!-- Header -->
     <header v-if="!showIntroScreen" class="wizard-header">
+      <div class="header-left" aria-live="polite">
+        <span class="site-role-label">
+          {{ wizard.siteRole === "organization" ? "Organization" : "Profile" }}
+        </span>
+        <strong class="site-context-name">
+          {{ wizard.profile.name || wizard.username || "New site" }}
+        </strong>
+      </div>
       <div class="header-center">
         <div class="step-indicator">
           <span class="step-current">{{ wizard.currentStep }}</span>
@@ -462,7 +495,11 @@ watch(() => wizard.currentStepId, syncRouteStep);
         class="step-content"
         :class="{ 'publish-step': wizard.currentStep === wizard.totalSteps }"
       >
-        <component :is="currentComponent" ref="currentComponentRef" />
+        <component
+          :is="currentComponent"
+          :key="`${wizard.draftContextId}:${wizard.currentStepId}`"
+          ref="currentComponentRef"
+        />
 
         <!-- Navigation -->
         <div v-if="!isEditingPage" class="step-nav">
@@ -545,9 +582,31 @@ watch(() => wizard.currentStepId, syncRouteStep);
 }
 
 .header-left {
+  grid-column: 1;
+  justify-self: start;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
+}
+
+.site-role-label {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.site-context-name {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .logo {
@@ -592,7 +651,8 @@ watch(() => wizard.currentStepId, syncRouteStep);
   font-weight: 600;
   color: var(--color-text);
   cursor: pointer;
-  padding: 6px 10px;
+  min-height: 44px;
+  padding: 6px 14px;
   border-radius: 999px;
   margin-right: 4px;
 }
@@ -986,6 +1046,10 @@ watch(() => wizard.currentStepId, syncRouteStep);
   }
 
   .step-name {
+    display: none;
+  }
+
+  .site-context-name {
     display: none;
   }
 

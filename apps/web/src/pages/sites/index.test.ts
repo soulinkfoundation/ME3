@@ -86,8 +86,9 @@ describe("Sites dashboard", () => {
   it("lists the profile and additional sites with role-appropriate actions", async () => {
     const profile = siteRecord("owner", "profile", "2026-08-20T10:00:00.000Z");
     const additional = siteRecord("studio", "organization");
+    const secondAdditional = siteRecord("community", "organization");
     const wrapper = await mountDashboard(
-      [profile, additional],
+      [profile, additional, secondAdditional],
       quotaResponse({
         canCreateProfile: false,
         canCreateAdditionalSite: true,
@@ -98,10 +99,11 @@ describe("Sites dashboard", () => {
     expect(wrapper.text()).toContain("ME3 Profile");
     expect(wrapper.text()).toContain("@owner");
     expect(wrapper.text()).toContain("@studio");
+    expect(wrapper.text()).toContain("@community");
     expect(findButton(wrapper, "Add site")).toBeTruthy();
 
     const cards = wrapper.findAll("article.site-card");
-    expect(cards).toHaveLength(2);
+    expect(cards).toHaveLength(3);
     expect(cards[0].text()).toContain("Edit");
     expect(cards[0].text()).toContain("Rename");
     expect(cards[0].text()).toContain("Domain");
@@ -110,6 +112,20 @@ describe("Sites dashboard", () => {
     expect(cards[0].text()).not.toContain("Delete");
     expect(cards[1].text()).toContain("Publish");
     expect(cards[1].text()).toContain("Delete");
+    expect(cards[2].text()).toContain("Publish");
+    expect(cards[2].text()).toContain("Delete");
+    expect(
+      cards.map((card) =>
+        card
+          .findAll("a")
+          .find((link) => link.text().trim() === "Edit")
+          ?.attributes("href"),
+      ),
+    ).toEqual([
+      expect.stringContaining("siteId=site-owner"),
+      expect.stringContaining("siteId=site-studio"),
+      expect.stringContaining("siteId=site-community"),
+    ]);
     expect(
       cards[0]
         .findAll("a")
@@ -122,6 +138,7 @@ describe("Sites dashboard", () => {
       .filter((href) => href?.startsWith("/sites/"));
     expect(siteLinks).toContain("/sites/owner");
     expect(siteLinks).toContain("/sites/studio");
+    expect(siteLinks).toContain("/sites/community");
   });
 
   it("hides Add site and explains when the quota is full", async () => {

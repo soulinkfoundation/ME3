@@ -150,63 +150,27 @@ onBeforeUnmount(() => {
   window.removeEventListener("me3:plugins-changed", handlePluginsChanged);
 });
 
-async function loadWizardContent(): Promise<void> {
-  try {
-    // Fetch existing site content
-    const content = await sites.getSiteContent(username.value);
-
-    if (content?.ok && content.profile) {
-      // Load the existing content into the wizard
-      wizard.loadFromSiteContent(
-        content.profile,
-        content.pages,
-        content.posts,
-        content.products || [],
-        username.value,
-        site.value?.published_at || null,
-        undefined,
-        site.value?.site_role === "organization" ? "organization" : "profile",
-      );
-    } else {
-      // No content yet, just set up for new site with this username
-      wizard.reset();
-      wizard.setSiteRole(
-        site.value?.site_role === "organization" ? "organization" : "profile",
-      );
-      wizard.username = username.value;
-      wizard.updateProfile({ handle: username.value });
-      wizard.isUsernameAvailable = true;
-    }
-  } catch (e) {
-    console.error("Failed to load site content:", e);
-    // Fall back to basic setup
-    wizard.reset();
-    wizard.setSiteRole(
-      site.value?.site_role === "organization" ? "organization" : "profile",
-    );
-    wizard.username = username.value;
-    wizard.updateProfile({ handle: username.value });
-    wizard.isUsernameAvailable = true;
-  }
+function wizardSiteQuery() {
+  return {
+    ...(site.value?.id ? { siteId: site.value.id } : {}),
+    site: username.value,
+    return: `/sites/${username.value}`,
+  };
 }
 
-async function editInWizard() {
-  await loadWizardContent();
+function editInWizard() {
   router.push({
     path: "/create",
-    query: { site: username.value, return: `/sites/${username.value}` },
+    query: wizardSiteQuery(),
   });
 }
 
-async function openWizardStep(step: string) {
-  await loadWizardContent();
+function openWizardStep(step: string) {
   const stepId = wizard.normalizeWizardStepId(step);
-  if (stepId) wizard.goToStepId(stepId, { enableOptional: true });
   router.replace({
     path: "/create",
     query: {
-      site: username.value,
-      return: `/sites/${username.value}`,
+      ...wizardSiteQuery(),
       ...(stepId ? { step: stepId } : {}),
     },
   });
@@ -216,14 +180,11 @@ function openBuilder() {
   router.push(`/sites/${username.value}/build`);
 }
 
-async function writePost() {
-  await loadWizardContent();
-  wizard.goToStepId("blog", { enableOptional: true });
+function writePost() {
   router.push({
     path: "/create",
     query: {
-      site: username.value,
-      return: `/sites/${username.value}`,
+      ...wizardSiteQuery(),
       step: "blog",
     },
   });
@@ -772,6 +733,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         <CustomDomain
           embedded
           :managed="managedDeployment"
+          :site-id="site?.id"
           :username="username"
           :site-role="
             site?.site_role === 'organization' ? 'organization' : 'profile'

@@ -459,6 +459,7 @@ export const useSitesStore = defineStore("sites", () => {
       siteType?: SiteType;
       siteRole?: "profile" | "organization";
       templateId?: LandingPageTemplateId | null;
+      renameFromSiteId?: string;
       renameFromUsername?: string;
     } = {},
   ): Promise<Site | null> {
@@ -474,12 +475,17 @@ export const useSitesStore = defineStore("sites", () => {
         ...(options.templateId !== undefined
           ? { templateId: options.templateId }
           : {}),
+        ...(options.renameFromSiteId
+          ? { renameFromSiteId: options.renameFromSiteId }
+          : {}),
         ...(options.renameFromUsername
           ? { renameFromUsername: options.renameFromUsername }
           : {}),
       });
       const newSite = response.site;
-      sites.value.unshift(newSite);
+      const existingIndex = sites.value.findIndex((site) => site.id === newSite.id);
+      if (existingIndex >= 0) sites.value.splice(existingIndex, 1, newSite);
+      else sites.value.unshift(newSite);
       return newSite;
     } catch (e: any) {
       error.value = e.message || "Failed to claim username";

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useWizardStore } from "../../stores/wizard";
 import { getUsernameAvailability, searchLocations, type LocationSearchResult } from "../../api";
 
 const wizard = useWizardStore();
+const isOrganization = computed(() => wizard.siteRole === "organization");
 
 const name = ref(wizard.profile.name);
 const handle = ref(wizard.profile.handle || wizard.username);
@@ -175,6 +176,15 @@ watch(handle, async (val) => {
     return;
   }
 
+  if (
+    wizard.selectedSiteId &&
+    cleanHandle === wizard.selectedSiteUsername.trim().toLowerCase()
+  ) {
+    wizard.isUsernameAvailable = true;
+    wizard.isCheckingUsername = false;
+    return;
+  }
+
   // Debounce the check
   wizard.isCheckingUsername = true;
   checkTimeout = setTimeout(async () => {
@@ -194,22 +204,26 @@ const bioLength = 160;
 
 <template>
   <div class="step-basics">
-    <h2>Let's start with the basics</h2>
+    <h2>
+      {{ isOrganization ? "Tell us about this site" : "Let's start with the basics" }}
+    </h2>
 
     <div class="form-group">
-      <label for="name">Your name *</label>
+      <label for="name">{{ isOrganization ? "Site name" : "Your name" }} *</label>
       <input
         id="name"
         v-model="name"
         type="text"
-        placeholder="e.g. Alex Smith"
+        :placeholder="isOrganization ? 'e.g. North Star Studio' : 'e.g. Alex Smith'"
         maxlength="100"
         autofocus
       />
     </div>
 
     <div class="form-group">
-      <label for="handle">Username (@handle) *</label>
+      <label for="handle">
+        {{ isOrganization ? "Site username" : "Username (@handle)" }} *
+      </label>
       <div class="handle-input">
         <span class="handle-prefix">@</span>
         <input
@@ -244,13 +258,17 @@ const bioLength = 160;
 
     <div class="form-group">
       <label for="bio">
-        Short bio
+        {{ isOrganization ? "Short description" : "Short bio" }}
         <span class="optional">(optional)</span>
       </label>
       <textarea
         id="bio"
         v-model="bio"
-        placeholder="A brief description of who you are..."
+        :placeholder="
+          isOrganization
+            ? 'A brief description of this business, project, or community...'
+            : 'A brief description of who you are...'
+        "
         :maxlength="bioLength"
         rows="3"
       />

@@ -262,9 +262,30 @@ export function usePublish() {
 
       // First, check if site exists or needs to be claimed
       await sites.fetchSites();
-      const existingSite = sites.sites.find((s) => s.username === username);
+      const selectedSite = wizard.selectedSiteId
+        ? sites.sites.find((site) => site.id === wizard.selectedSiteId)
+        : undefined;
+      const existingSite = sites.sites.find((site) => site.username === username);
 
-      if (!existingSite) {
+      if (wizard.selectedSiteId && !selectedSite) {
+        throw new Error("The selected site is no longer available. Reopen it and try again.");
+      }
+      if (selectedSite?.site_role && selectedSite.site_role !== wizard.siteRole) {
+        throw new Error("The selected site's role changed. Reopen the site and try again.");
+      }
+
+      if (selectedSite && selectedSite.username !== username) {
+        publishProgress.value = "Renaming site...";
+        const renamed = await sites.claimUsername(username, {
+          siteType: "profile",
+          siteRole: wizard.siteRole,
+          renameFromSiteId: selectedSite.id,
+        });
+        if (!renamed) {
+          throw new Error(sites.error || "Failed to rename site");
+        }
+        wizard.bindDraftToSite(renamed.id);
+      } else if (!existingSite) {
         publishProgress.value = "Claiming username...";
         const existingProfileSite = sites.sites.find(
           (site) => site.site_role === "profile",
@@ -281,6 +302,7 @@ export function usePublish() {
         if (!claimed) {
           throw new Error(sites.error || "Failed to claim username");
         }
+        wizard.bindDraftToSite(claimed.id);
       }
 
       const publishManifest =
