@@ -24,7 +24,7 @@
     "@me3/knowledge": "workspace:*",
     "hono": "^4.12.26",
     "ical.js": "^2.2.1",
-    "me3-protocol": "4.0.0",
+    "me3-protocol": "4.0.1",
     "stripe": "^17.0.0"
   },
   "devDependencies": {

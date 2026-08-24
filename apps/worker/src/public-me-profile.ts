@@ -255,6 +255,7 @@ export function buildPublicMe3Profile(
       name: profileName,
       ...(id(source.handle) ? { handle: id(source.handle) } : {}),
       ...(publicAsset(source.avatar) ? { avatar: publicAsset(source.avatar) } : {}),
+      ...(publicAsset(source.banner) ? { banner: publicAsset(source.banner) } : {}),
     };
     const result = validateProfile(privateProfile);
     if (!result.valid || !result.profile) {

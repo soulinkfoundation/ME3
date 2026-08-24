@@ -161,6 +161,7 @@ describe("public me.json profile", () => {
       name: "Private Owner",
       handle: "owner",
       avatar: "./files/avatar.jpg",
+      banner: "./files/banner.jpg",
     });
   });
 });
