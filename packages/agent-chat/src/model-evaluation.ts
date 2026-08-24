@@ -412,6 +412,27 @@ export const FIXED_MODEL_EVALUATION_TASKS: readonly FixedModelEvaluationTask[] =
     ],
   },
   {
+    id: "tool-calendar-event-create-timezone-conversion",
+    category: "tool_selection",
+    turns: [
+      "Add a Yantra webinar to my ME3 calendar on 2026-08-24 at 6pm India time, displayed in Ireland time. Use the standard 60-minute duration.",
+    ],
+    checkText: nonEmpty,
+    expectedCalls: [
+      {
+        name: "core_calendar_event_create",
+        arguments: {
+          title: "Yantra webinar",
+          startDate: "2026-08-24",
+          startTime: "18:00",
+          startTimezone: "Asia/Kolkata",
+          calendarTimezone: "Europe/Dublin",
+          durationMinutes: 60,
+        },
+      },
+    ],
+  },
+  {
     id: "tool-bookings-lookup",
     category: "tool_selection",
     turns: ["Use the appropriate tool to read my next eight confirmed bookings."],

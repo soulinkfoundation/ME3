@@ -287,6 +287,7 @@ export type AgentChatActionCardRecord = {
   kind:
     | "mailbox_draft"
     | "reminder"
+    | "calendar_event"
     | "mission_task"
     | "landing_page"
     | "social_post"
@@ -302,6 +303,7 @@ export type AgentChatActionCard = {
     | "reminder.created"
     | "reminder.updated"
     | "reminder.cancelled"
+    | "calendar.event_created"
     | "mission.task_created"
     | "mission.task_updated"
     | "mission.task_archived"
@@ -5268,6 +5270,7 @@ function toolResultTraceStatus(
 function isCoreRuntimeToolSpecialist(specialist: string | null): boolean {
   return Boolean(
     specialist === "core.calendar.events.list" ||
+      specialist === "core.calendar.event.create" ||
       specialist === "core.bookings.lookup" ||
       specialist === "core.contacts.search" ||
       specialist === "core.network.directory.search" ||

@@ -24,6 +24,7 @@ export type CalendarEventLike = {
 
 type CalendarAgentStatement = {
   all<T = unknown>(): Promise<{ results?: T[] }>;
+  run(): Promise<{ meta?: { changes?: number } }>;
 };
 
 export type CalendarAgentDb = {
@@ -36,6 +37,35 @@ export type CalendarAgentReadInput = {
   dateFrom: string;
   dateTo: string;
   limit?: number;
+};
+
+export type CalendarAgentCreateInput = {
+  title: string;
+  startDate: string;
+  startTime: string;
+  startTimezone: string;
+  calendarTimezone?: string;
+  durationMinutes?: number;
+  notes?: string;
+  location?: string;
+};
+
+export type CalendarAgentCreatedEvent = {
+  id: string;
+  title: string;
+  notes: string | null;
+  location: string | null;
+  startsAt: string;
+  endsAt: string;
+  timezone: string;
+  allDay: false;
+  sourceKind: "native";
+  sourceName: "Personal events";
+  recurrenceRule: null;
+  requestedDate: string;
+  requestedTime: string;
+  requestedTimezone: string;
+  durationMinutes: number;
 };
 
 export type CalendarAgentEvent = {
@@ -77,6 +107,8 @@ const DEFAULT_AGENT_CALENDAR_LIMIT = 30;
 const MAX_AGENT_CALENDAR_LIMIT = 50;
 const MAX_AGENT_CALENDAR_RANGE_DAYS = 31;
 const MAX_AGENT_RECURRING_DEFINITIONS = 100;
+const DEFAULT_AGENT_EVENT_DURATION_MINUTES = 60;
+const MAX_AGENT_EVENT_DURATION_MINUTES = 24 * 60;
 type CustomRecurrenceUnit = "day" | "week" | "month" | "year";
 type CustomRecurrenceRule = {
   interval: number;
@@ -140,6 +172,111 @@ export function getUtcMsForLocalTime(
       utcGuess) /
     60_000;
   return utcGuess - deltaMinutes * 60_000;
+}
+
+export async function createCalendarEventForAgent(
+  db: CalendarAgentDb,
+  userId: string,
+  ownerTimezone: string | null | undefined,
+  input: CalendarAgentCreateInput,
+): Promise<CalendarAgentCreatedEvent> {
+  const title = boundedCalendarText(input.title, 300);
+  if (!title) throw new Error("Calendar event title is required.");
+
+  const startDate = requiredCalendarDate(input.startDate, "Calendar event date");
+  const startTime = requiredCalendarTime(input.startTime, "Calendar event time");
+  const startTimezone = normalizeAgentTimeZone(input.startTimezone);
+  if (!startTimezone) {
+    throw new Error(
+      "Calendar event source timezone must be a valid IANA timezone, not an abbreviation.",
+    );
+  }
+  const requestedCalendarTimezone = input.calendarTimezone?.trim();
+  const ownerCalendarTimezone = normalizeAgentTimeZone(ownerTimezone);
+  const calendarTimezone = requestedCalendarTimezone
+    ? normalizeAgentTimeZone(requestedCalendarTimezone)
+    : ownerCalendarTimezone || "UTC";
+  if (!calendarTimezone) {
+    throw new Error("Calendar event display timezone must be a valid IANA timezone.");
+  }
+  if (
+    !requestedCalendarTimezone &&
+    typeof ownerTimezone === "string" &&
+    ownerTimezone.trim() &&
+    !ownerCalendarTimezone
+  ) {
+    throw new Error(
+      "The owner timezone must be a valid IANA timezone before creating this event.",
+    );
+  }
+  const durationMinutes = normalizeAgentEventDuration(input.durationMinutes);
+  const [year, month, day] = startDate.split("-").map(Number);
+  const [hour, minute] = startTime.split(":").map(Number);
+  const startsAt = new Date(
+    getUtcMsForLocalTime(
+      { year, month, day, hour, minute },
+      startTimezone,
+    ),
+  ).toISOString();
+  const resolvedStart = localDateParts(startsAt, startTimezone);
+  if (
+    resolvedStart.year !== year ||
+    resolvedStart.month !== month ||
+    resolvedStart.day !== day ||
+    resolvedStart.hour !== hour ||
+    resolvedStart.minute !== minute
+  ) {
+    throw new Error(
+      `Calendar event time ${startDate} ${startTime} does not exist in ${startTimezone}.`,
+    );
+  }
+  if (hasAlternativeCalendarInstant(startsAt, resolvedStart, startTimezone)) {
+    throw new Error(
+      `Calendar event time ${startDate} ${startTime} occurs twice in ${startTimezone} because of a timezone transition. Ask the owner for an unambiguous time.`,
+    );
+  }
+  const endsAt = new Date(
+    Date.parse(startsAt) + durationMinutes * 60_000,
+  ).toISOString();
+  const id = crypto.randomUUID();
+  const notes = boundedCalendarText(input.notes, 4_000);
+  const location = boundedCalendarText(input.location, 500);
+
+  await db.prepare(
+    `INSERT INTO user_calendar_events
+       (id, user_id, title, notes, location, starts_at, ends_at, timezone,
+        all_day, kind, recurrence_rule)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'event', NULL)`,
+  )
+    .bind(
+      id,
+      userId,
+      title,
+      notes,
+      location,
+      startsAt,
+      endsAt,
+      calendarTimezone,
+    )
+    .run();
+
+  return {
+    id,
+    title,
+    notes,
+    location,
+    startsAt,
+    endsAt,
+    timezone: calendarTimezone,
+    allDay: false,
+    sourceKind: "native",
+    sourceName: "Personal events",
+    recurrenceRule: null,
+    requestedDate: startDate,
+    requestedTime: startTime,
+    requestedTimezone: startTimezone,
+    durationMinutes,
+  };
 }
 
 export function normalizeEventRecurrenceRule(
@@ -504,6 +641,61 @@ function requiredCalendarDate(value: unknown, label: string): string {
     throw new Error(`${label} must use YYYY-MM-DD.`);
   }
   return date;
+}
+
+function requiredCalendarTime(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} must use HH:MM.`);
+  const time = value.trim();
+  const match = time.match(/^(\d{2}):(\d{2})$/);
+  if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) {
+    throw new Error(`${label} must use HH:MM.`);
+  }
+  return time;
+}
+
+function normalizeAgentEventDuration(value: unknown): number {
+  if (value === undefined) return DEFAULT_AGENT_EVENT_DURATION_MINUTES;
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_AGENT_EVENT_DURATION_MINUTES
+  ) {
+    throw new Error("Calendar event duration must be from 1 to 1440 minutes.");
+  }
+  return value;
+}
+
+function normalizeAgentTimeZone(value: unknown): string | null {
+  const timezone = normalizeTimeZone(value);
+  if (!timezone) return null;
+  return timezone === "UTC" || timezone.includes("/") ? timezone : null;
+}
+
+function hasAlternativeCalendarInstant(
+  startsAt: string,
+  desired: ReturnType<typeof localDateParts>,
+  timezone: string,
+): boolean {
+  const instant = Date.parse(startsAt);
+  for (let minutes = 15; minutes <= 180; minutes += 15) {
+    for (const direction of [-1, 1]) {
+      const alternative = localDateParts(
+        new Date(instant + direction * minutes * 60_000).toISOString(),
+        timezone,
+      );
+      if (
+        alternative.year === desired.year &&
+        alternative.month === desired.month &&
+        alternative.day === desired.day &&
+        alternative.hour === desired.hour &&
+        alternative.minute === desired.minute
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function localDateBoundary(date: string, timezone: string): string {

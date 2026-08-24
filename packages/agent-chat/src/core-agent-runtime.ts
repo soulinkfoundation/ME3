@@ -1,6 +1,8 @@
 import {
+  createCalendarEventForAgent,
   normalizeTimeZone,
   readCalendarEventsForAgent,
+  type CalendarAgentCreatedEvent,
   type CalendarAgentEvent,
 } from "@me3-core/plugin-calendar";
 import {
@@ -217,6 +219,7 @@ export type CoreNetworkDirectoryToolServices = {
 const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
   (tool) =>
     tool.capabilityId === "core.calendar.events.list" ||
+    tool.capabilityId === "core.calendar.event.create" ||
     tool.capabilityId === "core.bookings.lookup" ||
     tool.capabilityId === "core.contacts.search" ||
     tool.capabilityId === "core.network.directory.search" ||
@@ -507,6 +510,9 @@ function executeCoreToolCall(input: {
   if (input.tool.capabilityId === "core.calendar.events.list") {
     return executeCalendarEventsListToolCall(input);
   }
+  if (input.tool.capabilityId === "core.calendar.event.create") {
+    return executeCalendarEventCreateToolCall(input);
+  }
   if (input.tool.capabilityId === "core.bookings.lookup") {
     return executeBookingLookupToolCall(input);
   }
@@ -717,6 +723,42 @@ async function executeCalendarEventsListToolCall(input: {
     ),
     reminderAction: null,
     actionCards: [],
+  };
+}
+
+async function executeCalendarEventCreateToolCall(input: {
+  db: CoreAgentDb;
+  userId: string;
+  ownerTimezone: string | null | undefined;
+  call: AgentToolCall;
+  tool: CoreChatToolDefinition;
+}): Promise<CoreToolOutcome> {
+  enforceCalendarEventCreateToolPolicy(input.tool);
+  assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+  const event = await createCalendarEventForAgent(
+    input.db,
+    input.userId,
+    input.ownerTimezone,
+    {
+      title: requiredToolString(input.call.arguments.title, "Calendar event title"),
+      startDate: requiredToolString(input.call.arguments.startDate, "Calendar event date"),
+      startTime: requiredToolString(input.call.arguments.startTime, "Calendar event time"),
+      startTimezone: requiredToolString(
+        input.call.arguments.startTimezone,
+        "Calendar event source timezone",
+      ),
+      calendarTimezone: optionalToolString(input.call.arguments.calendarTimezone),
+      durationMinutes: optionalToolNumber(input.call.arguments.durationMinutes),
+      notes: optionalToolString(input.call.arguments.notes),
+      location: optionalToolString(input.call.arguments.location),
+    },
+  );
+  return {
+    capabilityId: "core.calendar.event.create",
+    result: { ok: true, event },
+    fallbackReply: formatCalendarEventCreatedReply(event),
+    reminderAction: null,
+    actionCards: [buildCalendarEventActionCard(event)],
   };
 }
 
@@ -1977,8 +2019,13 @@ function withCoreToolInstructions(
     "- Before update/cancel, list reminders unless a stable reminder ID is already present in the conversation. Never invent or infer an ID from a title.",
     "- If multiple listed reminders could match, ask the owner which one they mean and do not write.",
     "Calendar event tool rules:",
-    "- Use core_calendar_events_list to read personal and imported calendar events. Use reminder tools for reminders and booking lookup for bookings.",
+    "- Use core_calendar_events_list to read personal and imported calendar events. Use core_calendar_event_create to create a private event in the owner's ME3 calendar. Use reminder tools for reminders and booking lookup for bookings.",
     "- Resolve relative dates in the owner's timezone. Calendar reads require an inclusive dateFrom and dateTo and are limited to 31 days.",
+    "- For event creation, title, date, and start time must be clear. If any is missing, ask one concise clarification question and do not call the tool.",
+    "- A missing duration is not ambiguous: omit durationMinutes and ME3 will default to 60 minutes. Mention that default after creation.",
+    "- Pass the requested wall date and time unchanged with its IANA startTimezone; the tool performs the timezone conversion. Use calendarTimezone only when the owner explicitly requests a display timezone; otherwise omit it to use the owner's timezone.",
+    "- Treat startTimezone and calendarTimezone as separate IANA zones and never hardcode a fixed hour difference. Resolve an abbreviation from clear geographic context; abbreviations such as IST, CST, and BST have multiple meanings, so ask which source region the owner means when context does not disambiguate it. Never pass an abbreviation to the tool.",
+    "- Calendar event creation writes only to the private ME3 calendar. Do not claim it synced to Google Calendar, Outlook, or another external provider.",
     "Booking tool rules:",
     "- Use core_bookings_lookup whenever the owner asks about upcoming confirmed bookings, appointments, client sessions, or booked calls. Do not answer from calendar events or email.",
     "- Booking lookup is read-only and returns the next confirmed bookings in chronological order. It does not include reminders, ordinary calendar events, or cancelled bookings.",
@@ -2078,6 +2125,19 @@ function enforceCalendarEventsListToolPolicy(tool: CoreChatToolDefinition): void
   ) {
     throw new Error(
       `Tool "${tool.name}" is not allowed by the Calendar read runtime policy.`,
+    );
+  }
+}
+
+function enforceCalendarEventCreateToolPolicy(tool: CoreChatToolDefinition): void {
+  if (
+    tool.capabilityId !== "core.calendar.event.create" ||
+    tool.handlerRoute !== tool.capabilityId ||
+    tool.approvalMode !== "none" ||
+    tool.requiredSetupChecks.some((check) => check !== "calendar.events")
+  ) {
+    throw new Error(
+      `Tool "${tool.name}" is not allowed by the Calendar create runtime policy.`,
     );
   }
 }
@@ -2403,6 +2463,9 @@ function userFacingToolReply(
   replyText: string,
   outcome: CoreToolOutcome | null,
 ): string {
+  if (outcome?.capabilityId === "core.calendar.event.create") {
+    return outcome.fallbackReply;
+  }
   if (
     outcome &&
     (
@@ -2555,6 +2618,45 @@ function formatCalendarEventsReply(
       : `Calendar events from ${dateFrom} through ${dateTo}:`,
     ...lines,
   ].join("\n");
+}
+
+function formatCalendarEventCreatedReply(event: CalendarAgentCreatedEvent): string {
+  const target = formatAgentDateTime(event.startsAt, event.timezone);
+  const requested = `${event.requestedDate} at ${event.requestedTime} (${event.requestedTimezone})`;
+  const conversion = event.requestedTimezone === event.timezone
+    ? ""
+    : ` That corresponds to ${requested}.`;
+  return `Added ${event.title} to your ME3 calendar for ${target} (${event.timezone}) for ${event.durationMinutes} minutes.${conversion}`;
+}
+
+function buildCalendarEventActionCard(
+  event: CalendarAgentCreatedEvent,
+): AgentChatActionCard {
+  const converted = event.requestedTimezone === event.timezone
+    ? []
+    : [{
+        label: "Requested time",
+        value: `${event.requestedDate} ${event.requestedTime} (${event.requestedTimezone})`,
+      }];
+  return {
+    id: `calendar-event:${event.id}`,
+    kind: "calendar.event_created",
+    capabilityId: "core.calendar.event.create",
+    title: "Calendar event created",
+    summary: "Added to your private ME3 calendar.",
+    status: "complete",
+    statusLabel: "Created",
+    changed: [
+      { label: "Event", value: event.title },
+      { label: "When", value: formatAgentDateTime(event.startsAt, event.timezone) },
+      { label: "Duration", value: `${event.durationMinutes} minutes` },
+      { label: "Calendar timezone", value: event.timezone },
+      ...converted,
+    ],
+    records: [{ kind: "calendar_event", id: event.id }],
+    primaryAction: { label: "Open calendar", href: "/calendar" },
+    secondaryActions: [],
+  };
 }
 
 function formatBookingLookupReply(

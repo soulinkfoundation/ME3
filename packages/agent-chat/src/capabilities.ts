@@ -217,6 +217,70 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.calendar.event.create",
+    owner: "plugin",
+    pluginId: "me3.calendar",
+    ownerFacingLabel: "Create calendar event",
+    summary:
+      "Create a private event in the owner's ME3 calendar, converting the requested wall time from its source timezone into the calendar display timezone.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.calendar.event.create",
+    },
+    sideEffect: "write_internal_active",
+    approvalMode: "none",
+    requiresSetup: ["calendar.events"],
+    inputSchema: {
+      type: "object",
+      required: ["title", "startDate", "startTime", "startTimezone"],
+      properties: {
+        title: { type: "string", description: "Calendar event title." },
+        startDate: {
+          type: "string",
+          description: "Event date as YYYY-MM-DD in startTimezone.",
+          format: "date",
+        },
+        startTime: {
+          type: "string",
+          description: "Event start wall time as 24-hour HH:MM in startTimezone.",
+        },
+        startTimezone: {
+          type: "string",
+          description:
+            "IANA timezone governing startDate and startTime, such as Asia/Kolkata. Never use an abbreviation such as IST.",
+        },
+        calendarTimezone: {
+          type: "string",
+          description:
+            "IANA timezone used to display the saved event. Omit to use the owner's timezone.",
+        },
+        durationMinutes: {
+          type: "integer",
+          description: "Event duration from 1 to 1440 minutes. Defaults to 60.",
+        },
+        notes: { type: "string", description: "Optional event notes." },
+        location: { type: "string", description: "Optional event location." },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_calendar_event_created",
+    examples: {
+      positive: [
+        "Add the Yantra webinar on 23 August at 6pm India time to my Ireland calendar.",
+        "Put lunch on my calendar tomorrow at 1pm.",
+      ],
+      negative: [
+        "What is on my calendar tomorrow?",
+        "Arrange a catch-up with Sarah.",
+      ],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.contacts.search",
     owner: "core",
     pluginId: null,
