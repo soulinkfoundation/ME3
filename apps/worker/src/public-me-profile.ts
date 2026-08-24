@@ -1,11 +1,13 @@
 import {
   ME3_SCHEMA_URL,
+  ME3_VERSION,
   validateProfile,
   type Me3ActionDefinition,
   type Me3Link,
   type Me3LocationData,
   type Me3Money,
   type Me3Profile,
+  type Me3PublicProfile,
   type Me3Service,
 } from "me3-protocol";
 import {
@@ -124,7 +126,7 @@ function publicLinks(profile: Me3SiteProfile): Me3Link[] | undefined {
   return links.length > 0 ? links : undefined;
 }
 
-function publicBusiness(profile: Me3SiteProfile): Me3Profile["business"] {
+function publicBusiness(profile: Me3SiteProfile): Me3PublicProfile["business"] {
   const source = profile.business;
   if (!source) return undefined;
   const business = {
@@ -243,6 +245,24 @@ export function buildPublicMe3Profile(
   siteOrigin?: string,
 ): Me3Profile {
   const origin = publicOrigin(siteOrigin);
+  const profileName = text(source.name, 100) || text(source.handle, 100) || "ME3 owner";
+  if (source.visibility === "private") {
+    const privateProfile: Me3Profile = {
+      $schema: ME3_SCHEMA_URL,
+      version: ME3_VERSION,
+      kind: "person",
+      visibility: "private",
+      name: profileName,
+      ...(id(source.handle) ? { handle: id(source.handle) } : {}),
+      ...(publicAsset(source.avatar) ? { avatar: publicAsset(source.avatar) } : {}),
+    };
+    const result = validateProfile(privateProfile);
+    if (!result.valid || !result.profile) {
+      throw new Error(`Invalid private me.json projection: ${JSON.stringify(result.errors)}`);
+    }
+    return result.profile;
+  }
+
   const sectionPaths = resolveSiteSectionPaths(source);
   const services = bookingServices(source);
   const products = (source.products || [])
@@ -257,7 +277,7 @@ export function buildPublicMe3Profile(
     }));
 
   const actions: Record<string, Me3ActionDefinition> = {};
-  const capabilities: NonNullable<Me3Profile["capabilities"]> = {};
+  const capabilities: NonNullable<Me3PublicProfile["capabilities"]> = {};
 
   if (origin && source.intents?.subscribe?.enabled) {
     actions.subscribe = {
@@ -309,11 +329,12 @@ export function buildPublicMe3Profile(
     };
   }
 
-  const profile: Me3Profile = {
+  const profile: Me3PublicProfile = {
     $schema: ME3_SCHEMA_URL,
-    version: "0.2",
+    version: ME3_VERSION,
     kind: "person",
-    name: text(source.name, 100) || text(source.handle, 100) || "ME3 owner",
+    visibility: "public",
+    name: profileName,
     ...(origin ? { id: `${origin}/me.json`, url: `${origin}/` } : {}),
     ...(id(source.handle) ? { handle: id(source.handle) } : {}),
     ...(text(source.bio, 500) ? { bio: text(source.bio, 500) } : {}),
@@ -342,7 +363,7 @@ export function buildPublicMe3Profile(
               title: text(post.title, 160) || post.slug || "Post",
               url: `./${sectionPaths.blog}/${post.slug}.html`,
               ...(post.type && ["article", "note", "video", "audio", "image", "link"].includes(post.type)
-                ? { type: post.type as NonNullable<Me3Profile["posts"]>[number]["type"] }
+                ? { type: post.type as NonNullable<Me3PublicProfile["posts"]>[number]["type"] }
                 : {}),
               ...(post.media?.url && publicAsset(post.media.url)
                 ? {

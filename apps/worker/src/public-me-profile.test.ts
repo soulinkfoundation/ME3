@@ -4,7 +4,7 @@ import type { Me3SiteProfile } from "@me3-core/site-renderer";
 import { buildPublicMe3Profile } from "./public-me-profile";
 
 describe("public me.json profile", () => {
-  it("converts private legacy site configuration into protocol 0.2", () => {
+  it("converts legacy site configuration into a public protocol 0.3 manifest", () => {
     const source: Me3SiteProfile = {
       version: "0.1",
       name: "Kieran Butler",
@@ -78,8 +78,10 @@ describe("public me.json profile", () => {
     const profile = buildPublicMe3Profile(source, "https://kieranbutler.com");
 
     expect(validateProfile(profile).valid).toBe(true);
+    if (profile.visibility !== "public") throw new Error("Expected a public profile");
     expect(profile).toMatchObject({
-      version: "0.2",
+      version: "0.3",
+      visibility: "public",
       kind: "person",
       id: "https://kieranbutler.com/me.json",
       url: "https://kieranbutler.com/",
@@ -128,8 +130,37 @@ describe("public me.json profile", () => {
     });
 
     expect(validateProfile(profile).valid).toBe(true);
-    expect(profile.version).toBe("0.2");
+    expect(profile.version).toBe("0.3");
+    if (profile.visibility !== "public") throw new Error("Expected a public profile");
     expect(profile.actions).toBeUndefined();
     expect(profile.capabilities).toBeUndefined();
+  });
+
+  it("publishes only safe identity fields for a private profile", () => {
+    const profile = buildPublicMe3Profile(
+      {
+        version: "0.1",
+        visibility: "private",
+        name: "Private Owner",
+        handle: "owner",
+        avatar: "./files/avatar.jpg",
+        bio: "Must not be public",
+        banner: "./files/banner.jpg",
+        links: { website: "https://private.example.com" },
+        pages: [{ slug: "private", title: "Private", file: "private.md" }],
+      },
+      "https://owner.example",
+    );
+
+    expect(validateProfile(profile).valid).toBe(true);
+    expect(profile).toEqual({
+      $schema: expect.any(String),
+      version: "0.3",
+      kind: "person",
+      visibility: "private",
+      name: "Private Owner",
+      handle: "owner",
+      avatar: "./files/avatar.jpg",
+    });
   });
 });

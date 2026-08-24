@@ -109,6 +109,7 @@ type BookingType = {
  */
 export type Me3SiteProfile = {
   version?: string;
+  visibility?: "public" | "private";
   name?: string;
   handle?: string;
   location?: string;
