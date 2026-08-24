@@ -70,6 +70,17 @@ describe("Core chat tool contracts", () => {
         properties: { confirmed: { type: "boolean" } },
       },
     });
+    expect(getCoreChatToolByName("core_scheduling_decline")).toMatchObject({
+      capabilityId: "core.scheduling.decline",
+      approvalMode: "none",
+      sideEffect: "external_send",
+      parameters: {
+        properties: {
+          contact: { type: "string" },
+          reason: { type: "string" },
+        },
+      },
+    });
   });
 
   it("keeps retired Mission Control wording out of model-facing tool copy", () => {

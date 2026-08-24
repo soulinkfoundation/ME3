@@ -317,7 +317,7 @@ async function ensureDefaultSchedulingTimeType(env: Env, ownerId: string) {
       crypto.randomUUID(),
       ownerId,
       "Catch-up",
-      "Informal 1:1 time for close contacts.",
+      "Informal 1:1 time for contacts.",
       30,
       10,
       timezone,
@@ -328,7 +328,7 @@ async function ensureDefaultSchedulingTimeType(env: Env, ownerId: string) {
         thursday: ["09:00-17:00"],
         friday: ["09:00-17:00"],
       }),
-      JSON.stringify(["close_contact"]),
+      JSON.stringify(["contact", "close_contact", "client"]),
     )
     .run();
 }

@@ -158,7 +158,12 @@ export type CoreSchedulingToolServices = {
     dateRange: { start: string; end: string };
     usedDefaultDuration: boolean;
     usedDefaultDateRange: boolean;
-    status: "options_ready" | "no_owner_availability" | "no_mutual_availability";
+    status:
+      | "options_ready"
+      | "waiting_for_target_review"
+      | "pending_target"
+      | "no_owner_availability"
+      | "no_mutual_availability";
     options: CoreSchedulingOption[];
   }>;
   approve(input: {
@@ -167,8 +172,15 @@ export type CoreSchedulingToolServices = {
     confirmed: boolean;
   }, idempotencyKey: string): Promise<{
     contactName: string;
-    status: "waiting_for_other_owner" | "booked";
-    selectedOption: CoreSchedulingOption;
+    status: "availability_shared" | "waiting_for_other_owner" | "booked";
+    selectedOption: CoreSchedulingOption | null;
+  }>;
+  decline(input: {
+    contact?: string;
+    reason?: string;
+  }, idempotencyKey: string): Promise<{
+    contactName: string;
+    status: "declined";
   }>;
 };
 
@@ -634,9 +646,28 @@ async function executeSchedulingToolCall(input: {
       result: { ok: true, ...result },
       fallbackReply: result.status === "options_ready"
         ? `I checked with ${result.contactName}'s ME3 assistant and found these mutual options:${defaultNote}\n${optionLines.join("\n")}\nTell me which option to book. Nothing has been added to either calendar yet.`
-        : result.status === "no_owner_availability"
-          ? `I couldn't find an open ${result.durationMinutes}-minute slot on your calendar from ${result.dateRange.start} to ${result.dateRange.end}.${defaultNote} Try a wider date window; I did not contact ${result.contactName}'s assistant or book anything.`
-          : `I checked with ${result.contactName}'s ME3 assistant but found no mutual availability from ${result.dateRange.start} to ${result.dateRange.end}.${defaultNote} Try a wider date window; nothing was booked.`,
+        : result.status === "waiting_for_target_review"
+          ? `${result.contactName}'s ME3 assistant is waiting for them to approve sharing availability.${defaultNote} Nothing has been booked; I’ll post the mutual options here after they approve.`
+          : result.status === "pending_target"
+            ? `${result.contactName}'s ME3 assistant is temporarily unavailable.${defaultNote} The request is queued safely and nothing has been booked.`
+            : result.status === "no_owner_availability"
+              ? `I couldn't find an open ${result.durationMinutes}-minute slot on your calendar from ${result.dateRange.start} to ${result.dateRange.end}.${defaultNote} Try a wider date window; I did not contact ${result.contactName}'s assistant or book anything.`
+              : `I checked with ${result.contactName}'s ME3 assistant but found no mutual availability from ${result.dateRange.start} to ${result.dateRange.end}.${defaultNote} Try a wider date window; nothing was booked.`,
+      reminderAction: null,
+      actionCards: [],
+    };
+  }
+
+  if (input.tool.capabilityId === "core.scheduling.decline") {
+    enforceSchedulingToolPolicy(input.tool, "decline");
+    const result = await services.decline({
+      contact: optionalToolString(input.call.arguments.contact),
+      reason: optionalToolString(input.call.arguments.reason),
+    }, input.idempotencyKey);
+    return {
+      capabilityId: "core.scheduling.decline",
+      result: { ok: true, ...result },
+      fallbackReply: `I declined the scheduling request with ${result.contactName}. Nothing was added to either calendar.`,
       reminderAction: null,
       actionCards: [],
     };
@@ -654,9 +685,13 @@ async function executeSchedulingToolCall(input: {
   return {
     capabilityId: "core.scheduling.approve",
     result: { ok: true, ...result },
-    fallbackReply: result.status === "booked"
-      ? `${result.contactName} approved ${result.selectedOption.label}. It is now on both calendars.`
-      : `I sent ${result.selectedOption.label} to ${result.contactName}'s ME3 assistant for final approval. It will only be added after they approve.`,
+    fallbackReply: result.status === "availability_shared"
+      ? `I approved sharing availability with ${result.contactName}. I sent the mutual options to their ME3 assistant; nothing has been booked.`
+      : result.status === "booked" && result.selectedOption
+        ? `${result.contactName} approved ${result.selectedOption.label}. It is now on both calendars.`
+        : result.selectedOption
+          ? `I sent ${result.selectedOption.label} to ${result.contactName}'s ME3 assistant for final approval. It will only be added after they approve.`
+          : "The scheduling request is waiting for the other owner.",
     reminderAction: null,
     actionCards: [],
   };
@@ -2034,8 +2069,10 @@ function withCoreToolInstructions(
     "- Use core_scheduling_request when the owner asks to arrange time with a contact. The contact name is the only required input.",
     "- A missing duration is not ambiguous: omit durationMinutes and ME3 will default to 30 minutes. A missing date window is not ambiguous: omit dateFrom and dateTo and ME3 will default to the next seven local calendar days. Do not ask a clarification question for either omission.",
     "- The request tool exchanges only structured availability with the other ME3 assistant. It does not open, read, or write either owner's private assistant chat.",
+    "- If the other owner's policy requires review before sharing availability, explain that their approval is pending. Do not ask the requester to choose a time until mutual options arrive.",
     "- The request tool never books immediately. Show the returned numbered mutual options and wait for the owner to choose one.",
-    "- Use core_scheduling_approve only after the owner explicitly chooses a shown option or explicitly approves an incoming option selected by the other owner. Set confirmed=true only for that explicit approval.",
+    "- Use core_scheduling_approve after the owner explicitly approves sharing availability for an incoming request, chooses a shown option, or approves an incoming option selected by the other owner. Set confirmed=true only for that explicit approval.",
+    "- Use core_scheduling_decline when the owner explicitly declines or cancels an open scheduling request. Declining never writes a calendar event.",
     "- Both owners must approve the exact selected time before either calendar is changed. Never claim a meeting is booked while the result says waiting_for_other_owner.",
     "- Never mention scheduling request IDs or internal Soulink identifiers in the user-facing reply.",
     "ME3 Network directory rules:",
@@ -2157,13 +2194,15 @@ function enforceBookingLookupToolPolicy(tool: CoreChatToolDefinition): void {
 
 function enforceSchedulingToolPolicy(
   tool: CoreChatToolDefinition,
-  operation: "contacts" | "request" | "approve",
+  operation: "contacts" | "request" | "approve" | "decline",
 ): void {
   const expectedCapability = operation === "contacts"
     ? "core.contacts.search"
     : operation === "request"
       ? "core.scheduling.request"
-      : "core.scheduling.approve";
+      : operation === "approve"
+        ? "core.scheduling.approve"
+        : "core.scheduling.decline";
   const expectedApproval = operation === "approve" ? "approval_required" : "none";
   const allowedChecks = operation === "contacts"
     ? new Set(["soulink"])

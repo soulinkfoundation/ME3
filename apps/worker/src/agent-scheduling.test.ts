@@ -64,6 +64,58 @@ describe("ME3 agent scheduling", () => {
     })).toBeNull();
   });
 
+  it("requires bounded timestamps on the current scheduling envelope", () => {
+    const candidate = slot("2026-08-25T09:00:00.000Z", "2026-08-25T09:30:00.000Z");
+    const envelope = {
+      version: "2026-08-24",
+      kind: "schedule.request",
+      requestId: "request-2",
+      sourceNodeId: "source",
+      sourceName: "Source",
+      targetNodeId: "target",
+      durationMinutes: 30,
+      dateRange: { start: "2026-08-25", end: "2026-08-31" },
+      reason: null,
+      candidateSlots: [candidate],
+      selectedSlot: null,
+    };
+
+    expect(parseAgentSchedulingRelayMessage(envelope)).toBeNull();
+    expect(parseAgentSchedulingRelayMessage({
+      ...envelope,
+      issuedAt: "2026-08-24T12:00:00.000Z",
+      expiresAt: "2026-08-26T12:00:00.000Z",
+    })).toMatchObject({
+      version: "2026-08-24",
+      kind: "schedule.request",
+      requestId: "request-2",
+      issuedAt: "2026-08-24T12:00:00.000Z",
+      expiresAt: "2026-08-26T12:00:00.000Z",
+    });
+  });
+
+  it("accepts a current decline envelope without exposing candidate slots", () => {
+    expect(parseAgentSchedulingRelayMessage({
+      version: "2026-08-24",
+      kind: "schedule.decline",
+      requestId: "request-3",
+      sourceNodeId: "source",
+      sourceName: "Source",
+      targetNodeId: "target",
+      durationMinutes: 30,
+      dateRange: { start: "2026-08-25", end: "2026-08-31" },
+      reason: "Not this week",
+      candidateSlots: [],
+      selectedSlot: null,
+      issuedAt: "2026-08-24T12:00:00.000Z",
+      expiresAt: "2026-08-26T12:00:00.000Z",
+    })).toMatchObject({
+      kind: "schedule.decline",
+      candidateSlots: [],
+      selectedSlot: null,
+    });
+  });
+
   it("lets the model request scheduling without asking for duration or dates", async () => {
     const database = createExecutionDb();
     const request = vi.fn<CoreSchedulingToolServices["request"]>(async (input) => ({
@@ -86,6 +138,9 @@ describe("ME3 agent scheduling", () => {
       },
       request,
       async approve() {
+        throw new Error("not used");
+      },
+      async decline() {
         throw new Error("not used");
       },
     };

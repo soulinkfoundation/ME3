@@ -9201,7 +9201,7 @@ describe("ME3 Worker auth", () => {
           title: "Catch-up",
           source: "owner",
           paymentMode: "free",
-          allowedTiers: ["close_contact"],
+          allowedTiers: ["contact", "close_contact", "client"],
         }),
         expect.objectContaining({
           id: "public:owner:paid-session",

@@ -473,6 +473,48 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.scheduling.decline",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Decline a scheduling request",
+    summary:
+      "Decline or cancel an open scheduling request and notify the other owner's ME3 assistant.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.scheduling.decline",
+    },
+    sideEffect: "external_send",
+    approvalMode: "none",
+    requiresSetup: ["soulink", "calendar.events"],
+    inputSchema: {
+      type: "object",
+      properties: {
+        contact: {
+          type: "string",
+          description: "Optional contact name used to identify the open scheduling request.",
+        },
+        reason: {
+          type: "string",
+          description: "Optional brief reason to share with the other owner.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_scheduling_declined",
+    examples: {
+      positive: [
+        "Decline Sarah's scheduling request.",
+        "Don't book that time with Chris.",
+      ],
+      negative: ["What times could work with Sarah?"],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.reminders.list",
     owner: "core",
     pluginId: null,
