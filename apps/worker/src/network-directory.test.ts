@@ -6,6 +6,7 @@ import {
 } from "@me3-core/plugin-agent-chat";
 import {
   getNetworkDirectoryBridgeConfig,
+  removePublishedProfileFromMe3Network,
   searchMe3Network,
   syncPublishedProfileToMe3Network,
 } from "./network-directory";
@@ -31,17 +32,38 @@ describe("ME3 Network directory bridge", () => {
     });
   });
 
-  it("does not upload a profile before the owner opts in", async () => {
+  it("reports private visibility so Cloud can purge stale public data", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      Response.json({ connected: true, listed: false, syncStatus: "not_listed" }),
+      Response.json(
+        { code: "profile_private" },
+        { status: 422 },
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      syncPublishedProfileToMe3Network(createEnv(SECRETS), { version: "0.2" }),
+      syncPublishedProfileToMe3Network(createEnv(SECRETS), {
+        version: "0.3",
+        kind: "person",
+        visibility: "private",
+        name: "Owner",
+      }),
     ).resolves.toBe("not_listed");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe("https://api.me3.app/v1/network/status");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.me3.app/v1/network/profile");
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "PUT" });
+  });
+
+  it("removes the indexed profile when publication ends", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(removePublishedProfileFromMe3Network(createEnv(SECRETS)))
+      .resolves.toBe("removed");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.me3.app/v1/network/profile",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 
   it("normalizes bounded public search results and drops precise coordinates", async () => {

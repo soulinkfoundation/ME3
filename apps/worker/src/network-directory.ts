@@ -40,25 +40,36 @@ export async function syncPublishedProfileToMe3Network(
 ): Promise<"synced" | "not_connected" | "not_listed"> {
   const config = await getNetworkDirectoryBridgeConfig(env);
   if (!config) return "not_connected";
-  const statusResponse = await fetchWithTimeout(`${config.origin}/v1/network/status`, {
-    headers: config.headers,
-  });
-  const statusData = await readJson(statusResponse);
-  if (!statusResponse.ok) {
-    throw bridgeError(statusData, statusResponse.status, "Failed to check ME3 Network status.");
-  }
-  if (statusData.listed !== true) return "not_listed";
   const response = await fetchWithTimeout(`${config.origin}/v1/network/profile`, {
     method: "PUT",
     headers: { ...config.headers, "Content-Type": "application/json" },
     body: JSON.stringify({ profile }),
   });
   const data = await readJson(response);
-  if (response.status === 403 && data.code === "directory_not_enabled") {
+  if (
+    (response.status === 403 && data.code === "soulink_membership_required") ||
+    (response.status === 422 && data.code === "profile_private")
+  ) {
     return "not_listed";
   }
   if (!response.ok) throw bridgeError(data, response.status, "Failed to sync the ME3 Network profile.");
   return "synced";
+}
+
+export async function removePublishedProfileFromMe3Network(
+  env: Env,
+): Promise<"removed" | "not_connected"> {
+  const config = await getNetworkDirectoryBridgeConfig(env);
+  if (!config) return "not_connected";
+  const response = await fetchWithTimeout(`${config.origin}/v1/network/profile`, {
+    method: "DELETE",
+    headers: config.headers,
+  });
+  const data = await readJson(response);
+  if (!response.ok) {
+    throw bridgeError(data, response.status, "Failed to remove the directory profile.");
+  }
+  return "removed";
 }
 
 export async function searchMe3Network(

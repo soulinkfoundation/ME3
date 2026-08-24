@@ -8,7 +8,10 @@ import {
 import { isCorePluginEnabled } from "../plugins";
 import { generateSiteHtml, markdownToHtml, type Me3SiteProfile } from "@me3-core/site-renderer";
 import { buildPublicMe3Profile } from "../public-me-profile";
-import { syncPublishedProfileToMe3Network } from "../network-directory";
+import {
+  removePublishedProfileFromMe3Network,
+  syncPublishedProfileToMe3Network,
+} from "../network-directory";
 import {
   bookingDetailsFromBooking,
   getOwnerContact,
@@ -1071,7 +1074,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         .bind(site.id)
         .run();
 
-      if (networkProfile && !isPrivateProfile) {
+      if (networkProfile) {
         queueNetworkDirectoryProfileSync(c, networkProfile);
       }
 
@@ -1557,6 +1560,15 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       )
         .bind(site.id)
         .run();
+      if (profileJson) {
+        queueNetworkDirectoryProfileSync(
+          c,
+          buildPublicMe3Profile(
+            parseSiteProfile(profileJson, site.username),
+            getPublicSiteOrigin(c.env, site),
+          ),
+        );
+      }
       return c.json({ ok: true, publishedAt: null });
     }
     const html =
@@ -1592,6 +1604,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     )
       .bind(site.id)
       .run();
+    if (site.site_role === "profile") queueNetworkDirectoryProfileRemoval(c);
     return c.json({ ok: true });
   });
 
@@ -1605,6 +1618,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         ownerId,
         normalizeUsername(c.req.param("username")),
       );
+      if (site.site_role === "profile") queueNetworkDirectoryProfileRemoval(c);
       return c.json({
         ok: true,
         deletedSiteId: site.id,
@@ -1636,6 +1650,20 @@ function queueNetworkDirectoryProfileSync(c: AppContext, profile: unknown): void
   executionCtx.waitUntil(
     syncPublishedProfileToMe3Network(c.env, profile).catch((error) => {
       console.error("Failed to sync published profile to the ME3 Network:", error);
+    }),
+  );
+}
+
+function queueNetworkDirectoryProfileRemoval(c: AppContext): void {
+  let executionCtx: { waitUntil(promise: Promise<unknown>): void };
+  try {
+    executionCtx = c.executionCtx;
+  } catch {
+    return;
+  }
+  executionCtx.waitUntil(
+    removePublishedProfileFromMe3Network(c.env).catch((error) => {
+      console.error("Failed to remove the public profile directory entry:", error);
     }),
   );
 }
