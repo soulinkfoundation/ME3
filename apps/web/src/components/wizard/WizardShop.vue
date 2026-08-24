@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from "vue";
-import { useWizardStore, type WizardProduct } from "../../stores/wizard";
+import {
+  useWizardStore,
+  type WizardContentAsset,
+  type WizardProduct,
+} from "../../stores/wizard";
 import { useSitesStore } from "../../stores/sites";
 import { useAuthStore } from "../../stores/auth";
 import TiptapEditor from "../TiptapEditor.vue";
@@ -215,22 +219,9 @@ const shopTitle = computed({
   },
 });
 
-async function handleImageAdded(image: {
-  id: string;
-  blob: Blob;
-  mimeType: string;
-  ext: string;
-}) {
+function handleContentAssetAdded(asset: WizardContentAsset) {
   if (selectedProductIndex.value === null) return;
-
-  const productImage = wizard.addProductImage(selectedProductIndex.value, {
-    id: image.id,
-    blob: image.blob,
-    mimeType: image.mimeType,
-    ext: image.ext,
-  });
-
-  if (!productImage) return;
+  wizard.addProductContentAsset(selectedProductIndex.value, asset);
 }
 
 watch(selectedProductIndex, (newIndex) => {
@@ -246,11 +237,11 @@ watch(selectedProductIndex, (newIndex) => {
 
 watch(editorContent, (newContent) => {
   if (selectedProductIndex.value !== null) {
-    const imageIds = editorRef.value?.getImageIds() || new Set<string>();
+    const assetIds = editorRef.value?.getAssetIds() || new Set<string>();
     wizard.updateProduct(selectedProductIndex.value, {
       content: newContent,
     });
-    wizard.syncProductImages(selectedProductIndex.value, imageIds);
+    wizard.syncProductContentAssets(selectedProductIndex.value, assetIds);
   }
 });
 
@@ -345,7 +336,7 @@ function deleteProduct(index: number) {
 
 function closeEditor() {
   persistProductMeta();
-  editorRef.value?.flushPendingImages?.();
+  editorRef.value?.flushPendingAssets?.();
   selectedProductIndex.value = null;
 }
 
@@ -664,7 +655,7 @@ defineExpose({
           ref="editorRef"
           v-model="editorContent"
           placeholder="Write your product description..."
-          @image-added="handleImageAdded"
+          @asset-added="handleContentAssetAdded"
         />
       </div>
 

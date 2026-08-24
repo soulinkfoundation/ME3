@@ -9,6 +9,9 @@ const allowedExtensions = new Set([
   ".gif",
   ".svg",
   ".webp",
+  ".mp3",
+  ".m4a",
+  ".wav",
 ]);
 
 const mimeTypes: Record<string, string> = {
@@ -20,6 +23,9 @@ const mimeTypes: Record<string, string> = {
   ".png": "image/png",
   ".svg": "image/svg+xml",
   ".webp": "image/webp",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".wav": "audio/wav",
 };
 
 export interface PreparedSiteUpload {

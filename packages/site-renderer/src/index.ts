@@ -8,6 +8,15 @@ export type { PublicLocationData, PublicLocationProfile } from "./location-displ
 
 type Me3LinkMap = Record<string, string | undefined>;
 
+export const SITE_NAVIGATION_STYLE_LINK_KEY = "_navigation_style";
+export type SiteNavigationStyle = "standard" | "compact";
+
+export function normalizeSiteNavigationStyle(
+  value: unknown,
+): SiteNavigationStyle {
+  return value === "compact" ? "compact" : "standard";
+}
+
 type Me3Button = {
   text?: string;
   url?: string;
@@ -287,7 +296,7 @@ function generateIndexHtml(profile: Me3SiteProfile, capabilities: SiteRenderCapa
           ${displayLocation ? `<p class="location">${escapeHtml(displayLocation)}</p>` : ""}
           ${profile.bio ? `<p class="bio">${parseInlineMarkdown(profile.bio)}</p>` : ""}
         </header>
-        ${generateNav(profile, "", "./")}
+        ${generateNav(profile, "", "./", "home")}
         ${generateButtons(profile)}
         ${generateLinks(profile)}
         ${booking}
@@ -318,8 +327,7 @@ function generateContentPageHtml(
     description: contentToPlainText(markdown).slice(0, 160),
     activeSlug,
     basePath,
-    body: `<header class="page-header"><a class="back-link" href="${basePath}">${profile.avatar ? `<img src="${escapeHtml(filePathForHtml(profile.avatar, basePath))}" alt="" class="avatar-small">` : ""}<span>${escapeHtml(profile.name || "Home")}</span></a></header>
-      ${generateNav(profile, activeSlug, basePath)}
+    body: `<header class="page-header"><a class="back-link" href="${basePath}">${profile.avatar ? `<img src="${escapeHtml(filePathForHtml(profile.avatar, basePath))}" alt="" class="avatar-small">` : ""}<span>${escapeHtml(profile.name || "Home")}</span></a>${generateNav(profile, activeSlug, basePath, "header")}</header>
       <main class="content"><h1>${escapeHtml(title)}</h1>${htmlContent}</main>`,
     footer: generateFooter(profile, capabilities.footerCustomization),
     vibe: getVibe(profile),
@@ -345,8 +353,7 @@ function generateCollectionIndex(
     description: `${title} by ${profile.name || "ME3"}`,
     activeSlug,
     basePath: "../",
-    body: `<header class="page-header"><a class="back-link" href="../">${profile.avatar ? `<img src="${escapeHtml(filePathForHtml(profile.avatar, "../"))}" alt="" class="avatar-small">` : ""}<span>${escapeHtml(profile.name || "Home")}</span></a></header>
-      ${generateNav(profile, activeSlug, "../")}
+    body: `<header class="page-header"><a class="back-link" href="../">${profile.avatar ? `<img src="${escapeHtml(filePathForHtml(profile.avatar, "../"))}" alt="" class="avatar-small">` : ""}<span>${escapeHtml(profile.name || "Home")}</span></a>${generateNav(profile, activeSlug, "../", "header")}</header>
       <main class="content"><h1>${escapeHtml(title)}</h1><div class="${listClass}">${cards}</div></main>`,
     footer: generateFooter(profile, capabilities.footerCustomization),
     vibe: getVibe(profile),
@@ -400,6 +407,10 @@ function pageShell(
     ? `<link rel="icon" href="${escapeHtml(faviconPath)}">\n  <link rel="apple-touch-icon" href="${escapeHtml(faviconPath)}">`
     : "";
   const headLinks = [faviconLinks, fontLinks].filter(Boolean).join("\n  ");
+  const navigationStyle = getSiteNavigationStyle(profile);
+  const navigationScript = hasSiteNavigation(profile)
+    ? buildNavigationDialogScript()
+    : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -408,24 +419,106 @@ function pageShell(
   <title>${escapeHtml(options.title)}</title>
   <meta name="description" content="${escapeHtml(options.description)}">
   ${headLinks}
-  <style>${siteCss(options.vibe, profile.links?._accent)}${siteCssOverrides(options.vibe)}${contentImageCss()}${navigationGroupCss()}${bookingControlsCss()}.main.no-banner .profile-header{margin-top:0}</style>
+  <style>${siteCss(options.vibe, profile.links?._accent)}${siteCssOverrides(options.vibe)}${contentImageCss()}${contentAudioCss()}${navigationGroupCss()}${bookingControlsCss()}.main.no-banner .profile-header{margin-top:0}</style>
 </head>
-<body data-vibe="${escapeHtml(options.vibe)}">
+<body data-vibe="${escapeHtml(options.vibe)}" data-navigation-style="${navigationStyle}">
   <div class="container">
     ${options.body}
     ${options.footer}
   </div>
   ${options.afterContainer || ""}
+  ${navigationScript}
 </body>
 </html>`;
 }
 
-function generateNav(profile: Me3SiteProfile, activeSlug: string, basePath: string): string {
+type NavigationPlacement = "home" | "header";
+
+function getSiteNavigationStyle(
+  profile: Me3SiteProfile,
+): SiteNavigationStyle {
+  return normalizeSiteNavigationStyle(
+    profile.links?.[SITE_NAVIGATION_STYLE_LINK_KEY],
+  );
+}
+
+function hasSiteNavigation(profile: Me3SiteProfile): boolean {
+  return (
+    (profile.pages || []).some(
+      (page) => page.visible !== false && Boolean(page.slug),
+    ) ||
+    (profile.posts || []).some((post) => !post.draft) ||
+    (profile.products || []).length > 0
+  );
+}
+
+function navigationChevronMarkup(): string {
+  return `<span class="nav-group-chevron" aria-hidden="true"><svg viewBox="0 0 20 20" focusable="false"><path d="m5 7.5 5 5 5-5"/></svg></span>`;
+}
+
+function generateNav(
+  profile: Me3SiteProfile,
+  activeSlug: string,
+  basePath: string,
+  placement: NavigationPlacement,
+): string {
   const sectionPaths = resolveSiteSectionPaths(profile);
   const pages = (profile.pages || []).filter((page) => page.visible !== false && page.slug);
   const hasPosts = (profile.posts || []).some((post) => !post.draft);
   const hasProducts = (profile.products || []).length > 0;
   if (pages.length === 0 && !hasPosts && !hasProducts) return "";
+
+  const style = getSiteNavigationStyle(profile);
+  const inlineLinks = generateNavLinks({
+    profile,
+    pages,
+    activeSlug,
+    basePath,
+    sectionPaths,
+    hasPosts,
+    hasProducts,
+    drawer: false,
+  });
+  const drawerLinks = generateNavLinks({
+    profile,
+    pages,
+    activeSlug,
+    basePath,
+    sectionPaths,
+    hasPosts,
+    hasProducts,
+    drawer: true,
+  });
+  const inlineNavigation =
+    style === "standard"
+      ? `<nav class="nav nav-inline" aria-label="Primary navigation">${inlineLinks}</nav>`
+      : "";
+  const menuIcon = `<svg class="site-menu-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16"/></svg>`;
+  const closeIcon = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg>`;
+
+  return `<div class="site-navigation site-navigation-${placement} site-navigation-${style}">${inlineNavigation}<button class="site-menu-trigger" type="button" data-site-menu-open aria-haspopup="dialog" aria-controls="site-navigation-dialog" aria-expanded="false">${menuIcon}<span>Menu</span></button><dialog id="site-navigation-dialog" class="site-menu-dialog" data-site-menu-dialog aria-labelledby="site-navigation-title"><div class="site-menu-panel"><header class="site-menu-header"><span id="site-navigation-title" class="site-menu-title">Menu</span><button class="site-menu-close" type="button" data-site-menu-close aria-label="Close menu">${closeIcon}</button></header><nav class="site-menu-nav" aria-label="Primary navigation">${drawerLinks}</nav></div></dialog></div>`;
+}
+
+function generateNavLinks(options: {
+  profile: Me3SiteProfile;
+  pages: Me3Page[];
+  activeSlug: string;
+  basePath: string;
+  sectionPaths: SiteSectionPaths;
+  hasPosts: boolean;
+  hasProducts: boolean;
+  drawer: boolean;
+}): string {
+  const {
+    profile,
+    pages,
+    activeSlug,
+    basePath,
+    sectionPaths,
+    hasPosts,
+    hasProducts,
+    drawer,
+  } = options;
 
   const pageLinks: string[] = [];
   const renderedGroups = new Set<string>();
@@ -446,7 +539,7 @@ function generateNav(profile: Me3SiteProfile, activeSlug: string, basePath: stri
     );
     const groupActive = children.some((child) => child.slug === activeSlug);
     pageLinks.push(
-      `<details class="nav-group${groupActive ? " active" : ""}"><summary class="nav-link nav-group-toggle${groupActive ? " active" : ""}">${escapeHtml(groupLabel)}<span class="nav-group-chevron" aria-hidden="true">⌄</span></summary><div class="nav-submenu">${children.map((child) => generateNavPageLink(child, activeSlug, basePath)).join("")}</div></details>`,
+      `<details class="nav-group${groupActive ? " active" : ""}"${drawer && groupActive ? " open" : ""}><summary class="nav-link nav-group-toggle${groupActive ? " active" : ""}">${escapeHtml(groupLabel)}${navigationChevronMarkup()}</summary><div class="nav-submenu">${children.map((child) => generateNavPageLink(child, activeSlug, basePath)).join("")}</div></details>`,
     );
   }
 
@@ -457,7 +550,41 @@ function generateNav(profile: Me3SiteProfile, activeSlug: string, basePath: stri
     hasProducts ? `<a href="${basePath}${escapeHtml(sectionPaths.shop)}/" class="nav-link${activeSlug === "shop" ? " active" : ""}">${escapeHtml(profile.shopTitle || "Shop")}</a>` : "",
   ].join("");
 
-  return `<nav class="nav">${links}</nav>`;
+  return links;
+}
+
+function buildNavigationDialogScript(): string {
+  return `<script>
+    (function() {
+      var trigger = document.querySelector("[data-site-menu-open]");
+      var dialog = document.querySelector("[data-site-menu-dialog]");
+      var closeButton = dialog && dialog.querySelector("[data-site-menu-close]");
+      if (!trigger || !dialog || !closeButton || typeof dialog.showModal !== "function") return;
+
+      function openMenu() {
+        if (dialog.open) return;
+        dialog.showModal();
+        trigger.setAttribute("aria-expanded", "true");
+        document.documentElement.classList.add("site-menu-open");
+        closeButton.focus();
+      }
+
+      function closeMenu() {
+        if (dialog.open) dialog.close();
+      }
+
+      trigger.addEventListener("click", openMenu);
+      closeButton.addEventListener("click", closeMenu);
+      dialog.addEventListener("click", function(event) {
+        if (event.target === dialog) closeMenu();
+      });
+      dialog.addEventListener("close", function() {
+        trigger.setAttribute("aria-expanded", "false");
+        document.documentElement.classList.remove("site-menu-open");
+        trigger.focus();
+      });
+    })();
+  </script>`;
 }
 
 function generateNavPageLink(
@@ -1819,19 +1946,61 @@ function contentImageCss(): string {
 `;
 }
 
+function contentAudioCss(): string {
+  return `
+.content .content-audio{box-sizing:border-box;width:100%;max-width:100%;margin:24px 0;padding:18px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);text-align:left}
+.content .content-audio figcaption{margin:0 0 12px;color:var(--text);font-size:15px;font-weight:700;line-height:1.45;text-align:left}
+.content .content-audio audio{display:block;width:100%;max-width:100%}
+.content .content-audio audio:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+@media(max-width:520px){.content .content-audio{padding:14px}}
+`;
+}
+
 function navigationGroupCss(): string {
   return `
-.nav{align-items:flex-start}
+.site-menu-open{overflow:hidden}
+.site-navigation{display:flex;align-items:center;min-width:0}
+.site-navigation-home{justify-content:center;margin:28px 0 24px}
+.site-navigation-header{flex:1;justify-content:flex-end;min-width:0}
+.site-navigation-compact{justify-content:flex-end}
+.nav{align-items:center;margin:0}
+.page-header{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.page-header .back-link{min-width:0;flex:0 1 auto}
+.page-header .back-link span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page-header .nav-inline{justify-content:flex-end;flex-wrap:wrap}
+.page-header .nav-link{padding:9px 12px}
 .nav-group{position:relative}
 .nav-group>summary{list-style:none;cursor:pointer}
 .nav-group>summary::-webkit-details-marker{display:none}
-.nav-group-toggle{display:flex;align-items:center;gap:6px}
-.nav-group-chevron{display:inline-block;font-size:14px;transition:transform .18s ease}
+.nav-group-toggle{display:flex;min-height:44px;box-sizing:border-box;align-items:center;gap:7px}
+.nav-group-chevron{display:inline-flex;width:20px;height:20px;flex:0 0 20px;align-items:center;justify-content:center;transition:transform .18s ease}
+.nav-group-chevron svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .nav-group[open] .nav-group-chevron{transform:rotate(180deg)}
 .nav-submenu{position:absolute;z-index:20;top:calc(100% + 6px);left:50%;display:grid;min-width:180px;padding:7px;transform:translateX(-50%);border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);box-shadow:0 12px 30px rgba(0,0,0,.12)}
 .nav-submenu .nav-link{display:block;border-radius:var(--radius-sm);white-space:nowrap}
-.nav-group-toggle:focus-visible,.nav-submenu .nav-link:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-@media(max-width:560px){.nav-group{width:100%}.nav-group-toggle{justify-content:center}.nav-submenu{position:static;width:100%;box-sizing:border-box;margin-top:4px;transform:none;box-shadow:none}.nav-submenu .nav-link{text-align:center;white-space:normal}}
+.site-menu-trigger,.site-menu-close{font:inherit;color:var(--text);cursor:pointer}
+.site-menu-trigger{display:none;min-width:44px;min-height:44px;box-sizing:border-box;align-items:center;justify-content:center;gap:8px;padding:9px 14px;border:1px solid var(--border);border-radius:var(--radius-full);background:var(--surface);font-weight:800}
+.site-navigation-compact .site-menu-trigger{display:inline-flex}
+.site-menu-icon{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.site-menu-dialog{box-sizing:border-box;width:100vw;max-width:none;height:100vh;height:100dvh;max-height:none;margin:0;padding:0;border:0;background:transparent;color:var(--text)}
+.site-menu-dialog::backdrop{background:rgba(0,0,0,.42)}
+.site-menu-dialog[open]{display:flex;justify-content:flex-end}
+.site-menu-panel{box-sizing:border-box;width:min(88vw,360px);height:100%;overflow-y:auto;padding:20px;background:var(--surface);border-left:1px solid var(--border);box-shadow:-18px 0 48px rgba(0,0,0,.16)}
+.site-menu-header{display:flex;min-height:48px;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}
+.site-menu-title{font-size:1.25rem;font-weight:800}
+.site-menu-close{display:inline-flex;width:44px;height:44px;align-items:center;justify-content:center;padding:0;border:0;border-radius:var(--radius-full);background:var(--border)}
+.site-menu-close svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.site-menu-nav{display:grid;gap:4px}
+.site-menu-nav>.nav-link,.site-menu-nav>.nav-group>.nav-link{width:100%;min-height:44px;box-sizing:border-box}
+.site-menu-nav>.nav-link{display:flex;align-items:center}
+.site-menu-nav .nav-group{width:100%}
+.site-menu-nav .nav-group-toggle{justify-content:space-between}
+.site-menu-nav .nav-group.active>.nav-group-toggle{background:var(--border);color:var(--text)}
+.site-menu-nav .nav-submenu{position:static;width:100%;min-width:0;box-sizing:border-box;margin:4px 0 6px;padding:2px 0 2px 14px;transform:none;border:0;border-left:1px solid var(--border);border-radius:0;background:transparent;box-shadow:none}
+.site-menu-nav .nav-submenu .nav-link{min-height:44px;box-sizing:border-box;white-space:normal}
+.nav-link:focus-visible,.nav-group-toggle:focus-visible,.site-menu-trigger:focus-visible,.site-menu-close:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+@media(max-width:700px){.site-navigation-standard .nav-inline{display:none}.site-navigation-standard .site-menu-trigger{display:inline-flex}.site-navigation-home{justify-content:flex-end}.page-header{padding:20px 20px 0}}
+@media(prefers-reduced-motion:reduce){.nav-group-chevron{transition:none}}
 `;
 }
 

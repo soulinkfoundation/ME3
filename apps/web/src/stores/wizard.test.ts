@@ -17,6 +17,7 @@ describe("wizard store", () => {
       expect(store.profile.name).toBe("");
       expect(store.profile.handle).toBe("");
       expect(store.profile.logo).toBeNull();
+      expect(store.profile.navigationStyle).toBe("standard");
       expect(store.pages).toEqual([]);
       expect(store.username).toBe("");
       expect(store.draftSourceUrl).toBeNull();
@@ -874,6 +875,19 @@ describe("wizard store", () => {
       expect(me3.pages?.[0].navigationGroup).toBe("Services");
     });
 
+    it("stores compact navigation as a private site extension", () => {
+      const store = useWizardStore();
+      store.profile.name = "Test User";
+
+      store.updateProfile({ navigationStyle: "compact" });
+      expect((store.generateMe3Json() as any).links).toEqual({
+        _navigation_style: "compact",
+      });
+
+      store.updateProfile({ navigationStyle: "standard" });
+      expect((store.generateMe3Json() as any).links).toBeUndefined();
+    });
+
     it("should include custom blog and shop titles when set", () => {
       const store = useWizardStore();
       store.profile.name = "Test User";
@@ -1274,6 +1288,23 @@ describe("wizard store", () => {
 
       expect(store.blogTitle).toBe("Articles");
       expect(store.shopTitle).toBe("Services");
+    });
+
+    it("restores the compact navigation layout from site content", () => {
+      const store = useWizardStore();
+
+      store.loadFromSiteContent(
+        {
+          name: "Existing User",
+          links: { _navigation_style: "compact" },
+        },
+        [],
+        [],
+        [],
+        "existing",
+      );
+
+      expect(store.profile.navigationStyle).toBe("compact");
     });
 
     it("normalizes invalid product prices loaded from site content", () => {

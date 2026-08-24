@@ -1,6 +1,11 @@
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
-import type { Me3SiteProfile } from "@me3-core/site-renderer";
+import {
+  SITE_NAVIGATION_STYLE_LINK_KEY,
+  normalizeSiteNavigationStyle,
+  type Me3SiteProfile,
+  type SiteNavigationStyle,
+} from "@me3-core/site-renderer";
 import { productSendsPurchaseConfirmation } from "../../../../shared/product-purchase-confirmation";
 import { API_BASE } from "../api";
 import { type VibeId, defaultVibe, vibeIds } from "../styles/vibes";
@@ -11,6 +16,7 @@ import {
   TESTIMONIAL_PLACEMENT_LINK_KEY,
   type TestimonialPlacement,
 } from "../utils/site-sections";
+import type { SiteContentAsset } from "../utils/siteContentAssets";
 
 export type Me3Button = {
   text: string;
@@ -69,6 +75,7 @@ export interface WizardProfile {
   links: Record<string, string>;
   linkOrder: string[]; // Order of link keys for drag-and-drop
   buttons: Me3Button[];
+  navigationStyle: SiteNavigationStyle;
   footer: WizardFooterConfig;
   newsletter: WizardNewsletterConfig;
   booking: WizardBookingConfig;
@@ -261,22 +268,22 @@ export interface WizardPage {
   slugCustomized?: boolean;
   navigationGroup?: string;
   content: string;
-  images: WizardPageImage[];
+  /** Legacy field name retained for draft compatibility; contains all editor-owned content assets. */
+  images: WizardContentAsset[];
   visible?: boolean;
 }
 
-export interface WizardPageImage {
-  /**
-   * Stable id embedded into the editor document as `data-image-id`.
-   * Used to map editor <img> tags back to blobs for publish/download.
-   */
-  id: string;
-  blob: Blob;
-  tempUrl: string;
-  mimeType: string;
-  ext: string;
-  alt?: string;
-}
+export type WizardContentAsset = SiteContentAsset;
+export type WizardPageImage = WizardContentAsset;
+
+type WizardContentAssetInput = Omit<WizardContentAsset, "tempUrl"> & {
+  tempUrl?: string;
+};
+
+type LegacyWizardImageInput = Pick<
+  WizardContentAsset,
+  "id" | "blob" | "mimeType" | "ext" | "alt"
+>;
 
 export type WizardPostImage = WizardPageImage;
 
@@ -1402,6 +1409,7 @@ const defaultProfile: WizardProfile = {
   links: {},
   linkOrder: [],
   buttons: [],
+  navigationStyle: "standard",
   footer: {
     mode: "default",
     text: "",
@@ -1768,6 +1776,11 @@ export const useWizardStore = defineStore("wizard", () => {
   // Update profile
   function updateProfile(updates: Partial<WizardProfile>) {
     const nextProfile = { ...profile.value, ...updates };
+    if ("navigationStyle" in updates) {
+      nextProfile.navigationStyle = normalizeSiteNavigationStyle(
+        updates.navigationStyle,
+      );
+    }
     if ("location" in updates && !("locationData" in updates)) {
       const locationLabel = nextProfile.location.trim();
       nextProfile.locationData =
@@ -2510,40 +2523,40 @@ export const useWizardStore = defineStore("wizard", () => {
     saveToStorage();
   }
 
-  function addPageImage(
+  function addPageContentAsset(
     pageIndex: number,
-    image: {
-      id: string;
-      blob: Blob;
-      mimeType: string;
-      ext: string;
-      alt?: string;
-    },
-  ): WizardPageImage | null {
+    asset: WizardContentAssetInput,
+  ): WizardContentAsset | null {
     if (pageIndex < 0 || pageIndex >= pages.value.length) return null;
 
     const page = pages.value[pageIndex];
     if (!page.images) page.images = [];
 
-    if (page.images.some((img) => img.id === image.id)) return null;
+    if (page.images.some((item) => item.id === asset.id)) return null;
 
-    const tempUrl = URL.createObjectURL(image.blob);
-    const pageImage: WizardPageImage = {
-      id: image.id,
-      blob: image.blob,
-      tempUrl,
-      mimeType: image.mimeType,
-      ext: image.ext,
-      alt: image.alt,
+    const pageAsset: WizardContentAsset = {
+      ...asset,
+      tempUrl: asset.tempUrl || URL.createObjectURL(asset.blob),
     };
 
     const updatedPages = [...pages.value];
-    updatedPages[pageIndex] = { ...page, images: [...page.images, pageImage] };
+    updatedPages[pageIndex] = { ...page, images: [...page.images, pageAsset] };
     pages.value = updatedPages;
     markAsEdited();
     saveToStorage();
 
-    return pageImage;
+    return pageAsset;
+  }
+
+  function addPageImage(
+    pageIndex: number,
+    image: LegacyWizardImageInput,
+  ): WizardPageImage | null {
+    return addPageContentAsset(pageIndex, {
+      ...image,
+      kind: "image",
+      filename: `image.${image.ext}`,
+    });
   }
 
   function removePageImage(pageIndex: number, imageId: string): void {
@@ -2575,9 +2588,9 @@ export const useWizardStore = defineStore("wizard", () => {
    * Keep `page.images` aligned to what's actually referenced in the editor content.
    * Any unreferenced images are removed and their blob URLs revoked.
    */
-  function syncPageImages(
+  function syncPageContentAssets(
     pageIndex: number,
-    activeImageIds: Set<string>,
+    activeAssetIds: Set<string>,
   ): void {
     if (pageIndex < 0 || pageIndex >= pages.value.length) return;
 
@@ -2585,7 +2598,7 @@ export const useWizardStore = defineStore("wizard", () => {
     const images = page.images || [];
     if (images.length === 0) return;
 
-    const removed = images.filter((img) => !activeImageIds.has(img.id));
+    const removed = images.filter((item) => !activeAssetIds.has(item.id));
     for (const img of removed) {
       if (img.tempUrl) {
         try {
@@ -2596,7 +2609,7 @@ export const useWizardStore = defineStore("wizard", () => {
       }
     }
 
-    const kept = images.filter((img) => activeImageIds.has(img.id));
+    const kept = images.filter((item) => activeAssetIds.has(item.id));
     if (kept.length === images.length) return;
 
     const updatedPages = [...pages.value];
@@ -2605,6 +2618,8 @@ export const useWizardStore = defineStore("wizard", () => {
     markAsEdited();
     saveToStorage();
   }
+
+  const syncPageImages = syncPageContentAssets;
 
   function removePage(index: number) {
     if (index < 0 || index >= pages.value.length) return;
@@ -2723,41 +2738,46 @@ export const useWizardStore = defineStore("wizard", () => {
     saveToStorage();
   }
 
-  function addPostImage(
+  function addPostContentAsset(
     postIndex: number,
-    image: {
-      id: string;
-      blob: Blob;
-      mimeType: string;
-      ext: string;
-      alt?: string;
-    },
+    asset: WizardContentAssetInput,
     options: { siteAffecting?: boolean } = {},
-  ): WizardPostImage | null {
+  ): WizardContentAsset | null {
     if (postIndex < 0 || postIndex >= posts.value.length) return null;
 
     const post = posts.value[postIndex];
     if (!post.images) post.images = [];
 
-    if (post.images.some((img) => img.id === image.id)) return null;
+    if (post.images.some((item) => item.id === asset.id)) return null;
 
-    const tempUrl = URL.createObjectURL(image.blob);
-    const postImage: WizardPostImage = {
-      id: image.id,
-      blob: image.blob,
-      tempUrl,
-      mimeType: image.mimeType,
-      ext: image.ext,
-      alt: image.alt,
+    const postAsset: WizardContentAsset = {
+      ...asset,
+      tempUrl: asset.tempUrl || URL.createObjectURL(asset.blob),
     };
 
     const updatedPosts = [...posts.value];
-    updatedPosts[postIndex] = { ...post, images: [...post.images, postImage] };
+    updatedPosts[postIndex] = { ...post, images: [...post.images, postAsset] };
     posts.value = updatedPosts;
     markAsEdited(options);
     saveToStorage();
 
-    return postImage;
+    return postAsset;
+  }
+
+  function addPostImage(
+    postIndex: number,
+    image: LegacyWizardImageInput,
+    options: { siteAffecting?: boolean } = {},
+  ): WizardPostImage | null {
+    return addPostContentAsset(
+      postIndex,
+      {
+        ...image,
+        kind: "image",
+        filename: `image.${image.ext}`,
+      },
+      options,
+    );
   }
 
   function removePostImage(
@@ -2793,9 +2813,9 @@ export const useWizardStore = defineStore("wizard", () => {
    * Keep `post.images` aligned to what's actually referenced in the editor content.
    * Any unreferenced images are removed and their blob URLs revoked.
    */
-  function syncPostImages(
+  function syncPostContentAssets(
     postIndex: number,
-    activeImageIds: Set<string>,
+    activeAssetIds: Set<string>,
     options: { siteAffecting?: boolean } = {},
   ): void {
     if (postIndex < 0 || postIndex >= posts.value.length) return;
@@ -2804,7 +2824,7 @@ export const useWizardStore = defineStore("wizard", () => {
     const images = post.images || [];
     if (images.length === 0) return;
 
-    const removed = images.filter((img) => !activeImageIds.has(img.id));
+    const removed = images.filter((item) => !activeAssetIds.has(item.id));
     for (const img of removed) {
       if (img.tempUrl) {
         try {
@@ -2815,7 +2835,7 @@ export const useWizardStore = defineStore("wizard", () => {
       }
     }
 
-    const kept = images.filter((img) => activeImageIds.has(img.id));
+    const kept = images.filter((item) => activeAssetIds.has(item.id));
     if (kept.length === images.length) return;
 
     const updatedPosts = [...posts.value];
@@ -2824,6 +2844,8 @@ export const useWizardStore = defineStore("wizard", () => {
     markAsEdited(options);
     saveToStorage();
   }
+
+  const syncPostImages = syncPostContentAssets;
 
   function reorderPostImages(
     postIndex: number,
@@ -2957,43 +2979,43 @@ export const useWizardStore = defineStore("wizard", () => {
     saveToStorage();
   }
 
-  function addProductImage(
+  function addProductContentAsset(
     productIndex: number,
-    image: {
-      id: string;
-      blob: Blob;
-      mimeType: string;
-      ext: string;
-      alt?: string;
-    },
-  ): WizardProductImage | null {
+    asset: WizardContentAssetInput,
+  ): WizardContentAsset | null {
     if (productIndex < 0 || productIndex >= products.value.length) return null;
 
     const product = products.value[productIndex];
     if (!product.images) product.images = [];
 
-    if (product.images.some((img) => img.id === image.id)) return null;
+    if (product.images.some((item) => item.id === asset.id)) return null;
 
-    const tempUrl = URL.createObjectURL(image.blob);
-    const productImage: WizardProductImage = {
-      id: image.id,
-      blob: image.blob,
-      tempUrl,
-      mimeType: image.mimeType,
-      ext: image.ext,
-      alt: image.alt,
+    const productAsset: WizardContentAsset = {
+      ...asset,
+      tempUrl: asset.tempUrl || URL.createObjectURL(asset.blob),
     };
 
     const updatedProducts = [...products.value];
     updatedProducts[productIndex] = {
       ...product,
-      images: [...product.images, productImage],
+      images: [...product.images, productAsset],
     };
     products.value = updatedProducts;
     markAsEdited();
     saveToStorage();
 
-    return productImage;
+    return productAsset;
+  }
+
+  function addProductImage(
+    productIndex: number,
+    image: LegacyWizardImageInput,
+  ): WizardProductImage | null {
+    return addProductContentAsset(productIndex, {
+      ...image,
+      kind: "image",
+      filename: `image.${image.ext}`,
+    });
   }
 
   function removeProductImage(productIndex: number, imageId: string): void {
@@ -3021,9 +3043,9 @@ export const useWizardStore = defineStore("wizard", () => {
     saveToStorage();
   }
 
-  function syncProductImages(
+  function syncProductContentAssets(
     productIndex: number,
-    activeImageIds: Set<string>,
+    activeAssetIds: Set<string>,
   ): void {
     if (productIndex < 0 || productIndex >= products.value.length) return;
 
@@ -3031,7 +3053,7 @@ export const useWizardStore = defineStore("wizard", () => {
     const images = product.images || [];
     if (images.length === 0) return;
 
-    const removed = images.filter((img) => !activeImageIds.has(img.id));
+    const removed = images.filter((item) => !activeAssetIds.has(item.id));
     for (const img of removed) {
       if (img.tempUrl) {
         try {
@@ -3042,7 +3064,7 @@ export const useWizardStore = defineStore("wizard", () => {
       }
     }
 
-    const kept = images.filter((img) => activeImageIds.has(img.id));
+    const kept = images.filter((item) => activeAssetIds.has(item.id));
     if (kept.length === images.length) return;
 
     const updatedProducts = [...products.value];
@@ -3051,6 +3073,8 @@ export const useWizardStore = defineStore("wizard", () => {
     markAsEdited();
     saveToStorage();
   }
+
+  const syncProductImages = syncProductContentAssets;
 
   function removeProduct(index: number) {
     if (index < 0 || index >= products.value.length) return;
@@ -3394,6 +3418,13 @@ export const useWizardStore = defineStore("wizard", () => {
       me3.links = {
         ...(me3.links || {}),
         _accent: accentOverride.value,
+      };
+    }
+
+    if (profile.value.navigationStyle === "compact") {
+      me3.links = {
+        ...(me3.links || {}),
+        [SITE_NAVIGATION_STYLE_LINK_KEY]: "compact",
       };
     }
 
@@ -3987,6 +4018,9 @@ export const useWizardStore = defineStore("wizard", () => {
         profile.value = {
           ...defaultProfile,
           ...storedProfile,
+          navigationStyle: normalizeSiteNavigationStyle(
+            storedProfile.navigationStyle,
+          ),
           logo: resolveWizardSiteAssetUrl(
             storedProfile.logo,
             storedAssetUsername,
@@ -4544,7 +4578,7 @@ export const useWizardStore = defineStore("wizard", () => {
     };
     const resolveLoadedContentAssetUrls = (content: string): string =>
       content.replace(
-        /\b(src|href)=["']((?:\.\.?\/)*files\/[^"']+)["']/g,
+        /\b(src|href|data-src)=["']((?:\.\.?\/)*files\/[^"']+)["']/g,
         (_match, attr: string, rawUrl: string) => {
           const resolved = resolveLoadedSiteAssetUrl(rawUrl) || rawUrl;
           return `${attr}="${resolved}"`;
@@ -4566,6 +4600,8 @@ export const useWizardStore = defineStore("wizard", () => {
     // Extract vibe and accent override before filtering
     const savedVibe = links._vibe as string | undefined;
     const savedAccent = links._accent as string | undefined;
+    const savedNavigationStyle =
+      links[SITE_NAVIGATION_STYLE_LINK_KEY] as string | undefined;
 
     // Filter out special keys and empty values for regular links
     const filteredLinks: Record<string, string> = {};
@@ -4828,6 +4864,7 @@ export const useWizardStore = defineStore("wizard", () => {
       links: filteredLinks,
       linkOrder,
       buttons,
+      navigationStyle: normalizeSiteNavigationStyle(savedNavigationStyle),
       footer,
       newsletter,
       booking,
@@ -5100,21 +5137,27 @@ export const useWizardStore = defineStore("wizard", () => {
     updatePage,
     movePage,
     removePage,
+    addPageContentAsset,
     addPageImage,
     removePageImage,
+    syncPageContentAssets,
     syncPageImages,
     addPost,
     updatePost,
     removePost,
+    addPostContentAsset,
     addPostImage,
     removePostImage,
+    syncPostContentAssets,
     syncPostImages,
     reorderPostImages,
     addProduct,
     updateProduct,
     removeProduct,
+    addProductContentAsset,
     addProductImage,
     removeProductImage,
+    syncProductContentAssets,
     syncProductImages,
     addTestimonial,
     updateTestimonial,

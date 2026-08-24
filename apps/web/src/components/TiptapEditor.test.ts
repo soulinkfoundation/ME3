@@ -169,6 +169,14 @@ describe("TiptapEditor", () => {
     mockToggleBulletList.mockClear();
     mockToggleOrderedList.mockClear();
     mockToggleTaskList.mockClear();
+    Object.defineProperty(URL, "createObjectURL", {
+      value: vi.fn(() => "blob:audio-preview"),
+      configurable: true,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      value: vi.fn(),
+      configurable: true,
+    });
   });
 
   it("should render the editor with default props", () => {
@@ -233,6 +241,7 @@ describe("TiptapEditor", () => {
     expect(wrapper.find('[title="Embed YouTube video"]').exists()).toBe(true);
     expect(wrapper.find('[title="Insert image"]').exists()).toBe(true);
     expect(wrapper.find('[title="Insert gallery"]').exists()).toBe(true);
+    expect(wrapper.find('[title="Insert audio"]').exists()).toBe(true);
     expect(wrapper.find('[title="Insert FAQ accordion"]').exists()).toBe(true);
     expect(wrapper.find('[title="Insert card carousel"]').exists()).toBe(true);
     expect(wrapper.find('[title="Insert call-to-action button"]').exists()).toBe(true);
@@ -250,6 +259,7 @@ describe("TiptapEditor", () => {
 
     expect(wrapper.find('[title="Insert FAQ accordion"]').exists()).toBe(false);
     expect(wrapper.find('[title="Insert card carousel"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Insert audio"]').exists()).toBe(false);
     expect(wrapper.find('[title="Insert call-to-action button"]').exists()).toBe(false);
     expect(wrapper.find('[title="Insert newsletter signup"]').exists()).toBe(false);
     expect(wrapper.find('[title="Insert testimonials"]').exists()).toBe(false);
@@ -549,6 +559,58 @@ describe("TiptapEditor", () => {
     clickSpy.mockRestore();
   });
 
+  it("queues a supported audio block and emits it when flushed", async () => {
+    const wrapper = mount(TiptapEditor, {
+      props: { modelValue: "" },
+    });
+    const input = wrapper.find('input[accept*="audio/mpeg"]');
+    const file = new File(["audio"], "morning-grounding.mp3", {
+      type: "audio/mp3",
+    });
+    setInputFiles(input as DOMWrapper<HTMLInputElement>, [file]);
+
+    await input.trigger("change");
+    await flushPromises();
+
+    expect(mockInsertContent).toHaveBeenCalledWith({
+      type: "audioBlock",
+      attrs: expect.objectContaining({
+        src: "blob:audio-preview",
+        type: "audio/mpeg",
+        title: "morning grounding",
+        assetId: expect.any(String),
+      }),
+    });
+
+    const vm = wrapper.vm as any;
+    expect(vm.getPendingAssets()).toEqual([
+      expect.objectContaining({
+        kind: "audio",
+        mimeType: "audio/mpeg",
+        ext: "mp3",
+      }),
+    ]);
+    vm.flushPendingAssets();
+    expect(wrapper.emitted("assetAdded")?.[0]?.[0]).toEqual(
+      expect.objectContaining({ kind: "audio", filename: "morning-grounding.mp3" }),
+    );
+  });
+
+  it("shows a clear error for unsupported audio", async () => {
+    const wrapper = mount(TiptapEditor, {
+      props: { modelValue: "" },
+    });
+    const input = wrapper.find('input[accept*="audio/mpeg"]');
+    setInputFiles(input as DOMWrapper<HTMLInputElement>, [
+      new File(["text"], "notes.txt", { type: "text/plain" }),
+    ]);
+
+    await input.trigger("change");
+
+    expect(wrapper.find(".editor-error").text()).toContain("MP3, M4A, or WAV");
+    expect(mockInsertContent).not.toHaveBeenCalled();
+  });
+
   it("should queue images and emit only when flushed", async () => {
     const wrapper = mount(TiptapEditor, {
       props: {
@@ -669,5 +731,8 @@ describe("TiptapEditor", () => {
     expect(typeof vm.getImageIds).toBe("function");
     expect(typeof vm.getPendingImages).toBe("function");
     expect(typeof vm.flushPendingImages).toBe("function");
+    expect(typeof vm.getAssetIds).toBe("function");
+    expect(typeof vm.getPendingAssets).toBe("function");
+    expect(typeof vm.flushPendingAssets).toBe("function");
   });
 });

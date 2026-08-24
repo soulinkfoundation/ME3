@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   generateUnsubscribeToken,
+  getContentType,
   getPublicSiteForHost,
+  getReferencedContentAssetPaths,
+  getSiteContentAssetUploadMetadata,
   hashSubscriberIdentifier,
   isMissingSitePagesTableError,
+  isSiteMediaFile,
   listBookingEnabledSiteIds,
   verifyUnsubscribeToken,
 } from "./sites";
@@ -61,6 +65,57 @@ describe("site pages compatibility", () => {
   it("does not hide unrelated database errors", () => {
     expect(isMissingSitePagesTableError(new Error("D1_ERROR: database is locked"))).toBe(
       false,
+    );
+  });
+});
+
+describe("site content assets", () => {
+  it.each([
+    ["recording.mp3", "audio/mp3", "mp3", "audio/mpeg"],
+    ["recording.m4a", "audio/x-m4a", "m4a", "audio/mp4"],
+    ["recording.wav", "audio/vnd.wave", "wav", "audio/wav"],
+    ["recording.MP3", "", "mp3", "audio/mpeg"],
+  ])(
+    "normalizes supported audio %s",
+    (name, type, ext, mimeType) => {
+      expect(getSiteContentAssetUploadMetadata({ name, type }, "audio")).toEqual({
+        ext,
+        mimeType,
+      });
+    },
+  );
+
+  it("rejects unsupported audio and recognizes portable audio media", () => {
+    expect(
+      getSiteContentAssetUploadMetadata(
+        { name: "recording.ogg", type: "audio/ogg" },
+        "audio",
+      ),
+    ).toBeNull();
+    expect(isSiteMediaFile("files/content/message.ogg", "audio/ogg")).toBe(false);
+    expect(isSiteMediaFile("files/content/message.m4a", "audio/mp4")).toBe(true);
+    expect(getContentType("message.mp3")).toBe("audio/mpeg");
+    expect(getContentType("message.m4a")).toBe("audio/mp4");
+    expect(getContentType("message.wav")).toBe("audio/wav");
+  });
+
+  it("finds stable content asset paths across page depths", () => {
+    const sourceFiles = new Map([
+      [
+        "about.md",
+        '<source src="./files/content/first-id.mp3" type="audio/mpeg">',
+      ],
+      [
+        "blog/post.md",
+        '<img src="../files/content/SECOND-ID.webp" alt="Portrait">',
+      ],
+    ]);
+
+    expect(getReferencedContentAssetPaths(sourceFiles)).toEqual(
+      new Set([
+        "files/content/first-id.mp3",
+        "files/content/second-id.webp",
+      ]),
     );
   });
 });

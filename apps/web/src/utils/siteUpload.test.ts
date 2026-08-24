@@ -8,6 +8,7 @@ describe("prepareSiteUploadFiles", () => {
     zip.file("me.json", '{"name":"Example User"}');
     zip.file("blog/welcome-to-me3.md", "# Welcome");
     zip.file("files/avatar.jpg", "avatar");
+    zip.file("files/content/grounding.mp3", "audio");
 
     const content = await zip.generateAsync({ type: "arraybuffer" });
     const zipFile = new File([content], "example.zip", {
@@ -19,7 +20,25 @@ describe("prepareSiteUploadFiles", () => {
     expect(prepared.files.map((file) => file.name).sort()).toEqual([
       "blog/welcome-to-me3.md",
       "files/avatar.jpg",
+      "files/content/grounding.mp3",
       "me.json",
+    ]);
+    expect(
+      prepared.files.find((file) => file.name.endsWith("grounding.mp3"))?.type,
+    ).toBe("audio/mpeg");
+  });
+
+  it.each([
+    ["message.m4a", "audio/mp4"],
+    ["practice.wav", "audio/wav"],
+  ])("accepts portable %s audio", async (filename, mimeType) => {
+    const file = new File(["audio"], filename, { type: mimeType });
+
+    const prepared = await prepareSiteUploadFiles([file]);
+
+    expect(prepared.ignored).toEqual([]);
+    expect(prepared.files).toEqual([
+      expect.objectContaining({ name: filename, type: mimeType }),
     ]);
   });
 

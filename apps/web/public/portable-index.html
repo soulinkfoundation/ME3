@@ -139,12 +139,26 @@
 
       .nav {
         display: flex;
+        align-items: center;
         gap: 8px;
         justify-content: center;
         flex-wrap: wrap;
+      }
+
+      .site-menu-open {
+        overflow: hidden;
+      }
+
+      .site-navigation {
+        display: flex;
+        justify-content: center;
         padding: 16px 0;
         border-bottom: 1px solid var(--color-border);
         margin-bottom: 12px;
+      }
+
+      .site-navigation-compact {
+        justify-content: flex-end;
       }
 
       .nav-link {
@@ -168,6 +182,238 @@
       .nav-link.active {
         background: var(--color-primary);
         color: var(--color-bg);
+      }
+
+      .nav-group {
+        position: relative;
+      }
+
+      .nav-group > summary {
+        display: flex;
+        min-height: 44px;
+        align-items: center;
+        gap: 7px;
+        list-style: none;
+      }
+
+      .nav-group > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .nav-group-chevron {
+        display: inline-flex;
+        width: 20px;
+        height: 20px;
+        flex: 0 0 20px;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.18s ease;
+      }
+
+      .nav-group-chevron svg {
+        width: 20px;
+        height: 20px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .nav-group[open] .nav-group-chevron {
+        transform: rotate(180deg);
+      }
+
+      .nav-submenu {
+        position: absolute;
+        z-index: 20;
+        top: calc(100% + 6px);
+        left: 50%;
+        display: grid;
+        min-width: 180px;
+        padding: 7px;
+        transform: translateX(-50%);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        background: var(--color-bg);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+      }
+
+      .nav-submenu .nav-link {
+        display: block;
+        white-space: nowrap;
+      }
+
+      .site-menu-trigger,
+      .site-menu-close {
+        font: inherit;
+        color: var(--color-text);
+        cursor: pointer;
+      }
+
+      .site-menu-trigger {
+        display: none;
+        min-width: 44px;
+        min-height: 44px;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 9px 14px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-full);
+        background: var(--color-bg);
+        font-weight: 700;
+      }
+
+      .site-navigation-compact .site-menu-trigger {
+        display: inline-flex;
+      }
+
+      .site-menu-icon {
+        width: 22px;
+        height: 22px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+      }
+
+      .site-menu-dialog {
+        width: 100vw;
+        max-width: none;
+        height: 100vh;
+        height: 100dvh;
+        max-height: none;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--color-text);
+      }
+
+      .site-menu-dialog::backdrop {
+        background: rgba(0, 0, 0, 0.42);
+      }
+
+      .site-menu-dialog[open] {
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .site-menu-panel {
+        width: min(88vw, 360px);
+        height: 100%;
+        overflow-y: auto;
+        padding: 20px;
+        background: var(--color-bg);
+        border-left: 1px solid var(--color-border);
+        box-shadow: -18px 0 48px rgba(0, 0, 0, 0.16);
+      }
+
+      .site-menu-header {
+        display: flex;
+        min-height: 48px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      .site-menu-title {
+        font-size: 20px;
+        font-weight: 700;
+      }
+
+      .site-menu-close {
+        display: inline-flex;
+        width: 44px;
+        height: 44px;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 0;
+        border-radius: var(--radius-full);
+        background: var(--color-border);
+      }
+
+      .site-menu-close svg {
+        width: 22px;
+        height: 22px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+      }
+
+      .site-menu-nav {
+        display: grid;
+        gap: 4px;
+      }
+
+      .site-menu-nav > .nav-link,
+      .site-menu-nav > .nav-group > .nav-link {
+        width: 100%;
+        min-height: 44px;
+      }
+
+      .site-menu-nav > .nav-link {
+        display: flex;
+        align-items: center;
+      }
+
+      .site-menu-nav .nav-group-toggle {
+        justify-content: space-between;
+      }
+
+      .site-menu-nav .nav-group.active > .nav-group-toggle {
+        background: var(--color-border);
+        color: var(--color-text);
+      }
+
+      .site-menu-nav .nav-submenu {
+        position: static;
+        width: 100%;
+        min-width: 0;
+        margin: 4px 0 6px;
+        padding: 2px 0 2px 14px;
+        transform: none;
+        border: 0;
+        border-left: 1px solid var(--color-border);
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .site-menu-nav .nav-submenu .nav-link {
+        min-height: 44px;
+        white-space: normal;
+      }
+
+      .nav-link:focus-visible,
+      .site-menu-trigger:focus-visible,
+      .site-menu-close:focus-visible {
+        outline: 3px solid var(--color-primary);
+        outline-offset: 2px;
+      }
+
+      @media (max-width: 700px) {
+        .site-navigation-standard .nav-inline {
+          display: none;
+        }
+
+        .site-navigation-standard {
+          justify-content: flex-end;
+        }
+
+        .site-navigation-standard .site-menu-trigger {
+          display: inline-flex;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .nav-group-chevron {
+          transition: none;
+        }
       }
 
       .buttons {
@@ -832,10 +1078,75 @@
           return html;
         }
 
+        function navigationChevronMarkup() {
+          return '<span class="nav-group-chevron" aria-hidden="true"><svg viewBox="0 0 20 20" focusable="false"><path d="m5 7.5 5 5 5-5"/></svg></span>';
+        }
+
+        function renderNavPageLink(page, currentSlug) {
+          const isActive = page.slug === currentSlug;
+          return `<a href="#/${escapeHtml(page.slug)}" class="nav-link${isActive ? " active" : ""}">${escapeHtml(page.title)}</a>`;
+        }
+
+        function renderNavItems(visiblePages, currentSlug, drawer) {
+          const pageLinks = [];
+          const renderedGroups = new Set();
+
+          for (const page of visiblePages) {
+            const groupLabel =
+              typeof page.navigationGroup === "string"
+                ? page.navigationGroup.trim()
+                : "";
+            if (!groupLabel) {
+              pageLinks.push(renderNavPageLink(page, currentSlug));
+              continue;
+            }
+
+            const groupKey = groupLabel.toLowerCase();
+            if (renderedGroups.has(groupKey)) continue;
+            renderedGroups.add(groupKey);
+            const children = visiblePages.filter(
+              (candidate) =>
+                typeof candidate.navigationGroup === "string" &&
+                candidate.navigationGroup.trim().toLowerCase() === groupKey,
+            );
+            const groupActive = children.some(
+              (child) => child.slug === currentSlug,
+            );
+            pageLinks.push(
+              `<details class="nav-group${groupActive ? " active" : ""}"${drawer && groupActive ? " open" : ""}><summary class="nav-link nav-group-toggle${groupActive ? " active" : ""}">${escapeHtml(groupLabel)}${navigationChevronMarkup()}</summary><div class="nav-submenu">${children.map((child) => renderNavPageLink(child, currentSlug)).join("")}</div></details>`,
+            );
+          }
+
+          const blogPath = getBlogPath();
+          const shopPath = getShopPath();
+          const isBlogActive =
+            currentSlug === blogPath ||
+            (currentSlug && currentSlug.startsWith(blogPath + "/"));
+          const isShopActive =
+            currentSlug === shopPath ||
+            (currentSlug && currentSlug.startsWith(shopPath + "/"));
+          const links = [
+            `<a href="#" class="nav-link${!currentSlug ? " active" : ""}">Home</a>`,
+            ...pageLinks,
+          ];
+
+          if (Array.isArray(profile.posts) && profile.posts.length > 0) {
+            links.push(
+              `<a href="#/${escapeHtml(blogPath)}" class="nav-link${isBlogActive ? " active" : ""}">${escapeHtml(getBlogTitle())}</a>`,
+            );
+          }
+          if (Array.isArray(profile.products) && profile.products.length > 0) {
+            links.push(
+              `<a href="#/${escapeHtml(shopPath)}" class="nav-link${isShopActive ? " active" : ""}">${escapeHtml(getShopTitle())}</a>`,
+            );
+          }
+          return links.join("");
+        }
+
         // Render navigation
         function renderNav() {
           const visiblePages = profile.pages
-            ? profile.pages.filter((p) => p.visible)
+            ? profile.pages.filter((page) => page.visible !== false && page.slug)
             : [];
           const hasShop =
             Array.isArray(profile.products) && profile.products.length > 0;
@@ -845,35 +1156,83 @@
           if (visiblePages.length === 0 && !hasShop && !hasPosts) return "";
 
           const currentSlug = getCurrentSlug();
-          const isShopActive =
-            currentSlug === getShopPath() ||
-            (currentSlug && currentSlug.startsWith(getShopPath() + "/"));
-          const isBlogActive =
-            currentSlug === getBlogPath() ||
-            (currentSlug && currentSlug.startsWith(getBlogPath() + "/"));
-          const blogTitle = getBlogTitle();
-          const shopTitle = getShopTitle();
-          const blogPath = getBlogPath();
-          const shopPath = getShopPath();
+          const navigationStyle =
+            profile.links && profile.links._navigation_style === "compact"
+              ? "compact"
+              : "standard";
+          const inlineNavigation =
+            navigationStyle === "standard"
+              ? `<nav class="nav nav-inline" aria-label="Primary navigation">${renderNavItems(visiblePages, currentSlug, false)}</nav>`
+              : "";
+          const menuIcon =
+            '<svg class="site-menu-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+          const closeIcon =
+            '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg>';
 
-          let html = '<nav class="nav">';
-          html += `<a href="#" class="nav-link${!currentSlug ? " active" : ""}">Home</a>`;
+          return `<div class="site-navigation site-navigation-${navigationStyle}">${inlineNavigation}<button class="site-menu-trigger" type="button" data-site-menu-open aria-haspopup="dialog" aria-controls="portable-site-navigation-dialog" aria-expanded="false">${menuIcon}<span>Menu</span></button><dialog id="portable-site-navigation-dialog" class="site-menu-dialog" data-site-menu-dialog aria-labelledby="portable-site-navigation-title"><div class="site-menu-panel"><header class="site-menu-header"><span id="portable-site-navigation-title" class="site-menu-title">Menu</span><button class="site-menu-close" type="button" data-site-menu-close aria-label="Close menu">${closeIcon}</button></header><nav class="site-menu-nav" aria-label="Primary navigation">${renderNavItems(visiblePages, currentSlug, true)}</nav></div></dialog></div>`;
+        }
 
-          for (const page of visiblePages) {
-            const isActive = page.slug === currentSlug;
-            html += `<a href="#/${escapeHtml(page.slug)}" class="nav-link${isActive ? " active" : ""}">${escapeHtml(page.title)}</a>`;
-          }
+        function installNavigationDialogEvents() {
+          document.addEventListener("click", function (event) {
+            const target =
+              event.target instanceof Element ? event.target : null;
+            if (!target) return;
 
-          if (hasPosts) {
-            html += `<a href="#/${escapeHtml(blogPath)}" class="nav-link${isBlogActive ? " active" : ""}">${escapeHtml(blogTitle)}</a>`;
-          }
+            const trigger = target.closest("[data-site-menu-open]");
+            if (trigger) {
+              const dialogId = trigger.getAttribute("aria-controls");
+              const dialog = dialogId && document.getElementById(dialogId);
+              if (
+                dialog instanceof HTMLDialogElement &&
+                typeof dialog.showModal === "function" &&
+                !dialog.open
+              ) {
+                dialog.showModal();
+                trigger.setAttribute("aria-expanded", "true");
+                document.documentElement.classList.add("site-menu-open");
+                const closeButton = dialog.querySelector(
+                  "[data-site-menu-close]",
+                );
+                if (closeButton instanceof HTMLElement) closeButton.focus();
+                dialog.addEventListener(
+                  "close",
+                  function () {
+                    trigger.setAttribute("aria-expanded", "false");
+                    document.documentElement.classList.remove("site-menu-open");
+                    if (trigger instanceof HTMLElement) trigger.focus();
+                  },
+                  { once: true },
+                );
+              }
+              return;
+            }
 
-          if (hasShop) {
-            html += `<a href="#/${escapeHtml(shopPath)}" class="nav-link${isShopActive ? " active" : ""}">${escapeHtml(shopTitle)}</a>`;
-          }
+            const closeButton = target.closest("[data-site-menu-close]");
+            if (closeButton) {
+              const dialog = closeButton.closest("dialog");
+              if (dialog instanceof HTMLDialogElement && dialog.open) {
+                dialog.close();
+              }
+              return;
+            }
 
-          html += "</nav>";
-          return html;
+            const dialogLink = target.closest("[data-site-menu-dialog] a");
+            if (dialogLink) {
+              const dialog = dialogLink.closest("dialog");
+              if (dialog instanceof HTMLDialogElement && dialog.open) {
+                dialog.close();
+              }
+              return;
+            }
+
+            if (
+              target instanceof HTMLDialogElement &&
+              target.matches("[data-site-menu-dialog]") &&
+              target.open
+            ) {
+              target.close();
+            }
+          });
         }
 
         // Render buttons
@@ -1312,6 +1671,7 @@
 
             profile = await response.json();
             updateSiteIcons();
+            installNavigationDialogEvents();
 
             // Update page title with name (and bio on home)
             document.title = homeDocumentTitle();

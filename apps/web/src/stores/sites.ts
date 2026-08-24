@@ -42,6 +42,16 @@ export interface UploadPageImageResult {
   imageIndex: number;
 }
 
+export interface UploadContentAssetResult {
+  ok: boolean;
+  path: string;
+  url: string;
+  storage?: "d1" | "r2";
+  assetId: string;
+  kind: "image" | "audio";
+  mimeType: string;
+}
+
 export interface SiteStorageStatus {
   ok: boolean;
   activeMediaStorage: "d1" | "r2";
@@ -673,6 +683,41 @@ export const useSitesStore = defineStore("sites", () => {
       return result;
     } catch (e: any) {
       error.value = e.message || "Failed to upload page image";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function uploadContentAsset(
+    username: string,
+    file: Blob,
+    asset: {
+      assetId: string;
+      kind: "image" | "audio";
+      filename: string;
+    },
+  ): Promise<UploadContentAssetResult | null> {
+    loading.value = true;
+    error.value = null;
+
+    try {
+      const formData = new FormData();
+      formData.append(
+        "file",
+        new File([file], asset.filename, {
+          type: file.type || "application/octet-stream",
+        }),
+      );
+      formData.append("assetId", asset.assetId);
+      formData.append("kind", asset.kind);
+
+      return await api.upload<UploadContentAssetResult>(
+        `/sites/${username}/upload-content-asset`,
+        formData,
+      );
+    } catch (e: any) {
+      error.value = e.message || "Failed to upload content asset";
       return null;
     } finally {
       loading.value = false;
@@ -1402,6 +1447,7 @@ export const useSitesStore = defineStore("sites", () => {
     uploadImage,
     uploadFavicon,
     uploadPageImage,
+    uploadContentAsset,
     createStreamUpload,
     finalizeStreamUpload,
     deleteStreamVideo,

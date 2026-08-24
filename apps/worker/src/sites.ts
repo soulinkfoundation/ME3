@@ -20,6 +20,7 @@ const ME3_CLOUD_USERNAME_CONFLICT_MESSAGE =
 export const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])$/;
 export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const D1_SITE_FILE_MAX_BYTES = 1_900_000;
+export const MAX_SITE_AUDIO_BYTES = 40 * 1024 * 1024;
 
 export type Me3CloudUsernameAvailability = {
   available: boolean;
@@ -708,7 +709,7 @@ export async function serveSiteFileResponse(
   return new Response(siteFileContentToArrayBuffer(file.content), {
     headers: {
       "Content-Type": file.content_type,
-      "Cache-Control": file.content_type.startsWith("image/")
+      "Cache-Control": /^(?:image|audio)\//.test(file.content_type)
         ? "public, max-age=31536000, immutable"
         : "no-store",
     },
@@ -842,6 +843,17 @@ export async function deleteSiteFile(env: Env, siteId: string, path: string): Pr
     .run();
 }
 
+export async function deleteSiteMediaFile(
+  env: Env,
+  site: DbSite,
+  path: string,
+): Promise<void> {
+  await deleteSiteFile(env, site.id, path);
+  if (env.SITE_ASSETS) {
+    await env.SITE_ASSETS.delete(getR2SiteFileKey(site, path));
+  }
+}
+
 export async function getR2SiteFile(env: Env, site: DbSite, path: string): Promise<SiteFileRecord | null> {
   if (!env.SITE_ASSETS) return null;
   const object = await env.SITE_ASSETS.get(getR2SiteFileKey(site, path));
@@ -964,6 +976,64 @@ export async function pruneUnreferencedSiteSourceFiles(
     await deleteSiteFile(env, siteId, file.path);
     delete manifest.sourceFiles[sourceName];
   }
+}
+
+export function getReferencedContentAssetPaths(
+  sourceFiles: Map<string, string>,
+): Set<string> {
+  const referenced = new Set<string>();
+  const pattern = /files\/content\/[a-z0-9][a-z0-9-]{0,79}\.(?:jpe?g|png|webp|gif|mp3|m4a|wav)\b/gi;
+  for (const content of sourceFiles.values()) {
+    for (const match of content.matchAll(pattern)) {
+      referenced.add(match[0].toLowerCase());
+    }
+  }
+  return referenced;
+}
+
+function deleteManifestAssetEntry(
+  manifest: PublishManifest,
+  relativePath: string,
+): void {
+  const normalized = normalizeSiteFileName(relativePath).toLowerCase();
+  for (const key of Object.keys(manifest.assetFiles)) {
+    if (normalizeSiteFileName(key).toLowerCase() === normalized) {
+      delete manifest.assetFiles[key];
+    }
+  }
+}
+
+export async function pruneUnreferencedContentAssets(
+  env: Env,
+  site: DbSite,
+  sourceFiles: Map<string, string>,
+  manifest: PublishManifest,
+): Promise<void> {
+  const keep = getReferencedContentAssetPaths(sourceFiles);
+  const d1Files = await listSiteFiles(env, site.id, "public/files/content/");
+  for (const file of d1Files) {
+    const relativePath = file.path.replace(/^public\//, "").toLowerCase();
+    if (keep.has(relativePath)) continue;
+    await deleteSiteMediaFile(env, site, file.path);
+    deleteManifestAssetEntry(manifest, relativePath);
+  }
+
+  if (!env.SITE_ASSETS) return;
+  let cursor: string | undefined;
+  const prefix = `${getR2SiteFileKey(site, "public/files/content")}/`;
+  do {
+    const listing = await env.SITE_ASSETS.list(
+      cursor ? { prefix, cursor } : { prefix },
+    );
+    for (const object of listing.objects) {
+      const relativePath = object.key.slice(prefix.length);
+      const manifestPath = `files/content/${relativePath}`.toLowerCase();
+      if (keep.has(manifestPath)) continue;
+      await env.SITE_ASSETS.delete(object.key);
+      deleteManifestAssetEntry(manifest, manifestPath);
+    }
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
 }
 
 export async function pruneGeneratedPublicFiles(
@@ -1184,16 +1254,91 @@ export function imageExtension(file: File): string {
   return "jpg";
 }
 
+export type SiteContentAssetUploadMetadata = {
+  ext: "jpg" | "png" | "webp" | "gif" | "mp3" | "m4a" | "wav";
+  mimeType: string;
+};
+
+export function getSiteContentAssetUploadMetadata(
+  file: Pick<File, "name" | "type">,
+  kind: "image" | "audio",
+): SiteContentAssetUploadMetadata | null {
+  const type = file.type.trim().toLowerCase().split(";", 1)[0];
+  const extension = file.name.toLowerCase().split(".").pop() || "";
+
+  if (kind === "image") {
+    if (type === "image/png" || (!type && extension === "png")) {
+      return { ext: "png", mimeType: "image/png" };
+    }
+    if (type === "image/webp" || (!type && extension === "webp")) {
+      return { ext: "webp", mimeType: "image/webp" };
+    }
+    if (type === "image/gif" || (!type && extension === "gif")) {
+      return { ext: "gif", mimeType: "image/gif" };
+    }
+    if (
+      type === "image/jpeg" ||
+      type === "image/jpg" ||
+      (!type && (extension === "jpg" || extension === "jpeg"))
+    ) {
+      return { ext: "jpg", mimeType: "image/jpeg" };
+    }
+    return null;
+  }
+
+  if (
+    type === "audio/mpeg" ||
+    type === "audio/mp3" ||
+    (!type && extension === "mp3")
+  ) {
+    return { ext: "mp3", mimeType: "audio/mpeg" };
+  }
+  if (
+    type === "audio/mp4" ||
+    type === "audio/m4a" ||
+    type === "audio/x-m4a" ||
+    (!type && extension === "m4a")
+  ) {
+    return { ext: "m4a", mimeType: "audio/mp4" };
+  }
+  if (
+    type === "audio/wav" ||
+    type === "audio/wave" ||
+    type === "audio/vnd.wave" ||
+    type === "audio/x-wav" ||
+    (!type && extension === "wav")
+  ) {
+    return { ext: "wav", mimeType: "audio/wav" };
+  }
+  return null;
+}
+
 export function isSiteMediaFile(filename: string, contentType: string): boolean {
   const lower = filename.toLowerCase();
+  const normalizedType = contentType.trim().toLowerCase().split(";", 1)[0];
+  const isSupportedAudioType = [
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/m4a",
+    "audio/x-m4a",
+    "audio/wav",
+    "audio/wave",
+    "audio/vnd.wave",
+    "audio/x-wav",
+  ].includes(normalizedType);
   return (
-    contentType.startsWith("image/") ||
+    normalizedType.startsWith("image/") ||
+    isSupportedAudioType ||
     lower.endsWith(".jpg") ||
     lower.endsWith(".jpeg") ||
     lower.endsWith(".png") ||
     lower.endsWith(".gif") ||
     lower.endsWith(".webp") ||
-    lower.endsWith(".svg")
+    lower.endsWith(".svg") ||
+    lower.endsWith(".mp3") ||
+    lower.endsWith(".m4a") ||
+    lower.endsWith(".wav")
   );
 }
 
@@ -1213,6 +1358,9 @@ export function getContentType(filename: string): string {
   if (lower.endsWith(".webp")) return "image/webp";
   if (lower.endsWith(".gif")) return "image/gif";
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".m4a")) return "audio/mp4";
+  if (lower.endsWith(".wav")) return "audio/wav";
   return "application/octet-stream";
 }
 

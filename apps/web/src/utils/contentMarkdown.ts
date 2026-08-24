@@ -15,7 +15,8 @@ export function createContentTurndownService(): TurndownService {
       node.hasAttribute("data-tiptap-faq") ||
       node.hasAttribute("data-tiptap-carousel") ||
       node.hasAttribute("data-me3-site-block") ||
-      node.hasAttribute("data-me3-cta-button")
+      node.hasAttribute("data-me3-cta-button") ||
+      node.hasAttribute("data-me3-audio")
     );
   });
 

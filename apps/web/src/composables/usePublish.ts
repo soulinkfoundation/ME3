@@ -1,21 +1,14 @@
 import { computed, ref } from "vue";
-import { useWizardStore, type WizardPageImage } from "../stores/wizard";
+import { useWizardStore } from "../stores/wizard";
 import { productSendsPurchaseConfirmation } from "../../../../shared/product-purchase-confirmation";
 import { useSitesStore, type PublishManifest } from "../stores/sites";
 import { useAuthStore } from "../stores/auth";
 import { api } from "../api";
-import { createContentTurndownService } from "../utils/contentMarkdown";
 import { resolvePublicSiteUrl } from "../utils/publicSiteUrl";
-
-type ExportedContentImage = {
-  contentSlug: string;
-  imageIndex: number;
-  ext: string;
-  blob: Blob;
-  filename: string;
-};
-
-const turndown = createContentTurndownService();
+import {
+  exportSiteContentToMarkdown,
+  type ExportedSiteContentAsset,
+} from "../utils/siteContentAssets";
 
 function createEmptyPublishManifest(): PublishManifest {
   return {
@@ -52,91 +45,6 @@ function getImageExt(blob: Blob): string {
       : blob.type === "image/gif"
         ? "gif"
         : "jpg";
-}
-
-function parsePageImagesFromHtml(html: string): string[] {
-  if (!html || html.trim() === "") return [];
-  try {
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    const imgs = Array.from(doc.querySelectorAll("img[data-image-id]"));
-    const ids: string[] = [];
-    for (const img of imgs) {
-      const id = img.getAttribute("data-image-id");
-      if (id && !ids.includes(id)) ids.push(id);
-    }
-    return ids;
-  } catch {
-    return [];
-  }
-}
-
-function rewriteHtmlImageSrcs(
-  html: string,
-  contentSlug: string,
-  idToIndex: Map<string, { index: number; ext: string }>,
-  basePath: string = "./",
-): string {
-  if (!html || html.trim() === "") return "";
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  const imgs = Array.from(
-    doc.querySelectorAll("img[data-image-id]"),
-  ) as HTMLImageElement[];
-
-  for (const img of imgs) {
-    const id = img.getAttribute("data-image-id") || "";
-    const entry = idToIndex.get(id);
-    if (!entry) continue;
-    img.setAttribute(
-      "src",
-      `${basePath}files/${contentSlug}-${entry.index}.${entry.ext}`,
-    );
-  }
-
-  return doc.body.innerHTML;
-}
-
-function exportContentToMarkdown(
-  content: string,
-  contentSlug: string,
-  images: WizardPageImage[],
-  basePath: string = "./",
-): {
-  markdown: string;
-  images: ExportedContentImage[];
-} {
-  const html = content || "";
-  if (!html.trim()) return { markdown: "", images: [] };
-
-  const referencedIds = parsePageImagesFromHtml(html);
-  const exportedImages: ExportedContentImage[] = [];
-
-  const idToIndex = new Map<string, { index: number; ext: string }>();
-  let nextIndex = 1;
-
-  for (const id of referencedIds) {
-    const match = (images || []).find((img: WizardPageImage) => img.id === id);
-    if (!match) continue;
-
-    const index = nextIndex++;
-    const ext = getImageExt(match.blob);
-    idToIndex.set(id, { index, ext });
-
-    exportedImages.push({
-      contentSlug,
-      imageIndex: index,
-      ext,
-      blob: match.blob,
-      filename: `${contentSlug}-${index}.${ext}`,
-    });
-  }
-
-  const rewrittenHtml =
-    referencedIds.length > 0
-      ? rewriteHtmlImageSrcs(html, contentSlug, idToIndex, basePath)
-      : html;
-
-  const markdown = turndown.turndown(rewrittenHtml);
-  return { markdown, images: exportedImages };
 }
 
 function validateShopConfirmationEmails(
@@ -371,9 +279,8 @@ export function usePublish() {
       const exportedPages = wizard.pagesEnabled
         ? wizard.pages.map((p) => ({
             page: p,
-            exported: exportContentToMarkdown(
+            exported: exportSiteContentToMarkdown(
               p.content,
-              p.slug,
               p.images || [],
               "./",
             ),
@@ -384,9 +291,8 @@ export function usePublish() {
         ? wizard.posts
             .map((p) => ({
             post: p,
-            exported: exportContentToMarkdown(
+            exported: exportSiteContentToMarkdown(
               p.content,
-              p.slug,
               p.images || [],
               "../",
             ),
@@ -396,49 +302,55 @@ export function usePublish() {
       const exportedProducts = wizard.shopEnabled
         ? wizard.products.map((p) => ({
             product: p,
-            exported: exportContentToMarkdown(
+            exported: exportSiteContentToMarkdown(
               p.content,
-              p.slug,
               p.images || [],
               "../",
             ),
           }))
         : [];
 
-      const allPageImages = exportedPages.flatMap((p) => p.exported.images);
-      const allPostImages = exportedPosts.flatMap((p) => p.exported.images);
-      const allProductImages = exportedProducts.flatMap(
-        (p) => p.exported.images,
+      const localContentAssets = new Map(
+        [
+          ...exportedPages.flatMap((entry) => entry.exported.assets),
+          ...exportedPosts.flatMap((entry) => entry.exported.assets),
+          ...exportedProducts.flatMap((entry) => entry.exported.assets),
+        ]
+          .filter(
+            (asset): asset is typeof asset & { blob: Blob } =>
+              asset.blob instanceof Blob,
+          )
+          .map((asset) => [asset.relativePath, asset]),
       );
-      const allContentImages = [
-        ...allPageImages,
-        ...allPostImages,
-        ...allProductImages,
-      ];
 
-      const changedContentImages: typeof allContentImages = [];
-      for (const img of allContentImages) {
-        const hash = await sha256Blob(img.blob);
-        if (publishManifest.assetFiles[img.filename] !== hash) {
-          changedContentImages.push(img);
+      const changedContentAssets: Array<
+        ExportedSiteContentAsset & { blob: Blob }
+      > = [];
+      for (const asset of localContentAssets.values()) {
+        const hash = await sha256Blob(asset.blob);
+        if (publishManifest.assetFiles[asset.relativePath] !== hash) {
+          changedContentAssets.push(asset);
         }
       }
 
-      if (changedContentImages.length > 0) {
+      if (changedContentAssets.length > 0) {
         let done = 0;
-        for (const img of changedContentImages) {
+        for (const asset of changedContentAssets) {
           done += 1;
-          publishProgress.value = `Uploading images: ${done}/${changedContentImages.length}`;
+          publishProgress.value = `Uploading content: ${done}/${changedContentAssets.length}`;
 
-          const result = await sites.uploadPageImage(
+          const result = await sites.uploadContentAsset(
             username,
-            img.blob,
-            img.contentSlug,
-            img.imageIndex,
+            asset.blob,
+            {
+              assetId: asset.id,
+              kind: asset.kind,
+              filename: asset.relativePath.split("/").pop() || asset.id,
+            },
           );
 
           if (!result?.ok) {
-            throw new Error(sites.error || "Failed to upload page image");
+            throw new Error(sites.error || "Failed to upload content asset");
           }
         }
       }

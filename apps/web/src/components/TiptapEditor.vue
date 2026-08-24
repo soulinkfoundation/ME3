@@ -23,6 +23,15 @@ import TiptapFaqNode from "./TiptapFaqNode.vue";
 import TiptapCarouselNode from "./TiptapCarouselNode.vue";
 import TiptapSiteBlockNode from "./TiptapSiteBlockNode.vue";
 import TiptapCtaNode from "./TiptapCtaNode.vue";
+import TiptapAudioNode from "./TiptapAudioNode.vue";
+import {
+  SITE_AUDIO_ACCEPT,
+  audioContentTypeForFile,
+  audioExtensionForContentType,
+  normalizeSiteAudioFile,
+  validateSiteAudioFile,
+  type SiteContentAsset,
+} from "../utils/siteContentAssets";
 
 const props = withDefaults(
   defineProps<{
@@ -57,6 +66,8 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
   (e: "update:title", value: string): void;
+  (e: "assetAdded", asset: SiteContentAsset): void;
+  (e: "assetRemoved", assetId: string): void;
   (
     e: "imageAdded",
     image: { id: string; blob: Blob; mimeType: string; ext: string }
@@ -512,6 +523,83 @@ const CtaButtonBlock = Node.create({
   },
 });
 
+const AudioBlock = Node.create({
+  name: "audioBlock",
+  group: "block",
+  atom: true,
+  isolating: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      src: { default: "", renderHTML: () => ({}) },
+      path: { default: "", renderHTML: () => ({}) },
+      type: { default: "audio/mpeg", renderHTML: () => ({}) },
+      title: { default: "Audio", renderHTML: () => ({}) },
+      assetId: { default: "", renderHTML: () => ({}) },
+    };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: "figure[data-me3-audio]",
+        getAttrs: (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const source = element.querySelector("audio source");
+          return {
+            src:
+              element.getAttribute("data-src") ||
+              source?.getAttribute("src") ||
+              "",
+            path: element.getAttribute("data-path") || "",
+            type:
+              element.getAttribute("data-type") ||
+              source?.getAttribute("type") ||
+              "audio/mpeg",
+            title:
+              element.getAttribute("data-title") ||
+              element.querySelector("figcaption")?.textContent ||
+              "Audio",
+            assetId: element.getAttribute("data-asset-id") || "",
+          };
+        },
+      },
+    ];
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    const src = String(node.attrs.src || "");
+    const path = String(node.attrs.path || "");
+    const type = String(node.attrs.type || "audio/mpeg");
+    const title = String(node.attrs.title || "Audio");
+    const assetId = String(node.attrs.assetId || "");
+    return [
+      "figure",
+      mergeAttributes(HTMLAttributes, {
+        "data-me3-audio": "true",
+        "data-asset-id": assetId,
+        "data-src": src,
+        "data-path": path,
+        "data-type": type,
+        "data-title": title,
+        class: "content-audio",
+      }),
+      ["figcaption", {}, title],
+      [
+        "audio",
+        {
+          controls: "true",
+          preload: "metadata",
+          "aria-label": `Audio player: ${title}`,
+        },
+        ["source", { src, type }],
+        "Your browser does not support audio playback.",
+      ],
+    ];
+  },
+  addNodeView() {
+    return VueNodeViewRenderer(TiptapAudioNode as Component<NodeViewProps>);
+  },
+});
+
 function parseYouTubeTimestamp(value: string | null): number | null {
   if (!value) return null;
   const raw = value.trim().toLowerCase();
@@ -702,12 +790,7 @@ const YouTubeEmbed = Node.create({
   },
 });
 
-type PendingImage = {
-  id: string;
-  blob: Blob;
-  mimeType: string;
-  ext: string;
-};
+type PendingAsset = SiteContentAsset;
 
 const editor = useEditor({
   content: props.modelValue,
@@ -751,6 +834,7 @@ const editor = useEditor({
     CarouselBlock,
     SiteBlock,
     CtaButtonBlock,
+    AudioBlock,
     YouTubeEmbed,
     ImageWithId.configure({
       inline: false,
@@ -759,10 +843,10 @@ const editor = useEditor({
   ],
   onUpdate: ({ editor }) => {
     emit("update:modelValue", editor.getHTML());
-    syncActiveImages();
+    syncActiveAssets();
   },
   onCreate: () => {
-    syncActiveImages();
+    syncActiveAssets();
   },
 });
 
@@ -777,8 +861,10 @@ const youtubeInputRef = ref<HTMLInputElement | null>(null);
 const imageError = ref<string | null>(null);
 const isProcessingImage = ref(false);
 const imageInputRef = ref<HTMLInputElement | null>(null);
-const pendingImages = ref(new Map<string, PendingImage>());
-const lastActiveImageIds = ref(new Set<string>());
+const audioInputRef = ref<HTMLInputElement | null>(null);
+const isProcessingAudio = ref(false);
+const pendingAssets = ref(new Map<string, PendingAsset>());
+const lastActiveAssetIds = ref(new Set<string>());
 const imageInsertMode = ref<"single" | "gallery">("single");
 const DEFAULT_FAQ_ITEMS: FaqItem[] = [
   {
@@ -849,11 +935,14 @@ async function prepareImageAsset(
 
   const dataUrl = await blobToDataUrl(compressed.blob);
 
-  pendingImages.value.set(imageId, {
+  pendingAssets.value.set(imageId, {
     id: imageId,
+    kind: "image",
     blob: compressed.blob,
+    tempUrl: dataUrl,
     mimeType: compressed.type,
     ext,
+    filename: uploadFilename,
   });
 
   return { id: imageId, dataUrl };
@@ -879,23 +968,27 @@ provide(CAROUSEL_IMAGE_PROVIDER_KEY, {
   uploadRandom: uploadRandomCarouselImage,
 } as CarouselImageProvider);
 
-function extractImageIdsFromNode(node: any, ids: Set<string>) {
+function extractAssetIdsFromNode(node: any, ids: Set<string>) {
   if (!node) return;
   if (node.type === "image") {
     const id = node.attrs?.["data-image-id"];
     if (typeof id === "string" && id) ids.add(id);
   }
+  if (node.type === "audioBlock") {
+    const id = node.attrs?.assetId;
+    if (typeof id === "string" && id) ids.add(id);
+  }
   const content = node.content;
   if (Array.isArray(content)) {
-    for (const child of content) extractImageIdsFromNode(child, ids);
+    for (const child of content) extractAssetIdsFromNode(child, ids);
   }
 }
 
-function getActiveImageIds(ed: any): Set<string> {
+function getActiveAssetIds(ed: any): Set<string> {
   const ids = new Set<string>();
   try {
     const doc = ed?.getJSON?.();
-    extractImageIdsFromNode(doc, ids);
+    extractAssetIdsFromNode(doc, ids);
   } catch {
     // ignore
   }
@@ -908,6 +1001,13 @@ function getActiveImageIds(ed: any): Set<string> {
         const id = img.getAttribute("data-image-id");
         if (id) ids.add(id);
       }
+      const audioBlocks = Array.from(
+        doc.querySelectorAll("[data-me3-audio][data-asset-id]"),
+      );
+      for (const audio of audioBlocks) {
+        const id = audio.getAttribute("data-asset-id");
+        if (id) ids.add(id);
+      }
     }
   } catch {
     // ignore
@@ -915,9 +1015,14 @@ function getActiveImageIds(ed: any): Set<string> {
   return ids;
 }
 
-function handleImageRemoved(imageId: string) {
-  pendingImages.value.delete(imageId);
-  emit("imageRemoved", imageId);
+function handleAssetRemoved(assetId: string) {
+  const pending = pendingAssets.value.get(assetId);
+  if (pending?.kind === "audio" && pending.tempUrl.startsWith("blob:")) {
+    URL.revokeObjectURL(pending.tempUrl);
+  }
+  pendingAssets.value.delete(assetId);
+  emit("assetRemoved", assetId);
+  if (pending?.kind === "image") emit("imageRemoved", assetId);
 }
 
 function insertFaqBlock() {
@@ -975,14 +1080,14 @@ function toggleTaskList() {
   editor.value?.chain().focus().toggleTaskList().run();
 }
 
-function syncActiveImages() {
-  const ids = getActiveImageIds(editor.value);
-  for (const id of lastActiveImageIds.value) {
+function syncActiveAssets() {
+  const ids = getActiveAssetIds(editor.value);
+  for (const id of lastActiveAssetIds.value) {
     if (!ids.has(id)) {
-      handleImageRemoved(id);
+      handleAssetRemoved(id);
     }
   }
-  lastActiveImageIds.value = ids;
+  lastActiveAssetIds.value = ids;
 }
 
 function openLinkModal() {
@@ -1073,6 +1178,71 @@ function triggerImagePicker(mode: "single" | "gallery" = "single") {
   if (imageInputRef.value) {
     imageInputRef.value.multiple = mode === "gallery";
     imageInputRef.value.click();
+  }
+}
+
+function triggerAudioPicker() {
+  imageError.value = null;
+  audioInputRef.value?.click();
+}
+
+async function handleAudioSelected(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const selected = input.files?.[0];
+  input.value = "";
+  if (!selected) return;
+
+  const validationError = validateSiteAudioFile(selected);
+  if (validationError) {
+    imageError.value = validationError;
+    return;
+  }
+
+  isProcessingAudio.value = true;
+  try {
+    const file = normalizeSiteAudioFile(selected);
+    const mimeType = audioContentTypeForFile(file);
+    const ext = audioExtensionForContentType(mimeType);
+    const assetId = makeImageId();
+    const tempUrl = URL.createObjectURL(file);
+    const title =
+      file.name
+        .replace(/\.[a-z0-9]+$/i, "")
+        .replace(/[-_]+/g, " ")
+        .trim()
+        .slice(0, 120) || "Audio";
+
+    pendingAssets.value.set(assetId, {
+      id: assetId,
+      kind: "audio",
+      blob: file,
+      tempUrl,
+      mimeType,
+      ext,
+      filename: file.name,
+      title,
+    });
+
+    editor.value
+      ?.chain()
+      .focus()
+      .insertContent({
+        type: "audioBlock",
+        attrs: {
+          src: tempUrl,
+          path: "",
+          type: mimeType,
+          title,
+          assetId,
+        },
+      })
+      .run();
+    syncActiveAssets();
+  } catch (error) {
+    imageError.value =
+      error instanceof Error ? error.message : "Audio could not be added.";
+  } finally {
+    isProcessingAudio.value = false;
   }
 }
 
@@ -1178,7 +1348,7 @@ async function handleImageSelected(event: Event) {
       } that were not valid images.`;
     }
 
-    syncActiveImages();
+    syncActiveAssets();
   } catch (err) {
     console.error("Image processing error:", err);
     imageError.value =
@@ -1198,17 +1368,18 @@ watch(
   (newContent) => {
     if (editor.value && editor.value.getHTML() !== newContent) {
       editor.value.commands.setContent(newContent);
-      syncActiveImages();
+      syncActiveAssets();
     }
   }
 );
 
-function flushPendingImages(): PendingImage[] {
-  const queued = Array.from(pendingImages.value.values());
-  for (const image of queued) {
-    emit("imageAdded", image);
+function flushPendingAssets(): PendingAsset[] {
+  const queued = Array.from(pendingAssets.value.values());
+  for (const asset of queued) {
+    emit("assetAdded", asset);
+    if (asset.kind === "image") emit("imageAdded", asset);
   }
-  pendingImages.value.clear();
+  pendingAssets.value.clear();
   return queued;
 }
 
@@ -1235,17 +1406,20 @@ function insertText(text: string) {
 }
 
 onBeforeUnmount(() => {
-  flushPendingImages();
-  pendingImages.value.clear();
+  flushPendingAssets();
+  pendingAssets.value.clear();
   editor.value?.destroy();
 });
 
 // Expose editor instance for advanced usage
 defineExpose({
   editor,
-  getImageIds: () => getActiveImageIds(editor.value),
-  getPendingImages: () => Array.from(pendingImages.value.values()),
-  flushPendingImages,
+  getAssetIds: () => getActiveAssetIds(editor.value),
+  getImageIds: () => getActiveAssetIds(editor.value),
+  getPendingAssets: () => Array.from(pendingAssets.value.values()),
+  getPendingImages: () => Array.from(pendingAssets.value.values()),
+  flushPendingAssets,
+  flushPendingImages: flushPendingAssets,
   insertText,
 });
 </script>
@@ -1441,6 +1615,18 @@ defineExpose({
         <button
           type="button"
           class="toolbar-btn"
+          :class="{ active: editor?.isActive('audioBlock') }"
+          :disabled="isProcessingAudio"
+          @click="triggerAudioPicker"
+          :title="isProcessingAudio ? 'Adding audio' : 'Insert audio'"
+          :aria-label="isProcessingAudio ? 'Adding audio' : 'Insert audio'"
+        >
+          <span v-if="isProcessingAudio">…</span>
+          <UiIcon v-else name="AudioLines" :size="16" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="toolbar-btn"
           :class="{ active: editor?.isActive('faqBlock') }"
           @click="insertFaqBlock"
           title="Insert FAQ accordion"
@@ -1523,6 +1709,14 @@ defineExpose({
       :multiple="imageInsertMode === 'gallery'"
       accept="image/jpeg,image/png,image/webp,image/gif"
       @change="handleImageSelected"
+    />
+    <input
+      v-if="variant !== 'workspace'"
+      ref="audioInputRef"
+      class="image-input"
+      type="file"
+      :accept="SITE_AUDIO_ACCEPT"
+      @change="handleAudioSelected"
     />
 
     <!-- Link modal -->

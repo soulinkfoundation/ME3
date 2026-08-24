@@ -56,9 +56,12 @@ describe("site generator", () => {
       ],
     );
 
-    expect(files["index.html"].match(/<details class="nav-group/g)).toHaveLength(1);
+    expect(files["index.html"].match(/<details class="nav-group/g)).toHaveLength(2);
     expect(files["index.html"]).toContain(
       '<summary class="nav-link nav-group-toggle">Services',
+    );
+    expect(files["index.html"]).toContain(
+      '<svg viewBox="0 0 20 20" focusable="false">',
     );
     expect(files["index.html"]).toContain('href="./private-sessions"');
     expect(files["index.html"]).toContain('href="./monthly-events"');
@@ -69,6 +72,86 @@ describe("site generator", () => {
     expect(files["private-sessions.html"]).toContain(
       'class="nav-link active">Private Sessions</a>',
     );
+    expect(files["private-sessions.html"]).toContain(
+      '<details class="nav-group active" open>',
+    );
+  });
+
+  it("offers a compact accessible navigation drawer on every page", async () => {
+    const files = await generateSiteHtml(
+      {
+        name: "Compact Site",
+        avatar: "./files/avatar.jpg",
+        links: { _navigation_style: "compact" },
+        pages: [{ slug: "about", title: "About", file: "about.md" }],
+      },
+      [{ name: "about.md", content: "About" }],
+    );
+
+    expect(files["index.html"]).toContain(
+      'body data-vibe="warm" data-navigation-style="compact"',
+    );
+    expect(files["index.html"]).toContain(
+      'class="site-navigation site-navigation-home site-navigation-compact"',
+    );
+    expect(files["index.html"]).not.toContain('class="nav nav-inline"');
+    expect(files["index.html"]).toContain('aria-haspopup="dialog"');
+    expect(files["index.html"]).toContain(
+      '<dialog id="site-navigation-dialog"',
+    );
+    expect(files["index.html"]).toContain('aria-label="Close menu"');
+    expect(files["index.html"]).toContain('typeof dialog.showModal');
+    expect(files["about.html"]).toContain(
+      'class="site-navigation site-navigation-header site-navigation-compact"',
+    );
+    expect(files["about.html"]).toContain(
+      '<header class="page-header"><a class="back-link"',
+    );
+  });
+
+  it("keeps standard navigation inline on larger screens with a mobile drawer", async () => {
+    const files = await generateSiteHtml(
+      {
+        name: "Standard Site",
+        pages: [{ slug: "about", title: "About", file: "about.md" }],
+      },
+      [{ name: "about.md", content: "About" }],
+    );
+
+    expect(files["index.html"]).toContain(
+      'body data-vibe="warm" data-navigation-style="standard"',
+    );
+    expect(files["index.html"]).toContain(
+      '<nav class="nav nav-inline" aria-label="Primary navigation">',
+    );
+    expect(files["index.html"]).toContain(
+      ".site-navigation-standard .site-menu-trigger{display:inline-flex}",
+    );
+    expect(files["about.html"]).toContain(
+      'class="site-navigation site-navigation-header site-navigation-standard"',
+    );
+  });
+
+  it("publishes semantic native audio controls with responsive styling", async () => {
+    const files = await generateSiteHtml(
+      {
+        name: "Audio Site",
+        pages: [{ slug: "listen", title: "Listen", file: "listen.md" }],
+      },
+      [
+        {
+          name: "listen.md",
+          content: `<figure data-me3-audio="true" data-asset-id="audio-id" data-path="./files/content/audio-id.mp3" class="content-audio"><figcaption>Grounding practice</figcaption><audio controls preload="metadata" aria-label="Grounding practice"><source src="./files/content/audio-id.mp3" type="audio/mpeg">Your browser does not support audio playback.</audio></figure>`,
+        },
+      ],
+    );
+
+    const html = files["listen.html"];
+    expect(html).toContain("<audio controls");
+    expect(html).toContain("Grounding practice");
+    expect(html).toContain('src="./files/content/audio-id.mp3"');
+    expect(html).toContain(".content .content-audio audio{display:block;width:100%");
+    expect(html).not.toContain("blob:");
   });
 
   it("expands reusable editor blocks from the global site configuration", async () => {

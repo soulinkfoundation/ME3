@@ -4,7 +4,6 @@ import JSZip from "jszip";
 import {
   useWizardStore,
   type WizardPage,
-  type WizardPageImage,
   type WizardPost,
   type WizardProduct,
 } from "../../stores/wizard";
@@ -21,17 +20,10 @@ import {
   getVibeFontUrl,
   type VibeId,
 } from "../../styles/vibes";
-import { createContentTurndownService } from "../../utils/contentMarkdown";
-
-const turndown = createContentTurndownService();
-
-type ExportedContentImage = {
-  contentSlug: string;
-  imageIndex: number;
-  ext: string;
-  blob: Blob;
-  filename: string; // e.g. "about-1.webp"
-};
+import {
+  exportSiteContentToMarkdown,
+  type ExportedSiteContentAsset,
+} from "../../utils/siteContentAssets";
 
 function getImageExt(blob: Blob): string {
   return blob.type === "image/png"
@@ -43,116 +35,34 @@ function getImageExt(blob: Blob): string {
         : "jpg";
 }
 
-function parsePageImagesFromHtml(html: string): string[] {
-  if (!html || html.trim() === "") return [];
-  try {
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    const imgs = Array.from(doc.querySelectorAll("img[data-image-id]"));
-    const ids: string[] = [];
-    for (const img of imgs) {
-      const id = img.getAttribute("data-image-id");
-      if (id && !ids.includes(id)) ids.push(id);
-    }
-    return ids;
-  } catch {
-    return [];
-  }
-}
-
-function rewriteHtmlImageSrcs(
-  html: string,
-  contentSlug: string,
-  idToIndex: Map<string, { index: number; ext: string }>,
-  basePath: string = "./",
-): string {
-  if (!html || html.trim() === "") return "";
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  const imgs = Array.from(
-    doc.querySelectorAll("img[data-image-id]"),
-  ) as HTMLImageElement[];
-
-  for (const img of imgs) {
-    const id = img.getAttribute("data-image-id") || "";
-    const entry = idToIndex.get(id);
-    if (!entry) continue;
-    img.setAttribute(
-      "src",
-      `${basePath}files/${contentSlug}-${entry.index}.${entry.ext}`,
-    );
-  }
-
-  return doc.body.innerHTML;
-}
-
-function exportContentToMarkdown(
-  content: string,
-  contentSlug: string,
-  images: WizardPageImage[],
-  basePath: string = "./",
-): {
-  markdown: string;
-  images: ExportedContentImage[];
-} {
-  const html = content || "";
-  if (!html.trim()) return { markdown: "", images: [] };
-
-  const referencedIds = parsePageImagesFromHtml(html);
-  const exportedImages: ExportedContentImage[] = [];
-
-  const idToIndex = new Map<string, { index: number; ext: string }>();
-  let nextIndex = 1;
-
-  for (const id of referencedIds) {
-    const match = (images || []).find((img: WizardPageImage) => img.id === id);
-    if (!match) continue;
-
-    const index = nextIndex++;
-    const ext = getImageExt(match.blob);
-    idToIndex.set(id, { index, ext });
-
-    exportedImages.push({
-      contentSlug,
-      imageIndex: index,
-      ext,
-      blob: match.blob,
-      filename: `${contentSlug}-${index}.${ext}`,
-    });
-  }
-
-  const rewrittenHtml =
-    referencedIds.length > 0
-      ? rewriteHtmlImageSrcs(html, contentSlug, idToIndex, basePath)
-      : html;
-
-  const markdown = turndown.turndown(rewrittenHtml);
-  return { markdown, images: exportedImages };
-}
-
 function exportPageToMarkdown(page: WizardPage) {
-  return exportContentToMarkdown(
-    page.content,
-    page.slug,
-    page.images || [],
-    "./",
-  );
+  return exportSiteContentToMarkdown(page.content, page.images || [], "./");
 }
 
 function exportPostToMarkdown(post: WizardPost) {
-  return exportContentToMarkdown(
-    post.content,
-    post.slug,
-    post.images || [],
+  return exportSiteContentToMarkdown(post.content, post.images || [], "../");
+}
+
+function exportProductToMarkdown(product: WizardProduct) {
+  return exportSiteContentToMarkdown(
+    product.content,
+    product.images || [],
     "../",
   );
 }
 
-function exportProductToMarkdown(product: WizardProduct) {
-  return exportContentToMarkdown(
-    product.content,
-    product.slug,
-    product.images || [],
-    "../",
-  );
+async function contentAssetBlob(
+  asset: ExportedSiteContentAsset,
+): Promise<Blob> {
+  if (asset.blob) return asset.blob;
+  if (!asset.sourceUrl) {
+    throw new Error(`Missing source for ${asset.relativePath}`);
+  }
+  const response = await fetch(asset.sourceUrl, { credentials: "same-origin" });
+  if (!response.ok) {
+    throw new Error(`Could not include ${asset.relativePath} in the download`);
+  }
+  return response.blob();
 }
 
 const wizard = useWizardStore();
@@ -363,9 +273,8 @@ async function downloadZip() {
         const exported = exportPageToMarkdown(page);
         zip.file(`${page.slug}.md`, exported.markdown);
 
-        // Add any page images referenced in the editor content
-        for (const img of exported.images) {
-          zip.file(`files/${img.filename}`, img.blob);
+        for (const asset of exported.assets) {
+          zip.file(asset.relativePath, await contentAssetBlob(asset));
         }
       }
     }
@@ -376,9 +285,8 @@ async function downloadZip() {
         const exported = exportPostToMarkdown(post);
         zip.file(`blog/${post.slug}.md`, exported.markdown);
 
-        // Add any post images referenced in the editor content
-        for (const img of exported.images) {
-          zip.file(`files/${img.filename}`, img.blob);
+        for (const asset of exported.assets) {
+          zip.file(asset.relativePath, await contentAssetBlob(asset));
         }
       }
     }
@@ -389,9 +297,8 @@ async function downloadZip() {
         const exported = exportProductToMarkdown(product);
         zip.file(`shop/${product.slug}.md`, exported.markdown);
 
-        // Add any product images referenced in the editor content
-        for (const img of exported.images) {
-          zip.file(`files/${img.filename}`, img.blob);
+        for (const asset of exported.assets) {
+          zip.file(asset.relativePath, await contentAssetBlob(asset));
         }
       }
     }
@@ -437,7 +344,7 @@ This folder contains a portable ME3 site.
 ## Files
 - \`index.html\` - Self-contained site viewer
 - \`me.json\` - Site data (ME3 protocol)
-- \`files/\` - Site images
+- \`files/\` - Site media (images and audio)
 ${wizard.pagesEnabled && wizard.pages.length > 0 ? wizard.pages.map((p) => `- \`${p.slug}.md\` - ${p.title}`).join("\n") : ""}
 ${wizard.blogEnabled && wizard.posts.length > 0 ? wizard.posts.map((p) => `- \`blog/${p.slug}.md\` - ${p.title}`).join("\n") : ""}
 ${wizard.shopEnabled && wizard.products.length > 0 ? wizard.products.map((p) => `- \`shop/${p.slug}.md\` - ${p.title}`).join("\n") : ""}

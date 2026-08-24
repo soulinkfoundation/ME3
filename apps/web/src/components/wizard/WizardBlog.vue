@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, nextTick } from "vue";
-import { useWizardStore, type WizardPost } from "../../stores/wizard";
+import {
+  useWizardStore,
+  type WizardContentAsset,
+  type WizardPost,
+} from "../../stores/wizard";
 import { useSitesStore } from "../../stores/sites";
 import { usePublish } from "../../composables/usePublish";
 import TiptapEditor from "../TiptapEditor.vue";
@@ -150,32 +154,16 @@ function revertToDraft() {
   );
 }
 
-// Handle image added from editor
-async function handleImageAdded(image: {
-  id: string;
-  blob: Blob;
-  mimeType: string;
-  ext: string;
-}) {
+function handleContentAssetAdded(asset: WizardContentAsset) {
   if (selectedPostIndex.value === null) return;
 
-  const postImage = wizard.addPostImage(
+  wizard.addPostContentAsset(
     selectedPostIndex.value,
-    {
-      id: image.id,
-      blob: image.blob,
-      mimeType: image.mimeType,
-      ext: image.ext,
-    },
+    asset,
     {
       siteAffecting: true,
     },
   );
-
-  if (!postImage) {
-    // Image limit reached - the editor already shows error
-    return;
-  }
 }
 
 // Watch for post selection changes to update editor content
@@ -195,7 +183,7 @@ watch(selectedPostIndex, (newIndex) => {
 // Watch for editor content changes to update post
 watch(editorContent, (newContent) => {
   if (selectedPostIndex.value !== null) {
-    const imageIds = editorRef.value?.getImageIds() || new Set<string>();
+    const assetIds = editorRef.value?.getAssetIds() || new Set<string>();
     wizard.updatePost(
       selectedPostIndex.value,
       {
@@ -205,7 +193,7 @@ watch(editorContent, (newContent) => {
         siteAffecting: true,
       },
     );
-    wizard.syncPostImages(selectedPostIndex.value, imageIds, {
+    wizard.syncPostContentAssets(selectedPostIndex.value, assetIds, {
       siteAffecting: true,
     });
   }
@@ -363,7 +351,7 @@ async function deletePost(index: number) {
 
 function closeEditor() {
   persistPostMeta();
-  editorRef.value?.flushPendingImages?.();
+  editorRef.value?.flushPendingAssets?.();
   selectedPostIndex.value = null;
 }
 
@@ -597,7 +585,7 @@ onMounted(() => {
         ref="editorRef"
         v-model="editorContent"
         placeholder="Write your post here..."
-        @image-added="handleImageAdded"
+        @asset-added="handleContentAssetAdded"
       />
     </div>
 

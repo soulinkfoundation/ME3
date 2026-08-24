@@ -54,4 +54,20 @@ describe("createContentTurndownService", () => {
     expect(markdown).toContain('data-me3-cta-button="true"');
     expect(markdown).toContain('data-url="/book"');
   });
+
+  it("preserves semantic audio blocks", () => {
+    const markdown = createContentTurndownService().turndown(`
+      <figure data-me3-audio="true" data-asset-id="audio-id" class="content-audio">
+        <figcaption>Grounding practice</figcaption>
+        <audio controls preload="metadata">
+          <source src="./files/content/audio-id.mp3" type="audio/mpeg">
+        </audio>
+      </figure>
+    `);
+
+    expect(markdown).toContain('data-me3-audio="true"');
+    expect(markdown).toContain("<figcaption>Grounding practice</figcaption>");
+    expect(markdown).toContain("<audio controls");
+    expect(markdown).toContain("./files/content/audio-id.mp3");
+  });
 });

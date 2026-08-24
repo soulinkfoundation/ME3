@@ -338,7 +338,10 @@ describe("sites store", () => {
         new File(["content"], "me.json", { type: "application/json" }),
         new File(["content"], "index.html", { type: "text/html" }),
       ];
-      vi.mocked(api.upload).mockResolvedValue({ ok: true });
+      vi.mocked(api.upload).mockResolvedValue({
+        ok: true,
+        publishedAt: "2026-08-24T14:00:00.000Z",
+      });
 
       const store = useSitesStore();
       store.sites = [
@@ -574,6 +577,40 @@ describe("sites store", () => {
       await store.uploadPageImage("testuser", jpgBlob, "test", 2);
 
       expect(api.upload).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe("uploadContentAsset", () => {
+    it("uploads audio with its stable ID and kind", async () => {
+      const blob = new Blob(["audio"], { type: "audio/mpeg" });
+      const mockResult = {
+        ok: true,
+        path: "files/content/audio-id.mp3",
+        url: "files/content/audio-id.mp3",
+        storage: "r2" as const,
+        assetId: "audio-id",
+        kind: "audio" as const,
+        mimeType: "audio/mpeg",
+      };
+      vi.mocked(api.upload).mockResolvedValue(mockResult);
+
+      const store = useSitesStore();
+      const result = await store.uploadContentAsset("testuser", blob, {
+        assetId: "audio-id",
+        kind: "audio",
+        filename: "audio-id.mp3",
+      });
+
+      expect(result).toEqual(mockResult);
+      expect(api.upload).toHaveBeenCalledWith(
+        "/sites/testuser/upload-content-asset",
+        expect.any(FormData),
+      );
+      const formData = vi.mocked(api.upload).mock.calls.at(-1)?.[1] as FormData;
+      expect(formData.get("assetId")).toBe("audio-id");
+      expect(formData.get("kind")).toBe("audio");
+      expect((formData.get("file") as File).name).toBe("audio-id.mp3");
+      expect((formData.get("file") as File).type).toBe("audio/mpeg");
     });
   });
 

@@ -4,7 +4,7 @@ import {
   generateSiteHtml,
   type Me3SiteProfile,
 } from "@me3-core/site-renderer";
-import { useWizardStore, type WizardPageImage } from "../stores/wizard";
+import { useWizardStore, type WizardContentAsset } from "../stores/wizard";
 
 const props = withDefaults(
   defineProps<{
@@ -40,16 +40,16 @@ function blobToDataUrl(blob: Blob | null | undefined): Promise<string | null> {
   });
 }
 
-async function contentWithPreviewImages(
+async function contentWithPreviewAssets(
   content: string,
-  images: WizardPageImage[],
+  assets: WizardContentAsset[],
 ): Promise<string> {
-  if (!content || images.length === 0) return content;
+  if (!content || assets.length === 0) return content;
   const dataUrls = new Map<string, string>();
   await Promise.all(
-    images.map(async (image) => {
-      const dataUrl = await blobToDataUrl(image.blob);
-      if (dataUrl) dataUrls.set(image.id, dataUrl);
+    assets.map(async (asset) => {
+      const dataUrl = await blobToDataUrl(asset.blob);
+      if (dataUrl) dataUrls.set(asset.id, dataUrl);
     }),
   );
   if (dataUrls.size === 0) return content;
@@ -59,6 +59,15 @@ async function contentWithPreviewImages(
     const dataUrl = dataUrls.get(image.dataset.imageId || "");
     if (dataUrl) image.src = dataUrl;
   });
+  documentValue
+    .querySelectorAll<HTMLElement>("[data-me3-audio][data-asset-id]")
+    .forEach((audio) => {
+      const dataUrl = dataUrls.get(audio.dataset.assetId || "");
+      if (!dataUrl) return;
+      audio.dataset.src = dataUrl;
+      const source = audio.querySelector<HTMLSourceElement>("audio source");
+      if (source) source.setAttribute("src", dataUrl);
+    });
   return documentValue.body.innerHTML;
 }
 
@@ -178,7 +187,7 @@ watchEffect(async () => {
   const sourceFiles = await Promise.all(
     [...pages, ...posts, ...products].map(async (file) => ({
       name: file.name,
-      content: await contentWithPreviewImages(file.content, file.images),
+      content: await contentWithPreviewAssets(file.content, file.images),
     })),
   );
   const output = await generateSiteHtml(profile, sourceFiles);

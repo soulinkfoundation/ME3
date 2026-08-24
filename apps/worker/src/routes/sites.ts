@@ -50,6 +50,7 @@ import {
 } from "../managed-site-domains";
 import {
   EMAIL_REGEX,
+  MAX_SITE_AUDIO_BYTES,
   USERNAME_REGEX,
   arrayBufferToText,
   buildContentMetaMap,
@@ -59,6 +60,7 @@ import {
   escapeCsv,
   findHeaderIndex,
   getContentType,
+  getSiteContentAssetUploadMetadata,
   getCoreDomainInstructions,
   getCoreDomainState,
   getCoreWebOrigin,
@@ -95,6 +97,7 @@ import {
   parseSiteProfile,
   parseSubscriberBody,
   pruneGeneratedPublicFiles,
+  pruneUnreferencedContentAssets,
   pruneUnreferencedSiteSourceFiles,
   putR2SiteFile,
   putSiteFile,
@@ -1066,6 +1069,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
           site.site_role === "profile" && profile.visibility === "private";
         await pruneUnreferencedSiteSourceFiles(c.env, site.id, profile, manifest);
         sourceFiles = await loadSiteSourceFiles(c.env, site.id);
+        await pruneUnreferencedContentAssets(c.env, site, sourceFiles, manifest);
         const generatedFiles = isPrivateProfile
           ? {}
           : await generateSiteHtml(
@@ -1183,6 +1187,78 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         path: `files/${filename}`,
         url: `files/${filename}`,
         storage,
+      });
+    } catch (error) {
+      if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
+      if (isD1SiteFileLimitError(error)) return siteStorageActivationRequired(c);
+      throw error;
+    }
+  });
+
+  app.post("/api/sites/:username/upload-content-asset", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+
+    try {
+      const form = await c.req.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) {
+        return c.json({ error: "Content asset file is required" }, 400);
+      }
+
+      const kindValue = String(form.get("kind") || "").trim().toLowerCase();
+      if (kindValue !== "image" && kindValue !== "audio") {
+        return c.json({ error: "Content asset kind must be image or audio" }, 400);
+      }
+      const kind: "image" | "audio" = kindValue;
+      const assetId = String(form.get("assetId") || "").trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(assetId)) {
+        return c.json({ error: "Content asset ID is invalid" }, 400);
+      }
+
+      const metadata = getSiteContentAssetUploadMetadata(file, kind);
+      if (!metadata) {
+        return c.json(
+          {
+            error:
+              kind === "audio"
+                ? "Choose an MP3, M4A, or WAV audio file"
+                : "Choose a JPEG, PNG, WebP, or GIF image",
+          },
+          400,
+        );
+      }
+      if (kind === "audio" && file.size > MAX_SITE_AUDIO_BYTES) {
+        return c.json({ error: "Audio files must be 40 MB or smaller" }, 413);
+      }
+
+      const relativePath = `files/content/${assetId}.${metadata.ext}`;
+      const buffer = await file.arrayBuffer();
+      const storage = await putSiteMediaFile(
+        c.env,
+        site,
+        `public/${relativePath}`,
+        buffer,
+        metadata.mimeType,
+      );
+
+      const manifest =
+        (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
+      manifest.assetFiles[relativePath] = await sha256Buffer(buffer);
+      manifest.updatedAt = new Date().toISOString();
+      await savePublishManifest(c.env, site.id, manifest);
+
+      return c.json({
+        ok: true,
+        path: relativePath,
+        url: relativePath,
+        storage,
+        assetId,
+        kind,
+        mimeType: metadata.mimeType,
       });
     } catch (error) {
       if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
