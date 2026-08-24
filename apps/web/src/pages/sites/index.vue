@@ -112,6 +112,25 @@ function statusLabel(published: boolean): string {
   return published ? "Published" : "Draft";
 }
 
+function resolveSiteAvatar(
+  value: string | null | undefined,
+  username: string,
+): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  if (/^(?:https?:|data:|blob:|\/preview\/)/i.test(trimmed)) return trimmed;
+
+  const normalized = trimmed.replace(/^\.?\//, "").replace(/^(\.\.\/)+/, "");
+  if (normalized.startsWith("files/")) {
+    return `/preview/${encodeURIComponent(username)}/${normalized}`;
+  }
+  return trimmed;
+}
+
+function siteAvatar(site: Site): string | null {
+  return resolveSiteAvatar(site.avatar, site.username);
+}
+
 async function syncLandingPagesPlugin(): Promise<void> {
   try {
     const response = await api.get<{
@@ -239,6 +258,12 @@ onBeforeUnmount(() => {
             v-if="ownedSite.site_role === 'profile'"
             class="site-card__logo"
             alt="ME3"
+          />
+          <img
+            v-else-if="siteAvatar(ownedSite)"
+            class="site-card__avatar"
+            :src="siteAvatar(ownedSite)!"
+            alt=""
           />
           <span v-else class="site-card__icon" aria-hidden="true">
             <UiIcon name="BriefcaseBusiness" :size="28" />
@@ -476,6 +501,15 @@ onBeforeUnmount(() => {
   width: 76px;
   height: auto;
   margin-bottom: 16px;
+}
+
+.site-card__avatar {
+  display: block;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 16px;
+  border-radius: var(--ui-radius-lg, 16px);
+  object-fit: cover;
 }
 
 .site-card__icon {

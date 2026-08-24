@@ -9,6 +9,7 @@ import {
   isMissingSitePagesTableError,
   isSiteMediaFile,
   listBookingEnabledSiteIds,
+  listSiteProfileMetadata,
   verifyUnsubscribeToken,
 } from "./sites";
 import type { DbSite, Env } from "./types";
@@ -42,6 +43,7 @@ describe("site booking capabilities", () => {
         intents: { book: { enabled: false } },
       }),
       profileFile("active-source", "src/me.json", {
+        avatar: "./files/studio-avatar.jpg",
         intents: { book: { enabled: true } },
       }),
       profileFile("invalid", "src/me.json", "not json"),
@@ -49,6 +51,14 @@ describe("site booking capabilities", () => {
 
     await expect(listBookingEnabledSiteIds(env, "owner")).resolves.toEqual(
       new Set(["active-public", "active-source"]),
+    );
+
+    const metadata = await listSiteProfileMetadata(env, "owner");
+    expect(metadata.bookingEnabledSiteIds).toEqual(
+      new Set(["active-public", "active-source"]),
+    );
+    expect(metadata.avatarBySiteId).toEqual(
+      new Map([["active-source", "./files/studio-avatar.jpg"]]),
     );
   });
 });

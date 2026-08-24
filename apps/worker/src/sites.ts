@@ -1176,10 +1176,15 @@ export function siteFileContentToBytes(content: SiteFileRecord["content"]): Uint
   throw new TypeError("Unsupported site file content format");
 }
 
-export async function listBookingEnabledSiteIds(
+export interface SiteProfileMetadata {
+  bookingEnabledSiteIds: Set<string>;
+  avatarBySiteId: Map<string, string>;
+}
+
+export async function listSiteProfileMetadata(
   env: Env,
   ownerId: string,
-): Promise<Set<string>> {
+): Promise<SiteProfileMetadata> {
   const files = await env.DB.prepare(
     `SELECT sf.site_id, sf.path, sf.content
      FROM site_files sf
@@ -1203,14 +1208,19 @@ export async function listBookingEnabledSiteIds(
   }
 
   const enabledSiteIds = new Set<string>();
+  const avatarBySiteId = new Map<string, string>();
   for (const [siteId, file] of profiles) {
     try {
       const profile = JSON.parse(
         new TextDecoder().decode(siteFileContentToBytes(file.content)),
       ) as {
+        avatar?: unknown;
         intents?: { book?: { enabled?: unknown } };
         capabilities?: { book?: unknown };
       };
+      if (typeof profile.avatar === "string" && profile.avatar.trim()) {
+        avatarBySiteId.set(siteId, profile.avatar.trim());
+      }
       const publicBookingCapability = profile.capabilities?.book;
       if (
         profile.intents?.book?.enabled === true ||
@@ -1223,7 +1233,14 @@ export async function listBookingEnabledSiteIds(
       // Invalid profiles are not booking-enabled.
     }
   }
-  return enabledSiteIds;
+  return { bookingEnabledSiteIds: enabledSiteIds, avatarBySiteId };
+}
+
+export async function listBookingEnabledSiteIds(
+  env: Env,
+  ownerId: string,
+): Promise<Set<string>> {
+  return (await listSiteProfileMetadata(env, ownerId)).bookingEnabledSiteIds;
 }
 
 export function siteFileContentToArrayBuffer(content: SiteFileRecord["content"]): ArrayBuffer {

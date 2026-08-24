@@ -66,6 +66,7 @@ describe("Sites dashboard", () => {
   it("renders every persistent site as one minimal clickable card", async () => {
     const profile = siteRecord("owner", "profile", "2026-08-20T10:00:00.000Z");
     const additional = siteRecord("studio", "organization");
+    additional.avatar = "./files/avatar.jpg";
     const secondAdditional = siteRecord("community", "organization");
     const wrapper = await mountDashboard(
       [profile, additional, secondAdditional],
@@ -94,7 +95,10 @@ describe("Sites dashboard", () => {
     expect(cards[1].text()).toBe("@studioDraft");
     expect(cards[2].text()).toBe("@communityDraft");
     expect(cards[0].find(".brand-logo-stub").exists()).toBe(true);
-    expect(cards[1].find(".site-card__icon").exists()).toBe(true);
+    expect(cards[1].get("img.site-card__avatar").attributes("src")).toBe(
+      "/preview/studio/files/avatar.jpg",
+    );
+    expect(cards[2].find(".site-card__icon").exists()).toBe(true);
   });
 
   it("hides Add site and explains when the quota is full", async () => {
@@ -113,7 +117,10 @@ describe("Sites dashboard", () => {
     );
   });
 
-  async function mountDashboard(records: Site[], siteQuota: SiteQuota) {
+  async function mountDashboard(
+    records: Site[],
+    siteQuota: SiteQuota,
+  ) {
     const sites = useSitesStore();
     sites.sites = records;
     sites.fetchSites = vi.fn(async () => undefined) as never;

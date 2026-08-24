@@ -41,7 +41,7 @@ const urlPlaceholder = computed(() => {
   } else if (text.includes("course") || text.includes("enroll")) {
     return "https://yoursite.teachable.com/courses/your-course";
   } else if (text.includes("community")) {
-    return "https://soulink.earth/c/community-name";
+    return "https://soulinkfoundation.org/community";
   }
   return "https://example.com";
 });

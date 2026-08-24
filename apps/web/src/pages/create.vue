@@ -281,6 +281,7 @@ let wizardMounted = false;
 
 async function openWizardTarget() {
   const requestId = ++wizardOpenRequest;
+  let openedExistingSite = false;
   isOpeningWizard.value = true;
   try {
     await sites.ensureSites();
@@ -296,6 +297,7 @@ async function openWizardTarget() {
     if (startingNewSite.value) {
       wizard.activateDraftContext({ role: requestedSiteRole.value });
     } else if (targetSite?.username) {
+      openedExistingSite = true;
       const targetRole: WizardSiteRole =
         targetSite.site_role === "organization" ? "organization" : "profile";
       const draft = wizard.activateDraftContext({
@@ -305,6 +307,9 @@ async function openWizardTarget() {
       });
       const preserveLocalDraft =
         draft.restored && (draft.migratedLegacy || wizard.needsPublish);
+      if (preserveLocalDraft && targetSite.published_at) {
+        wizard.restorePublishedBaseline(targetSite.published_at);
+      }
       if (!preserveLocalDraft) {
         const content = await sites.getSiteContent(targetSite.username);
         if (requestId !== wizardOpenRequest) return;
@@ -328,7 +333,7 @@ async function openWizardTarget() {
     }
   } finally {
     if (requestId !== wizardOpenRequest) return;
-    showIntroScreen.value = !wizard.lastPublishedAt;
+    showIntroScreen.value = !openedExistingSite;
     applyRouteStep();
     isOpeningWizard.value = false;
   }
@@ -360,9 +365,6 @@ watch(
     <!-- Header -->
     <header v-if="!showIntroScreen" class="wizard-header">
       <div class="header-left" aria-live="polite">
-        <span class="site-role-label">
-          {{ wizard.siteRole === "organization" ? "Organization" : "Profile" }}
-        </span>
         <strong class="site-context-name">
           {{ wizard.profile.name || wizard.username || "New site" }}
         </strong>
@@ -588,17 +590,6 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.site-role-label {
-  padding: 4px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  color: var(--color-text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .site-context-name {

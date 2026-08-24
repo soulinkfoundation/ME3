@@ -4452,6 +4452,13 @@ export const useWizardStore = defineStore("wizard", () => {
     saveToStorage();
   }
 
+  function restorePublishedBaseline(publishedAt: string) {
+    const normalized = publishedAt.trim();
+    if (!normalized || lastPublishedAt.value) return;
+    lastPublishedAt.value = normalized;
+    saveToStorage();
+  }
+
   /**
    * Load wizard state from existing site content (for editing)
    */
@@ -5175,6 +5182,7 @@ export const useWizardStore = defineStore("wizard", () => {
     setAccentOverride,
     setSiteRole,
     markAsPublished,
+    restorePublishedBaseline,
   };
 });
 

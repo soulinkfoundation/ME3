@@ -23,6 +23,7 @@ export interface Site {
   updated_at: string;
   published_at: string | null;
   bookings_enabled?: boolean;
+  avatar?: string | null;
 }
 
 export interface UploadImageResult {

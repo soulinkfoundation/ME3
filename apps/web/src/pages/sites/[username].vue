@@ -724,10 +724,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         <div class="section-heading">
           <div>
             <h2 id="domain-section-title">Domain</h2>
-            <p>
-              Connect one canonical public domain to this site. Your ME3 login,
-              private API, and mailbox stay on the installation address.
-            </p>
+            <p>Connect your site to a custom domain</p>
           </div>
         </div>
         <CustomDomain
@@ -1202,6 +1199,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 
 .domain-section {
   margin-top: 24px;
+  margin-bottom: 24px;
   padding: 20px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-lg, 12px);

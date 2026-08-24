@@ -80,7 +80,7 @@ import {
   isMissingSubscribersTableError,
   isSiteMediaFile,
   isValidPublicSiteDomain,
-  listBookingEnabledSiteIds,
+  listSiteProfileMetadata,
   listSiteFiles,
   loadLandingPage,
   loadPublishManifest,
@@ -144,7 +144,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
 
-    const [result, bookingEnabledSiteIds] = await Promise.all([
+    const [result, profileMetadata] = await Promise.all([
       c.env.DB.prepare(
         `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
                 custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
@@ -154,13 +154,14 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       )
         .bind(ownerId)
         .all<DbSite>(),
-      listBookingEnabledSiteIds(c.env, ownerId),
+      listSiteProfileMetadata(c.env, ownerId),
     ]);
 
     return c.json({
       sites: (result.results || []).map((site) => ({
         ...site,
-        bookings_enabled: bookingEnabledSiteIds.has(site.id),
+        bookings_enabled: profileMetadata.bookingEnabledSiteIds.has(site.id),
+        avatar: profileMetadata.avatarBySiteId.get(site.id) || null,
       })),
     });
   });
