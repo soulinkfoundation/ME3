@@ -8,6 +8,7 @@ import { api } from "../../api";
 import { useWizardStore } from "../../stores/wizard";
 import NewsletterSubscribers from "../../components/NewsletterSubscribers.vue";
 import Button from "../../components/Button.vue";
+import ConfirmationDialog from "../../components/ConfirmationDialog.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import JSZip from "jszip";
 import {
@@ -51,7 +52,12 @@ const site = computed(() =>
 );
 const siteType = computed(() => site.value?.site_type || "profile");
 const isLandingPage = computed(() => siteType.value === "landing_page");
-const isProfileSite = computed(() => siteType.value === "profile");
+const isProfileSite = computed(() => site.value?.site_role === "profile");
+const isPersistentSite = computed(
+  () =>
+    site.value?.site_role === "profile" ||
+    site.value?.site_role === "organization",
+);
 const landingPagesFeatureEnabled = ref(false);
 const showLandingPageControls = computed(
   () => isLandingPage.value && landingPagesFeatureEnabled.value,
@@ -132,10 +138,15 @@ async function loadWizardContent(): Promise<void> {
         content.products || [],
         username.value,
         site.value?.published_at || null,
+        undefined,
+        site.value?.site_role === "organization" ? "organization" : "profile",
       );
     } else {
       // No content yet, just set up for new site with this username
       wizard.reset();
+      wizard.setSiteRole(
+        site.value?.site_role === "organization" ? "organization" : "profile",
+      );
       wizard.username = username.value;
       wizard.updateProfile({ handle: username.value });
       wizard.isUsernameAvailable = true;
@@ -144,6 +155,9 @@ async function loadWizardContent(): Promise<void> {
     console.error("Failed to load site content:", e);
     // Fall back to basic setup
     wizard.reset();
+    wizard.setSiteRole(
+      site.value?.site_role === "organization" ? "organization" : "profile",
+    );
     wizard.username = username.value;
     wizard.updateProfile({ handle: username.value });
     wizard.isUsernameAvailable = true;
@@ -152,14 +166,24 @@ async function loadWizardContent(): Promise<void> {
 
 async function editInWizard() {
   await loadWizardContent();
-  router.push("/create");
+  router.push({
+    path: "/create",
+    query: { site: username.value, return: `/sites/${username.value}` },
+  });
 }
 
 async function openWizardStep(step: string) {
   await loadWizardContent();
   const stepId = wizard.normalizeWizardStepId(step);
   if (stepId) wizard.goToStepId(stepId, { enableOptional: true });
-  router.replace({ path: "/create", query: stepId ? { step: stepId } : {} });
+  router.replace({
+    path: "/create",
+    query: {
+      site: username.value,
+      return: `/sites/${username.value}`,
+      ...(stepId ? { step: stepId } : {}),
+    },
+  });
 }
 
 function openBuilder() {
@@ -169,7 +193,14 @@ function openBuilder() {
 async function writePost() {
   await loadWizardContent();
   wizard.goToStepId("blog", { enableOptional: true });
-  router.push({ path: "/create", query: { step: "blog" } });
+  router.push({
+    path: "/create",
+    query: {
+      site: username.value,
+      return: `/sites/${username.value}`,
+      step: "blog",
+    },
+  });
 }
 
 async function deleteSite() {
@@ -177,7 +208,7 @@ async function deleteSite() {
   try {
     const success = await sites.deleteSite(username.value);
     if (success) {
-      router.push("/calendar");
+      router.push("/sites");
     }
   } finally {
     isDeleting.value = false;
@@ -613,7 +644,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
       <section class="actions-section">
         <div class="actions-grid">
           <button
-            v-if="isProfileSite"
+            v-if="isPersistentSite"
             class="action-card primary"
             @click="editInWizard"
           >
@@ -626,7 +657,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
             </div>
           </button>
 
-          <button v-if="isProfileSite" class="action-card" @click="writePost">
+          <button v-if="isPersistentSite" class="action-card" @click="writePost">
             <span class="action-icon">
               <UiIcon name="Pencil" :size="24" />
             </span>
@@ -681,7 +712,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
           </button>
 
           <button
-            v-if="site?.published_at && isProfileSite"
+            v-if="site?.published_at && isPersistentSite"
             class="action-card"
             @click="downloadSite"
           >
@@ -699,14 +730,14 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 
       <!-- Newsletter Subscribers -->
       <section
-        v-if="site?.published_at && isProfileSite"
+        v-if="site?.published_at && isPersistentSite"
         class="subscribers-section"
       >
         <NewsletterSubscribers :username="username" />
       </section>
 
       <!-- Danger Zone -->
-      <section class="danger-section">
+      <section v-if="!isProfileSite" class="danger-section">
         <h2>Danger zone</h2>
         <div class="danger-card">
           <div>
@@ -722,32 +753,16 @@ Note: Opening index.html directly (file://) won't work due to browser security.
       </section>
     </main>
 
-    <!-- Delete Confirmation Modal -->
-    <div
-      v-if="showDeleteConfirm"
-      class="modal-overlay"
-      @click.self="showDeleteConfirm = false"
-    >
-      <div class="modal">
-        <h2>Delete site?</h2>
-        <p>
-          Are you sure you want to delete
-          <strong>{{ username }}</strong>? This action cannot be undone.
-        </p>
-        <div class="modal-actions">
-          <button class="button secondary" @click="showDeleteConfirm = false">
-            Cancel
-          </button>
-          <button
-            class="button danger"
-            :disabled="isDeleting"
-            @click="deleteSite"
-          >
-            {{ isDeleting ? "Deleting..." : "Delete" }}
-          </button>
-        </div>
-      </div>
-    </div>
+    <ConfirmationDialog
+      :open="showDeleteConfirm"
+      title="Delete site?"
+      :message="`Delete ${username}? This action cannot be undone.`"
+      confirm-label="Delete"
+      :busy="isDeleting"
+      danger
+      @cancel="showDeleteConfirm = false"
+      @confirm="deleteSite"
+    />
   </div>
 </template>
 
@@ -1208,49 +1223,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   font-size: 13px;
   color: var(--ui-text-muted, var(--color-text-muted));
   margin-top: 2px;
-}
-
-/* Modal */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  z-index: 100;
-}
-
-.modal {
-  background: var(--color-bg);
-  border-radius: 16px;
-  padding: 32px;
-  width: 100%;
-  max-width: 400px;
-}
-
-.modal h2 {
-  font-size: 24px;
-  margin-bottom: 12px;
-}
-
-.modal p {
-  color: var(--color-text-muted);
-  margin-bottom: 24px;
-}
-
-.modal strong {
-  color: var(--color-text);
-}
-
-.modal-actions {
-  display: flex;
-  gap: 12px;
-}
-
-.modal-actions .button {
-  flex: 1;
 }
 
 /* Subscribers Section */

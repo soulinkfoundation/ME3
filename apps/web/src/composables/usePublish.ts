@@ -267,15 +267,15 @@ export function usePublish() {
       if (!existingSite) {
         publishProgress.value = "Claiming username...";
         const existingProfileSite = sites.sites.find(
-          (site) => (site.site_type || "profile") === "profile",
+          (site) => site.site_role === "profile",
         );
         const claimed = await sites.claimUsername(username, {
-          ...(existingProfileSite &&
+          siteType: "profile",
+          siteRole: wizard.siteRole,
+          ...(wizard.siteRole === "profile" &&
+          existingProfileSite &&
           existingProfileSite.username !== username
-            ? {
-                siteType: "profile",
-                renameFromUsername: existingProfileSite.username,
-              }
+            ? { renameFromUsername: existingProfileSite.username }
             : {}),
         });
         if (!claimed) {

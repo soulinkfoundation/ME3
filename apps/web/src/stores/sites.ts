@@ -10,7 +10,7 @@ import type {
   SiteType,
 } from "@me3-core/plugin-landing-pages";
 
-interface Site {
+export interface Site {
   id: string;
   username: string;
   user_id: string;

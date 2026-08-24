@@ -2,7 +2,11 @@
 import { definePage } from "unplugin-vue-router/runtime";
 import { computed, onMounted, ref, watch, type Component } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useWizardStore, type WizardStepId } from "../stores/wizard";
+import {
+  useWizardStore,
+  type WizardSiteRole,
+  type WizardStepId,
+} from "../stores/wizard";
 import { useSitesStore } from "../stores/sites";
 import { usePublish } from "../composables/usePublish";
 import GeneratedSitePreview from "../components/GeneratedSitePreview.vue";
@@ -43,6 +47,22 @@ const router = useRouter();
 const { isPublishing: isQuickPublishing, publish } = usePublish();
 const showIntroScreen = ref(false);
 const isOpeningWizard = ref(true);
+
+const requestedSiteRole = computed<WizardSiteRole>(() =>
+  route.query.siteRole === "organization" ? "organization" : "profile",
+);
+const startingNewSite = computed(() => route.query.new === "1");
+const isAdditionalSite = computed(() =>
+  startingNewSite.value
+    ? requestedSiteRole.value === "organization"
+    : wizard.siteRole === "organization",
+);
+const introTitle = computed(() =>
+  isAdditionalSite.value ? "Create a new site" : "Create your ME3 Profile",
+);
+const openingLabel = computed(() =>
+  isAdditionalSite.value ? "Opening your site..." : "Opening your ME3 Profile...",
+);
 
 const stepComponentById = {
   basics: WizardBasics,
@@ -187,7 +207,7 @@ const isEditingPage = computed(() => {
 
 function handleBack() {
   if (wizard.currentStep === 1) {
-    router.push("/");
+    handleExit();
   } else {
     wizard.prevStep();
   }
@@ -250,36 +270,53 @@ async function handleQuickPublish() {
 
 function clearImportedDraft() {
   wizard.reset();
-  router.push("/calendar");
+  router.push("/sites");
 }
 
 onMounted(async () => {
   try {
     await sites.ensureSites();
-    const profileSite = sites.sites.find(
-      (site) => (site.site_type || "profile") === "profile",
-    );
-    if (profileSite?.username) {
+    const requestedUsername =
+      typeof route.query.site === "string" ? route.query.site.trim() : "";
+    const targetSite = requestedUsername
+      ? sites.sites.find((site) => site.username === requestedUsername)
+      : sites.sites.find((site) => site.site_role === "profile");
+
+    if (startingNewSite.value) {
+      wizard.reset();
+      wizard.setSiteRole(requestedSiteRole.value);
+    } else if (targetSite?.username) {
+      const targetRole: WizardSiteRole =
+        targetSite.site_role === "organization" ? "organization" : "profile";
       const localHandle = (wizard.username || wizard.profile.handle)
         .trim()
         .toLowerCase();
       const preserveLocalDraft =
         wizard.needsPublish &&
-        localHandle === profileSite.username.trim().toLowerCase() &&
+        wizard.siteRole === targetRole &&
+        localHandle === targetSite.username.trim().toLowerCase() &&
         Boolean(wizard.profile.name.trim());
       if (!preserveLocalDraft) {
-        const content = await sites.getSiteContent(profileSite.username);
+        const content = await sites.getSiteContent(targetSite.username);
         if (content?.ok && content.profile) {
           wizard.loadFromSiteContent(
             content.profile,
             content.pages,
             content.posts,
             content.products || [],
-            profileSite.username,
-            profileSite.published_at || null,
+            targetSite.username,
+            targetSite.published_at || null,
+            undefined,
+            targetRole,
           );
         }
       }
+    } else if (requestedUsername) {
+      wizard.reset();
+      wizard.setSiteRole(requestedSiteRole.value);
+    } else {
+      if (wizard.siteRole !== "profile") wizard.reset();
+      wizard.setSiteRole("profile");
     }
   } finally {
     showIntroScreen.value = !wizard.lastPublishedAt;
@@ -293,7 +330,7 @@ watch(() => wizard.currentStepId, syncRouteStep);
 </script>
 
 <template>
-  <PageLoading v-if="isOpeningWizard" label="Opening your ME3 profile..." />
+  <PageLoading v-if="isOpeningWizard" :label="openingLabel" />
   <div v-else class="wizard-page">
     <!-- Header -->
     <header v-if="!showIntroScreen" class="wizard-header">
@@ -394,8 +431,13 @@ watch(() => wizard.currentStepId, syncRouteStep);
           alt="ME3 protocol profile preview"
         />
         <div class="intro-copy">
-          <h1 id="intro-title">Create Your ME3 Profile</h1>
-          <p>
+          <h1 id="intro-title">{{ introTitle }}</h1>
+          <p v-if="isAdditionalSite">
+            Build a focused site for a business, project, brand, community, or
+            organisation. You can shape the content now and publish when it is
+            ready.
+          </p>
+          <p v-else>
             Your ME3 profile includes everything you might need for an effective
             website, it's also important context for your ME3 agent.
             <a href="https://me3.app/protocol" target="_blank" rel="noreferrer">

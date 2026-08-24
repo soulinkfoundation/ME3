@@ -19,6 +19,8 @@ export type Me3Button = {
   icon?: string;
 };
 
+export type WizardSiteRole = "profile" | "organization";
+
 type Me3IntentSubscribe = NonNullable<
   NonNullable<Me3SiteProfile["intents"]>["subscribe"]
 >;
@@ -1460,6 +1462,7 @@ export const useWizardStore = defineStore("wizard", () => {
 
   // Username for publishing
   const username = ref("");
+  const siteRole = ref<WizardSiteRole>("profile");
   const isUsernameAvailable = ref<boolean | null>(null);
   const isCheckingUsername = ref(false);
 
@@ -3877,6 +3880,7 @@ export const useWizardStore = defineStore("wizard", () => {
           return { ...rest, ...(avatar !== undefined ? { avatar } : {}) };
         }),
         username: username.value,
+        siteRole: siteRole.value,
         vibe: vibe.value,
         accentOverride: accentOverride.value,
         linksEnabled: linksEnabled.value,
@@ -3986,6 +3990,8 @@ export const useWizardStore = defineStore("wizard", () => {
           };
         });
         username.value = storedUsername || "";
+        siteRole.value =
+          state.siteRole === "organization" ? "organization" : "profile";
         vibe.value = state.vibe || defaultVibe;
         accentOverride.value = state.accentOverride || null;
         const hasOptionalWebsiteFeatureState =
@@ -4172,6 +4178,7 @@ export const useWizardStore = defineStore("wizard", () => {
     products.value = [];
     testimonials.value = [];
     username.value = "";
+    siteRole.value = "profile";
     vibe.value = defaultVibe;
     accentOverride.value = null;
     isUsernameAvailable.value = null;
@@ -4207,6 +4214,11 @@ export const useWizardStore = defineStore("wizard", () => {
   function setAccentOverride(color: string | null) {
     accentOverride.value = color;
     markAsEdited();
+    saveToStorage();
+  }
+
+  function setSiteRole(role: WizardSiteRole) {
+    siteRole.value = role;
     saveToStorage();
   }
 
@@ -4322,6 +4334,7 @@ export const useWizardStore = defineStore("wizard", () => {
     siteUsername: string | null | undefined,
     sitePublishedAt?: string | null,
     siteSourceUrl?: string | null,
+    loadedSiteRole: WizardSiteRole = "profile",
   ) {
     const resolvedSiteUsername =
       normalizeAssetSiteUsername(siteUsername) ||
@@ -4331,6 +4344,7 @@ export const useWizardStore = defineStore("wizard", () => {
 
     // Reset first
     reset();
+    siteRole.value = loadedSiteRole;
 
     // Set username
     username.value = resolvedSiteUsername;
@@ -4812,6 +4826,7 @@ export const useWizardStore = defineStore("wizard", () => {
     products,
     testimonials,
     username,
+    siteRole,
     isUsernameAvailable,
     isCheckingUsername,
     isPublishing,
@@ -4914,6 +4929,7 @@ export const useWizardStore = defineStore("wizard", () => {
     loadFromSiteContent,
     setVibe,
     setAccentOverride,
+    setSiteRole,
     markAsPublished,
   };
 });

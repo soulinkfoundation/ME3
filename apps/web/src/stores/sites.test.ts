@@ -301,6 +301,35 @@ describe("sites store", () => {
         renameFromUsername: "olduser",
       });
     });
+
+    it("should pass the additional-site role when provided", async () => {
+      const mockSite = {
+        id: "4",
+        username: "studio",
+        user_id: "user1",
+        site_type: "profile" as const,
+        site_role: "organization" as const,
+        custom_domain: null,
+        custom_domain_status: null,
+        created_at: "2026-08-24T08:00:00Z",
+        updated_at: "2026-08-24T08:00:00Z",
+        published_at: null,
+      };
+      vi.mocked(api.post).mockResolvedValue({ site: mockSite });
+
+      const store = useSitesStore();
+      const result = await store.claimUsername("studio", {
+        siteType: "profile",
+        siteRole: "organization",
+      });
+
+      expect(result).toEqual(mockSite);
+      expect(api.post).toHaveBeenCalledWith("/sites", {
+        username: "studio",
+        siteType: "profile",
+        siteRole: "organization",
+      });
+    });
   });
 
   describe("uploadSite", () => {

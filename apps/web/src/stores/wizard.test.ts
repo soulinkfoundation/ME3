@@ -988,6 +988,26 @@ describe("wizard store", () => {
       expect(store.isUsernameAvailable).toBe(true);
     });
 
+    it("keeps the selected additional-site role when loading site content", () => {
+      const store = useWizardStore();
+
+      store.loadFromSiteContent(
+        { name: "Studio", handle: "studio" },
+        [],
+        [],
+        [],
+        "studio",
+        null,
+        undefined,
+        "organization",
+      );
+
+      expect(store.siteRole).toBe("organization");
+      expect(
+        JSON.parse(localStorage.getItem("me3_wizard_state") || "{}").siteRole,
+      ).toBe("organization");
+    });
+
     it("falls back to the profile handle when resolving loaded site assets without a username", () => {
       const store = useWizardStore();
       const siteProfile = {
