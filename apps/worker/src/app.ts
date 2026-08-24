@@ -104,7 +104,10 @@ import {
   getPendingOnboardingStartStep,
   registerOnboardingRoutes,
 } from "./routes/onboarding";
-import { importManagedStarterProfile } from "./managed-starter-profile";
+import {
+  acknowledgeStarterProfileHandoff,
+  importManagedStarterProfile,
+} from "./managed-starter-profile";
 import {
   getManagedAiBillingSettings,
   ManagedAiBillingInputError,
@@ -676,20 +679,35 @@ app.get("/api/auth/me3/callback", async (c) => {
   }
 
   await upsertMe3ClaimedOwner(c.env, payload, claimedHandle);
-  if (
-    normalizeMe3DeploymentMode(c.env.ME3_DEPLOYMENT_MODE) === "managed" &&
-    payload.starter_profile_handoff === true
-  ) {
+  if (payload.starter_profile_handoff === true) {
     try {
-      await importManagedStarterProfile(c.env, {
+      const adoption = await importManagedStarterProfile(c.env, {
         claimToken,
         handle: claimedHandle,
       });
+      await acknowledgeStarterProfileHandoff(c.env, claimToken, {
+        outcome:
+          adoption.reason === "existing_profile"
+            ? "existing_profile"
+            : "starter_imported",
+        visibility: adoption.visibility,
+      });
     } catch (error) {
       console.warn(
-        "Managed starter profile import failed; continuing with local profile setup:",
+        "Starter profile adoption failed; continuing with local profile setup:",
         error,
       );
+      try {
+        await acknowledgeStarterProfileHandoff(c.env, claimToken, {
+          outcome: "failed",
+          errorCode: "profile_import_failed",
+        });
+      } catch (acknowledgementError) {
+        console.warn(
+          "Starter profile failure acknowledgement did not reach ME3 Cloud:",
+          acknowledgementError,
+        );
+      }
     }
   }
   if (managedEmailAddress) {

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importManagedStarterProfile } from "./managed-starter-profile";
+import {
+  acknowledgeStarterProfileHandoff,
+  importManagedStarterProfile,
+} from "./managed-starter-profile";
 import type { DbSite, Env } from "./types";
 
 type OnboardingState = {
@@ -103,12 +106,13 @@ function createEnv(db: StarterProfileDb): Env {
   } as Env;
 }
 
-function starterProfileResponse() {
+function starterProfileResponse(visibility: "public" | "private" = "public") {
   return new Response(
     JSON.stringify({
       ok: true,
       profile: {
         version: "0.1",
+        visibility,
         handle: "connie",
         name: "Connie",
         bio: "A useful bio.",
@@ -145,6 +149,28 @@ describe("managed starter profile import", () => {
     vi.unstubAllGlobals();
   });
 
+  it("acknowledges the adopted profile and visibility with the bounded claim", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true, status: "ready" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await acknowledgeStarterProfileHandoff(createEnv(new StarterProfileDb()), "signed-claim", {
+      outcome: "starter_imported",
+      visibility: "private",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.me3.example/core/claim/starter-profile/acknowledge",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer signed-claim" }),
+        body: JSON.stringify({
+          outcome: "starter_imported",
+          visibility: "private",
+        }),
+      }),
+    );
+  });
+
   it("imports and publishes the hosted profile once, then resumes at Wheel", async () => {
     const db = new StarterProfileDb();
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(starterProfileResponse()));
@@ -155,7 +181,11 @@ describe("managed starter profile import", () => {
         claimToken: "signed-claim",
         handle: "connie",
       }),
-    ).resolves.toEqual({ imported: true, reason: "imported" });
+    ).resolves.toEqual({
+      imported: true,
+      reason: "imported",
+      visibility: "public",
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.me3.example/core/claim/starter-profile",
@@ -187,7 +217,11 @@ describe("managed starter profile import", () => {
         claimToken: "signed-claim",
         handle: "connie",
       }),
-    ).resolves.toEqual({ imported: true, reason: "already_imported" });
+    ).resolves.toEqual({
+      imported: true,
+      reason: "already_imported",
+      visibility: "public",
+    });
     expect(db.files.size).toBe(fileCount);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -215,9 +249,37 @@ describe("managed starter profile import", () => {
         claimToken: "signed-claim",
         handle: "connie",
       }),
-    ).resolves.toEqual({ imported: false, reason: "existing_profile" });
+    ).resolves.toEqual({
+      imported: false,
+      reason: "existing_profile",
+      visibility: "public",
+    });
     expect(db.site.id).toBe("existing-site");
     expect(db.files.size).toBe(0);
     expect(db.onboarding).toBeNull();
+  });
+
+  it("keeps an imported private profile unpublished with only a minimal public manifest", async () => {
+    const db = new StarterProfileDb();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(starterProfileResponse("private")));
+
+    await expect(
+      importManagedStarterProfile(createEnv(db), {
+        claimToken: "signed-claim",
+        handle: "connie",
+      }),
+    ).resolves.toEqual({
+      imported: true,
+      reason: "imported",
+      visibility: "private",
+    });
+
+    expect(db.site).toMatchObject({ username: "connie", published_at: null });
+    expect(fileText(db, "public/index.html")).toBeNull();
+    expect(JSON.parse(fileText(db, "public/me.json") || "{}")).toMatchObject({
+      visibility: "private",
+      handle: "connie",
+    });
+    expect(fileText(db, "public/me.json")).not.toContain("A useful bio.");
   });
 });

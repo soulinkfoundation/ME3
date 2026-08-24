@@ -538,9 +538,9 @@ export async function serveDefaultPublicSitePath(
 
 export async function serveMeJsonResponse(env: Env, request: Request): Promise<Response> {
   const site = await getPublicSiteForHost(env, new URL(request.url).hostname);
-  if (site?.published_at) {
+  if (site) {
     const storedPublic = await getSiteFileText(env, site.id, "public/me.json");
-    if (storedPublic) {
+    if (site.published_at && storedPublic) {
       const parsed = parseMe3Json(storedPublic);
       if (parsed.valid && parsed.profile) return publicMeJsonResponse(parsed.profile);
     }
@@ -548,7 +548,12 @@ export async function serveMeJsonResponse(env: Env, request: Request): Promise<R
     const legacySource = await getSiteFileText(env, site.id, "src/me.json");
     if (legacySource || storedPublic) {
       const profile = parseSiteProfile(legacySource || storedPublic || "{}", site.username);
-      return publicMeJsonResponse(buildPublicMe3Profile(profile, new URL(request.url).origin));
+      return publicMeJsonResponse(
+        buildPublicMe3Profile(
+          site.published_at ? profile : { ...profile, visibility: "private" },
+          new URL(request.url).origin,
+        ),
+      );
     }
   }
 

@@ -130,6 +130,11 @@ function handleLocationBlur() {
   }, 120);
 }
 
+function updateProfileVisibility(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  wizard.updateProfile({ visibility: checked ? "public" : "private" });
+}
+
 watch(location, (val) => {
   const matchingLocation =
     wizard.profile.locationData?.label.trim() === val.trim()
@@ -252,6 +257,18 @@ const bioLength = 160;
       <div class="char-count">{{ bio.length }}/{{ bioLength }}</div>
     </div>
 
+    <fieldset v-if="wizard.siteRole === 'profile'" class="form-group visibility-group">
+      <legend>Profile visibility</legend>
+      <label class="visibility-checkbox">
+        <input
+          type="checkbox"
+          :checked="wizard.profile.visibility === 'public'"
+          @change="updateProfileVisibility"
+        />
+        <span>Make my profile public</span>
+      </label>
+    </fieldset>
+
     <div class="form-group">
       <label for="location">
         Location
@@ -336,6 +353,38 @@ const bioLength = 160;
   font-size: 14px;
   font-weight: 600;
   margin-bottom: 8px;
+}
+
+.visibility-group {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.visibility-group legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--ui-text, var(--color-text));
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.visibility-group .visibility-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  margin: 0;
+  color: var(--ui-text, var(--color-text));
+  cursor: pointer;
+}
+
+.visibility-group .visibility-checkbox input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--ui-text, var(--color-text));
 }
 
 .optional {

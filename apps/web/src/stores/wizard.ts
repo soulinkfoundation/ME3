@@ -52,6 +52,7 @@ type SiteSourceProduct = NonNullable<Me3SiteProfile["products"]>[number] & {
 export interface WizardProfile {
   name: string;
   handle: string;
+  visibility: "public" | "private";
   location: string;
   locationData: WizardLocationData | null;
   bio: string;
@@ -1357,6 +1358,7 @@ function normalizeLocationData(input: unknown): WizardLocationData | null {
 const defaultProfile: WizardProfile = {
   name: "",
   handle: "",
+  visibility: "private",
   location: "",
   locationData: null,
   bio: "",
@@ -3106,6 +3108,10 @@ export const useWizardStore = defineStore("wizard", () => {
       name: profile.value.name.trim(),
     };
 
+    if (siteRole.value === "profile") {
+      me3.visibility = profile.value.visibility;
+    }
+
     if (profile.value.handle) {
       me3.handle = profile.value.handle.trim();
     }
@@ -4237,6 +4243,7 @@ export const useWizardStore = defineStore("wizard", () => {
     siteProfile: {
       name: string;
       handle?: string;
+      visibility?: "public" | "private";
       bio?: string;
       logo?: string;
       avatar?: string;
@@ -4618,6 +4625,13 @@ export const useWizardStore = defineStore("wizard", () => {
     profile.value = {
       name: siteProfile.name || "",
       handle: siteProfile.handle || resolvedSiteUsername,
+      visibility:
+        loadedSiteRole === "profile" && siteProfile.visibility === "private"
+          ? "private"
+          : loadedSiteRole === "profile" &&
+              (siteProfile.visibility === "public" || Boolean(sitePublishedAt))
+            ? "public"
+            : "private",
       location: (siteProfile as any).location || "",
       locationData: normalizeLocationData((siteProfile as any).locationData),
       bio: siteProfile.bio || "",

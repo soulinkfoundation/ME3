@@ -1022,14 +1022,19 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
       let sourceFiles = await loadSiteSourceFiles(c.env, site.id);
       const meJson = sourceFiles.get("me.json");
+      let isPrivateProfile = false;
       if (meJson) {
         const profile = parseSiteProfile(meJson, site.username);
+        isPrivateProfile =
+          site.site_role === "profile" && profile.visibility === "private";
         await pruneUnreferencedSiteSourceFiles(c.env, site.id, profile, manifest);
         sourceFiles = await loadSiteSourceFiles(c.env, site.id);
-        const generatedFiles = await generateSiteHtml(
-          profile,
-          Array.from(sourceFiles.entries()).map(([name, content]) => ({ name, content })),
-        );
+        const generatedFiles = isPrivateProfile
+          ? {}
+          : await generateSiteHtml(
+              profile,
+              Array.from(sourceFiles.entries()).map(([name, content]) => ({ name, content })),
+            );
         networkProfile = buildPublicMe3Profile(profile, getPublicSiteOrigin(c.env, site));
         generatedFiles["me.json"] = JSON.stringify(networkProfile, null, 2);
         for (const [name, content] of Object.entries(generatedFiles)) {
@@ -1047,14 +1052,21 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       manifest.updatedAt = new Date().toISOString();
       await savePublishManifest(c.env, site.id, manifest);
       await c.env.DB.prepare(
-        "UPDATE sites SET published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+        isPrivateProfile
+          ? "UPDATE sites SET published_at = NULL, updated_at = datetime('now') WHERE id = ?"
+          : "UPDATE sites SET published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
       )
         .bind(site.id)
         .run();
 
-      if (networkProfile) queueNetworkDirectoryProfileSync(c, networkProfile);
+      if (networkProfile && !isPrivateProfile) {
+        queueNetworkDirectoryProfileSync(c, networkProfile);
+      }
 
-      return c.json({ ok: true, publishedAt: new Date().toISOString() });
+      return c.json({
+        ok: true,
+        publishedAt: isPrivateProfile ? null : new Date().toISOString(),
+      });
     } catch (error) {
       if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
       if (isD1SiteFileLimitError(error)) return siteStorageActivationRequired(c);
@@ -1515,14 +1527,25 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const profileJson =
       (await getSiteFileText(c.env, site.id, "src/me.json")) ||
       (await getSiteFileText(c.env, site.id, "public/me.json"));
+    let isPrivateProfile = false;
     if (profileJson) {
       const profile = parseSiteProfile(profileJson, site.username);
+      isPrivateProfile =
+        site.site_role === "profile" && profile.visibility === "private";
       const commerceError = await getProfileCommercePublishBlockReason(
         c.env,
         ownerId,
         profile,
       );
       if (commerceError) return c.json({ error: commerceError }, 409);
+    }
+    if (isPrivateProfile) {
+      await c.env.DB.prepare(
+        "UPDATE sites SET published_at = NULL, updated_at = datetime('now') WHERE id = ?",
+      )
+        .bind(site.id)
+        .run();
+      return c.json({ ok: true, publishedAt: null });
     }
     const html =
       (await getSiteFileText(c.env, site.id, "landing/index.html")) ||

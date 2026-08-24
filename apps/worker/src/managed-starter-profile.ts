@@ -8,6 +8,7 @@ import {
   getMe3CloudApiOrigin,
   getPublicSiteOrigin,
   getR2SiteFileKey,
+  getSiteFileText,
   normalizeSiteFileName,
   normalizeUsername,
   putSiteFile,
@@ -44,7 +45,15 @@ type OwnerOnboardingRow = {
 export type ManagedStarterProfileImportResult = {
   imported: boolean;
   reason: "imported" | "already_imported" | "existing_profile";
+  visibility: "public" | "private";
 };
+
+export type StarterProfileAcknowledgement =
+  | {
+      outcome: "starter_imported" | "existing_profile";
+      visibility: "public" | "private";
+    }
+  | { outcome: "failed"; errorCode: string };
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -200,6 +209,35 @@ async function fetchStarterProfile(
   }
 }
 
+export async function acknowledgeStarterProfileHandoff(
+  env: Env,
+  claimToken: string,
+  acknowledgement: StarterProfileAcknowledgement,
+): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HANDOFF_TIMEOUT_MS);
+  try {
+    const response = await fetch(
+      `${getMe3CloudApiOrigin(env)}/core/claim/starter-profile/acknowledge`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${claimToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(acknowledgement),
+        signal: controller.signal,
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Starter profile acknowledgement failed (${response.status})`);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function getProfileSite(env: Env, ownerId: string): Promise<DbSite | null> {
   return (
     (await env.DB.prepare(
@@ -228,6 +266,26 @@ async function getOnboardingState(
       .bind(ownerId)
       .first<OwnerOnboardingRow>()) || null
   );
+}
+
+async function getExistingProfileVisibility(
+  env: Env,
+  site: DbSite,
+): Promise<"public" | "private"> {
+  const source =
+    (await getSiteFileText(env, site.id, "src/me.json")) ||
+    (await getSiteFileText(env, site.id, "public/me.json"));
+  if (source) {
+    try {
+      const profile = JSON.parse(source) as { visibility?: unknown };
+      if (profile.visibility === "public" || profile.visibility === "private") {
+        return profile.visibility;
+      }
+    } catch {
+      // Preserve the local profile without trusting malformed visibility data.
+    }
+  }
+  return site.published_at ? "public" : "private";
 }
 
 async function cleanupPartialImport(
@@ -271,13 +329,24 @@ export async function importManagedStarterProfile(
   ) {
     const existing = await getProfileSite(env, "owner");
     if (existing?.id === priorOnboarding.profile_site_id) {
-      return { imported: true, reason: "already_imported" };
+      return {
+        imported: true,
+        reason: "already_imported",
+        visibility: await getExistingProfileVisibility(env, existing),
+      };
     }
     await env.DB.prepare("DELETE FROM owner_onboarding WHERE user_id = ?")
       .bind("owner")
       .run();
-  } else if (!priorOnboarding && (await getProfileSite(env, "owner"))) {
-    return { imported: false, reason: "existing_profile" };
+  } else if (!priorOnboarding) {
+    const existing = await getProfileSite(env, "owner");
+    if (existing) {
+      return {
+        imported: false,
+        reason: "existing_profile",
+        visibility: await getExistingProfileVisibility(env, existing),
+      };
+    }
   }
 
   const handoff = await fetchStarterProfile(env, input.claimToken, handle);
@@ -299,8 +368,13 @@ export async function importManagedStarterProfile(
     await cleanupPartialImport(env, partialSite, handoff.assets.map((asset) => asset.path));
   }
 
-  if (await getProfileSite(env, "owner")) {
-    return { imported: false, reason: "existing_profile" };
+  const existingAfterCleanup = await getProfileSite(env, "owner");
+  if (existingAfterCleanup) {
+    return {
+      imported: false,
+      reason: "existing_profile",
+      visibility: await getExistingProfileVisibility(env, existingAfterCleanup),
+    };
   }
 
   const site: DbSite = {
@@ -350,14 +424,18 @@ export async function importManagedStarterProfile(
       manifest.assetFiles[asset.path] = await sha256Buffer(asset.content);
     }
 
-    const generatedFiles = await generateSiteHtml(handoff.profile, [
-      { name: "me.json", content: profileJson },
-    ]);
-    generatedFiles["me.json"] = JSON.stringify(
+    const publicProfileJson = JSON.stringify(
       buildPublicMe3Profile(handoff.profile, getPublicSiteOrigin(env, site)),
       null,
       2,
     );
+    const generatedFiles =
+      handoff.profile.visibility === "public"
+        ? await generateSiteHtml(handoff.profile, [
+            { name: "me.json", content: profileJson },
+          ])
+        : {};
+    generatedFiles["me.json"] = publicProfileJson;
     for (const [name, content] of Object.entries(generatedFiles)) {
       await putSiteFile(
         env,
@@ -383,11 +461,13 @@ export async function importManagedStarterProfile(
         "owner",
       )
       .run();
-    await env.DB.prepare(
-      "UPDATE sites SET published_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    )
-      .bind(site.id)
-      .run();
+    if (handoff.profile.visibility === "public") {
+      await env.DB.prepare(
+        "UPDATE sites SET published_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      )
+        .bind(site.id)
+        .run();
+    }
     await env.DB.prepare(
       `UPDATE owner_onboarding
        SET current_step = 2, updated_at = CURRENT_TIMESTAMP
@@ -396,7 +476,11 @@ export async function importManagedStarterProfile(
       .bind("owner", site.id)
       .run();
 
-    return { imported: true, reason: "imported" };
+    return {
+      imported: true,
+      reason: "imported",
+      visibility: handoff.profile.visibility === "public" ? "public" : "private",
+    };
   } catch (error) {
     await cleanupPartialImport(env, site, handoff.assets.map((asset) => asset.path));
     throw error;

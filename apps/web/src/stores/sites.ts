@@ -511,12 +511,15 @@ export const useSitesStore = defineStore("sites", () => {
         );
       });
 
-      await api.upload(`/sites/${username}/upload`, formData);
+      const response = await api.upload<{ ok: boolean; publishedAt: string | null }>(
+        `/sites/${username}/upload`,
+        formData,
+      );
 
       // Update the site's published_at
       const site = sites.value.find((s) => s.username === username);
       if (site) {
-        site.published_at = new Date().toISOString();
+        site.published_at = response.publishedAt;
       }
 
       return true;

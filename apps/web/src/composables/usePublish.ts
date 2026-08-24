@@ -545,6 +545,8 @@ export function usePublish() {
         }
       }
 
+      const isPublicProfile =
+        wizard.siteRole !== "profile" || wizard.profile.visibility === "public";
       const siteUrl = await resolvePublicProfileUrl(username);
 
       // Trigger celebration animation if enabled
@@ -553,7 +555,7 @@ export function usePublish() {
       }
 
       // Open the published site in a new tab if enabled
-      if (openSite) {
+      if (openSite && isPublicProfile) {
         setTimeout(() => {
           window.open(siteUrl, "_blank");
         }, 900);
