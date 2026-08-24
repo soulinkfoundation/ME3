@@ -1,4 +1,3 @@
-import { defineComponent } from "vue";
 import {
   enableAutoUnmount,
   flushPromises,
@@ -24,25 +23,6 @@ vi.mock("../../api", () => ({
   },
   ApiError: class ApiError extends Error {},
 }));
-
-vi.mock("../../utils/publicSiteUrl", () => ({
-  resolvePublicSiteUrl: vi.fn(async (username: string) => `/preview/${username}`),
-}));
-
-const ConfirmationDialogStub = defineComponent({
-  name: "ConfirmationDialog",
-  props: {
-    open: Boolean,
-    message: String,
-  },
-  emits: ["cancel", "confirm"],
-  template: `
-    <div v-if="open" data-test="confirmation-dialog">
-      <p>{{ message }}</p>
-      <button data-test="confirm-delete" @click="$emit('confirm')">Confirm</button>
-    </div>
-  `,
-});
 
 enableAutoUnmount(afterEach);
 
@@ -77,13 +57,13 @@ describe("Sites dashboard", () => {
     expect(wrapper.text()).toContain("Create your ME3 Profile");
     expect(wrapper.text()).toContain("@studio");
     expect(wrapper.text()).not.toMatch(/organization sites/i);
-    expect(findButton(wrapper, "Add site")).toBeUndefined();
+    expect(wrapper.find('[aria-label="Add site"]').exists()).toBe(false);
     expect(
       wrapper.findAll("a").some((link) => link.attributes("href") === "/sites/studio"),
     ).toBe(true);
   });
 
-  it("lists the profile and additional sites with role-appropriate actions", async () => {
+  it("renders every persistent site as one minimal clickable card", async () => {
     const profile = siteRecord("owner", "profile", "2026-08-20T10:00:00.000Z");
     const additional = siteRecord("studio", "organization");
     const secondAdditional = siteRecord("community", "organization");
@@ -96,49 +76,25 @@ describe("Sites dashboard", () => {
       }),
     );
 
-    expect(wrapper.text()).toContain("ME3 Profile");
     expect(wrapper.text()).toContain("@owner");
     expect(wrapper.text()).toContain("@studio");
     expect(wrapper.text()).toContain("@community");
-    expect(findButton(wrapper, "Add site")).toBeTruthy();
+    expect(wrapper.get('[aria-label="Add site"]').attributes("href")).toContain(
+      "siteRole=organization",
+    );
 
-    const cards = wrapper.findAll("article.site-card");
+    const cards = wrapper.findAll("a.site-card");
     expect(cards).toHaveLength(3);
-    expect(cards[0].text()).toContain("Edit");
-    expect(cards[0].text()).toContain("Rename");
-    expect(cards[0].text()).toContain("Domain");
-    expect(cards[0].text()).toContain("View");
-    expect(cards[0].text()).toContain("Unpublish");
-    expect(cards[0].text()).not.toContain("Delete");
-    expect(cards[1].text()).toContain("Publish");
-    expect(cards[1].text()).toContain("Delete");
-    expect(cards[2].text()).toContain("Publish");
-    expect(cards[2].text()).toContain("Delete");
-    expect(
-      cards.map((card) =>
-        card
-          .findAll("a")
-          .find((link) => link.text().trim() === "Edit")
-          ?.attributes("href"),
-      ),
-    ).toEqual([
-      expect.stringContaining("siteId=site-owner"),
-      expect.stringContaining("siteId=site-studio"),
-      expect.stringContaining("siteId=site-community"),
+    expect(cards.map((card) => card.attributes("href"))).toEqual([
+      "/sites/owner",
+      "/sites/studio",
+      "/sites/community",
     ]);
-    expect(
-      cards[0]
-        .findAll("a")
-        .some((link) => link.text().trim() === "Domain" && link.attributes("href") === "/sites/owner#domain"),
-    ).toBe(true);
-
-    const siteLinks = wrapper
-      .findAll("a")
-      .map((link) => link.attributes("href"))
-      .filter((href) => href?.startsWith("/sites/"));
-    expect(siteLinks).toContain("/sites/owner");
-    expect(siteLinks).toContain("/sites/studio");
-    expect(siteLinks).toContain("/sites/community");
+    expect(cards[0].text()).toBe("@ownerPublished");
+    expect(cards[1].text()).toBe("@studioDraft");
+    expect(cards[2].text()).toBe("@communityDraft");
+    expect(cards[0].find(".brand-logo-stub").exists()).toBe(true);
+    expect(cards[1].find(".site-card__icon").exists()).toBe(true);
   });
 
   it("hides Add site and explains when the quota is full", async () => {
@@ -151,44 +107,10 @@ describe("Sites dashboard", () => {
       }),
     );
 
-    expect(findButton(wrapper, "Add site")).toBeUndefined();
+    expect(wrapper.find('[aria-label="Add site"]').exists()).toBe(false);
     expect(wrapper.text()).toContain(
       "You have used all 1 additional site slots on your current plan.",
     );
-  });
-
-  it("requires confirmation before deleting an additional site", async () => {
-    const additional = siteRecord("studio", "organization");
-    const sites = useSitesStore();
-    sites.sites = [additional];
-    sites.fetchSites = vi.fn(async () => undefined) as never;
-    sites.fetchSitePages = vi.fn(async () => []) as never;
-    sites.getSiteQuota = vi.fn(async () =>
-      quotaResponse({
-        canCreateProfile: true,
-        canCreateAdditionalSite: false,
-        remainingAdditionalSites: 1,
-      }),
-    ) as never;
-    sites.deleteSite = vi.fn(async (username: string) => {
-      sites.sites = sites.sites.filter((site) => site.username !== username);
-      return true;
-    }) as never;
-
-    const wrapper = mount(SitesPage, mountOptions(router));
-    await flushPromises();
-    await findButton(wrapper, "Delete")!.trigger("click");
-
-    expect(sites.deleteSite).not.toHaveBeenCalled();
-    expect(wrapper.get('[data-test="confirmation-dialog"]').text()).toContain(
-      "Delete @studio?",
-    );
-
-    await wrapper.get('[data-test="confirm-delete"]').trigger("click");
-    await flushPromises();
-
-    expect(sites.deleteSite).toHaveBeenCalledWith("studio");
-    expect(wrapper.find('[data-test="confirmation-dialog"]').exists()).toBe(false);
   });
 
   async function mountDashboard(records: Site[], siteQuota: SiteQuota) {
@@ -210,19 +132,9 @@ function mountOptions(router: Router) {
       stubs: {
         BrandLogo: { template: '<span class="brand-logo-stub" />' },
         UiIcon: { template: '<span class="ui-icon-stub" />' },
-        ConfirmationDialog: ConfirmationDialogStub,
       },
     },
   };
-}
-
-function findButton(
-  wrapper: ReturnType<typeof mount>,
-  label: string,
-) {
-  return wrapper
-    .findAll("button, a")
-    .find((candidate) => candidate.text().trim() === label);
 }
 
 function siteRecord(

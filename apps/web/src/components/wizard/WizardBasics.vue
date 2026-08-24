@@ -209,7 +209,7 @@ const bioLength = 160;
     </h2>
 
     <div class="form-group">
-      <label for="name">{{ isOrganization ? "Site name" : "Your name" }} *</label>
+      <label for="name">Name *</label>
       <input
         id="name"
         v-model="name"
@@ -222,18 +222,21 @@ const bioLength = 160;
 
     <div class="form-group">
       <label for="handle">
-        {{ isOrganization ? "Site username" : "Username (@handle)" }} *
+        {{ isOrganization ? "Site address" : "Username (@handle)" }} *
       </label>
-      <div class="handle-input">
-        <span class="handle-prefix">@</span>
+      <div class="handle-input" :class="{ 'without-prefix': isOrganization }">
+        <span v-if="!isOrganization" class="handle-prefix">@</span>
         <input
           id="handle"
           v-model="handle"
           type="text"
-          placeholder="e.g. alex"
+          :placeholder="isOrganization ? 'e.g. north-star-studio' : 'e.g. alex'"
           maxlength="30"
         />
       </div>
+      <p v-if="isOrganization" class="handle-help">
+        Used in this site's web address. You can connect a custom domain later.
+      </p>
       <div class="handle-status">
         <span v-if="wizard.isCheckingUsername" class="checking">
           Checking availability...
@@ -242,16 +245,17 @@ const bioLength = 160;
           v-else-if="handle.length >= 3 && wizard.isUsernameAvailable === true"
           class="available"
         >
-          {{ handle }} is available.
+          {{ isOrganization ? "This site address" : handle }} is available.
         </span>
         <span
           v-else-if="handle.length >= 3 && wizard.isUsernameAvailable === false"
           class="taken"
         >
-          ✗ This username is taken
+          ✗ This {{ isOrganization ? "site address" : "username" }} is taken
         </span>
         <span v-else-if="handle.length > 0 && handle.length < 3" class="hint">
-          Username must be at least 3 characters
+          {{ isOrganization ? "Site address" : "Username" }} must be at least 3
+          characters
         </span>
       </div>
     </div>
@@ -460,6 +464,17 @@ const bioLength = 160;
 
 .handle-input input:focus {
   border: none;
+}
+
+.handle-input.without-prefix input {
+  padding-left: 16px;
+}
+
+.handle-help {
+  margin: 8px 0 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .handle-status {

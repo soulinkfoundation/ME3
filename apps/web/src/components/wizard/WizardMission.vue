@@ -457,7 +457,7 @@ async function suggestBusinessPositioning() {
 
 <template>
   <div class="step-mission">
-    <h2>{{ isOrganization ? "Positioning" : "Mission" }}</h2>
+    <h2>Mission</h2>
     <p class="step-desc">
       {{
         isOrganization

@@ -145,6 +145,13 @@ export interface WizardBusinessConfig {
   solution: string;
   targetMarket: string;
   primaryOutcome: string;
+  goals: WizardSiteGoal[];
+}
+
+export interface WizardSiteGoal {
+  id: string;
+  title: string;
+  status: "active" | "completed";
 }
 
 export type WizardBookingDuration = 15 | 30 | 45 | 60 | 75 | 90 | 120;
@@ -1256,6 +1263,26 @@ function normalizeBusinessField(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function normalizeBusinessGoals(value: unknown): WizardSiteGoal[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((goal, index) => {
+      const record =
+        goal && typeof goal === "object"
+          ? (goal as Record<string, unknown>)
+          : {};
+      const title = normalizeBusinessField(record.title).trim().slice(0, 600);
+      if (!title) return null;
+      const id = normalizeBusinessField(record.id).trim();
+      return {
+        id: id || `site-goal-${index + 1}`,
+        title,
+        status: record.status === "completed" ? "completed" : "active",
+      } satisfies WizardSiteGoal;
+    })
+    .filter((goal): goal is WizardSiteGoal => Boolean(goal));
+}
+
 function normalizeBusinessConfig(input: unknown): WizardBusinessConfig {
   const record =
     input && typeof input === "object" ? (input as Record<string, unknown>) : {};
@@ -1275,6 +1302,7 @@ function normalizeBusinessConfig(input: unknown): WizardBusinessConfig {
     solution,
     targetMarket: normalizeBusinessField(record.targetMarket).trim(),
     primaryOutcome: normalizeBusinessField(record.primaryOutcome).trim(),
+    goals: normalizeBusinessGoals(record.goals),
   };
 }
 
@@ -1410,6 +1438,7 @@ const defaultProfile: WizardProfile = {
     solution: "",
     targetMarket: "",
     primaryOutcome: "",
+    goals: [],
   },
 };
 
@@ -1501,13 +1530,11 @@ export const useWizardStore = defineStore("wizard", () => {
       { id: "banner", name: "Banner" },
       {
         id: "mission",
-        name: siteRole.value === "organization" ? "Positioning" : "Mission",
+        name: "Mission",
       },
+      { id: "goals", name: "Goals" },
       ...(siteRole.value === "profile"
-        ? [
-            { id: "goals" as const, name: "Goals" },
-            { id: "wheel-of-life" as const, name: "Wheel of Life" },
-          ]
+        ? [{ id: "wheel-of-life" as const, name: "Wheel of Life" }]
         : []),
       { id: "additional-features", name: "Additional Features" },
     ];
@@ -3162,6 +3189,7 @@ export const useWizardStore = defineStore("wizard", () => {
       solution: profile.value.business.solution.trim(),
       targetMarket: profile.value.business.targetMarket.trim(),
       primaryOutcome: profile.value.business.primaryOutcome.trim(),
+      goals: normalizeBusinessGoals(profile.value.business.goals),
     };
 
     if (
@@ -3170,10 +3198,13 @@ export const useWizardStore = defineStore("wizard", () => {
       cleanedBusiness.primaryProblem ||
       cleanedBusiness.solution ||
       cleanedBusiness.targetMarket ||
-      cleanedBusiness.primaryOutcome
+      cleanedBusiness.primaryOutcome ||
+      cleanedBusiness.goals.length > 0
     ) {
       me3.business = Object.fromEntries(
-        Object.entries(cleanedBusiness).filter(([, value]) => Boolean(value)),
+        Object.entries(cleanedBusiness).filter(([, value]) =>
+          Array.isArray(value) ? value.length > 0 : Boolean(value),
+        ),
       ) as Me3BusinessContext;
     }
 

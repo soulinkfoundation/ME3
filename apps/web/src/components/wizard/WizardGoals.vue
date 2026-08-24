@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { api } from "../../api";
 import { useAppToast } from "../../composables/useAppToast";
+import {
+  useWizardStore,
+  type WizardSiteGoal,
+} from "../../stores/wizard";
 import Button from "../Button.vue";
 import UiIcon from "../UiIcon.vue";
 
-type MissionGoal = {
-  id: string;
-  title: string;
-  status: "active" | "completed";
-};
+type MissionGoal = WizardSiteGoal;
 
 type MissionDashboardResponse = {
   settings: {
@@ -23,6 +23,8 @@ type MissionDashboardResponse = {
 };
 
 const goals = ref<MissionGoal[]>([]);
+const wizard = useWizardStore();
+const isOrganization = computed(() => wizard.siteRole === "organization");
 const loading = ref(true);
 const saving = ref(false);
 const error = ref("");
@@ -52,6 +54,21 @@ async function saveGoals() {
   saving.value = true;
   error.value = "";
   try {
+    if (isOrganization.value) {
+      const siteGoals = goals.value
+        .map((goal) => ({ ...goal, title: goal.title.trim() }))
+        .filter((goal) => goal.title);
+      wizard.updateProfile({
+        business: {
+          ...wizard.profile.business,
+          goals: siteGoals,
+        },
+      });
+      goals.value = siteGoals;
+      toastSuccess("Site goals saved");
+      return;
+    }
+
     const response = await api.patch<MissionDashboardResponse>(
       "/mission-control/dashboard",
       {
@@ -85,6 +102,12 @@ async function removeGoal(goalId: string) {
 }
 
 onMounted(async () => {
+  if (isOrganization.value) {
+    goals.value = wizard.profile.business.goals.map((goal) => ({ ...goal }));
+    loading.value = false;
+    return;
+  }
+
   try {
     const response = await api.get<MissionDashboardResponse>(
       "/mission-control/dashboard",
@@ -106,7 +129,11 @@ onMounted(async () => {
   <div class="step-goals" :aria-busy="saving">
     <h2>Goals</h2>
     <p class="section-desc">
-      Keep the outcomes you are actively working towards here.
+      {{
+        isOrganization
+          ? "Keep the outcomes this site is working towards here."
+          : "Keep the outcomes you are actively working towards here."
+      }}
     </p>
 
     <p v-if="loading" class="section-desc" role="status">

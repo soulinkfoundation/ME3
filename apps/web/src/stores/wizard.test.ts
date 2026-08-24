@@ -347,7 +347,16 @@ describe("wizard store", () => {
       });
       expect(store.profile.name).toBe("");
       expect(store.pages).toEqual([]);
-      store.updateProfile({ name: "Studio", bio: "Studio draft" });
+      store.updateProfile({
+        name: "Studio",
+        bio: "Studio draft",
+        business: {
+          ...store.profile.business,
+          goals: [
+            { id: "studio-goal", title: "Launch Studio", status: "active" },
+          ],
+        },
+      });
 
       store.activateDraftContext({
         siteId: "site-community",
@@ -356,6 +365,7 @@ describe("wizard store", () => {
       });
       expect(store.profile.name).toBe("");
       expect(store.username).toBe("community");
+      expect(store.profile.business.goals).toEqual([]);
       store.updateProfile({ name: "Community", bio: "Community draft" });
 
       store.activateDraftContext({
@@ -366,6 +376,9 @@ describe("wizard store", () => {
       expect(store.profile.name).toBe("Studio");
       expect(store.profile.bio).toBe("Studio draft");
       expect(store.pages).toEqual([]);
+      expect(store.profile.business.goals.map((goal) => goal.title)).toEqual([
+        "Launch Studio",
+      ]);
 
       store.activateDraftContext({
         siteId: "site-profile",
@@ -407,10 +420,10 @@ describe("wizard store", () => {
       const store = useWizardStore();
       store.activateDraftContext({ role: "organization" });
 
-      expect(store.stepIds).not.toContain("goals");
+      expect(store.stepIds).toContain("goals");
       expect(store.stepIds).not.toContain("wheel-of-life");
       expect(store.stepNames).toContain("Logo");
-      expect(store.stepNames).toContain("Positioning");
+      expect(store.stepNames).toContain("Mission");
 
       store.activateDraftContext({ role: "profile" });
       expect(store.stepIds).toContain("goals");

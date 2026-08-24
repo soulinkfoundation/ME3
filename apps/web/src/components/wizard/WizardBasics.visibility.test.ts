@@ -30,5 +30,11 @@ describe("WizardBasics profile visibility", () => {
 
     const wrapper = mount(WizardBasics);
     expect(wrapper.find(".visibility-group").exists()).toBe(false);
+    expect(wrapper.get('label[for="name"]').text()).toBe("Name *");
+    expect(wrapper.get('label[for="handle"]').text()).toBe("Site address *");
+    expect(wrapper.find(".handle-prefix").exists()).toBe(false);
+    expect(wrapper.get(".handle-help").text()).toContain(
+      "Used in this site's web address",
+    );
   });
 });

@@ -11,9 +11,7 @@ import {
 import { api } from "../../api";
 import BrandLogo from "../../components/BrandLogo.vue";
 import Button from "../../components/Button.vue";
-import ConfirmationDialog from "../../components/ConfirmationDialog.vue";
 import UiIcon from "../../components/UiIcon.vue";
-import { resolvePublicSiteUrl } from "../../utils/publicSiteUrl";
 
 definePage({
   meta: {
@@ -28,10 +26,6 @@ const sites = useSitesStore();
 const landingPagesEnabled = ref(false);
 const quota = ref<SiteQuota | null>(null);
 const dashboardLoading = ref(true);
-const actionBusy = ref<string | null>(null);
-const actionError = ref("");
-const pendingDelete = ref<Site | null>(null);
-const profilePublicUrl = ref("");
 
 const profileSite = computed(() =>
   sites.sites.find((site) => site.site_role === "profile"),
@@ -73,7 +67,7 @@ const landingPageCards = computed(() => {
 });
 
 const visibleSitesError = computed(() => {
-  const message = actionError.value || sites.error?.trim();
+  const message = sites.error?.trim();
   if (!message || message.toLowerCase().includes("activate me3 landing pages")) {
     return null;
   }
@@ -114,35 +108,8 @@ function siteRoute(site: Site): string {
   return `/sites/${encodeURIComponent(site.username)}`;
 }
 
-function editSiteRoute(site: Site, step?: "basics" | "publish") {
-  return {
-    path: "/create",
-    query: {
-      siteId: site.id,
-      site: site.username,
-      return: "/sites",
-      ...(step ? { step } : {}),
-    },
-  };
-}
-
 function statusLabel(published: boolean): string {
   return published ? "Published" : "Draft";
-}
-
-function siteKind(site: Site): string {
-  return site.site_role === "profile" ? "ME3 Profile" : "Site";
-}
-
-async function syncProfilePublicUrl(): Promise<void> {
-  if (!profileSite.value) {
-    profilePublicUrl.value = "";
-    return;
-  }
-  profilePublicUrl.value = await resolvePublicSiteUrl(
-    profileSite.value.username,
-    profileSite.value,
-  );
 }
 
 async function syncLandingPagesPlugin(): Promise<void> {
@@ -169,42 +136,6 @@ async function refreshQuota(): Promise<void> {
   quota.value = await sites.getSiteQuota();
 }
 
-async function unpublishSite(site: Site): Promise<void> {
-  actionBusy.value = `unpublish:${site.username}`;
-  actionError.value = "";
-  try {
-    const success = await sites.unpublishLandingPage(site.username);
-    if (!success) {
-      actionError.value = sites.error || "Failed to unpublish site";
-    }
-  } finally {
-    actionBusy.value = null;
-  }
-}
-
-function requestDelete(site: Site): void {
-  pendingDelete.value = site;
-}
-
-async function confirmDelete(): Promise<void> {
-  const site = pendingDelete.value;
-  if (!site || site.site_role === "profile") return;
-
-  actionBusy.value = `delete:${site.username}`;
-  actionError.value = "";
-  try {
-    const success = await sites.deleteSite(site.username);
-    if (success) {
-      pendingDelete.value = null;
-      await refreshQuota();
-    } else {
-      actionError.value = sites.error || "Failed to delete site";
-    }
-  } finally {
-    actionBusy.value = null;
-  }
-}
-
 function handlePluginsChanged() {
   void syncLandingPagesPlugin();
 }
@@ -215,7 +146,6 @@ onMounted(async () => {
     await Promise.all([
       refreshQuota(),
       syncLandingPagesPlugin(),
-      syncProfilePublicUrl(),
     ]);
   } finally {
     dashboardLoading.value = false;
@@ -231,22 +161,19 @@ onBeforeUnmount(() => {
 <template>
   <div class="sites-page">
     <main class="sites-shell">
+      <h1 class="sr-only">Sites</h1>
       <header class="sites-header">
-        <div>
-          <h1>Sites</h1>
-          <p>Manage your ME3 Profile and every site you build around it.</p>
-        </div>
         <Button
           v-if="canAddSite"
-          color="primary"
+          color="ghost"
           shape="soft"
-          size="large"
+          size="compact"
+          icon-only
           :to="createAdditionalSiteRoute"
+          aria-label="Add site"
+          title="Add site"
         >
-          <template #icon>
-            <UiIcon name="Plus" :size="18" aria-hidden="true" />
-          </template>
-          Add site
+          <UiIcon name="Plus" :size="20" aria-hidden="true" />
         </Button>
       </header>
 
@@ -298,151 +225,32 @@ onBeforeUnmount(() => {
 
       <section
         v-if="!dashboardLoading && persistentSites.length"
-        class="sites-section"
-        aria-labelledby="your-sites-title"
+        class="sites-grid"
+        aria-label="Your sites"
       >
-        <div class="section-heading">
-          <h2 id="your-sites-title">Your sites</h2>
-          <p v-if="profileSite && quota">
-            {{ quota.remaining_additional_sites }} additional
-            {{ quota.remaining_additional_sites === 1 ? "site" : "sites" }}
-            available
-          </p>
-        </div>
-
-        <div class="sites-grid">
-          <article
-            v-for="ownedSite in persistentSites"
-            :key="ownedSite.id"
-            class="site-card"
-            :class="{ 'site-card--profile': ownedSite.site_role === 'profile' }"
+        <RouterLink
+          v-for="ownedSite in persistentSites"
+          :key="ownedSite.id"
+          class="site-card"
+          :to="siteRoute(ownedSite)"
+          :aria-label="`Open @${ownedSite.username}`"
+        >
+          <BrandLogo
+            v-if="ownedSite.site_role === 'profile'"
+            class="site-card__logo"
+            alt="ME3"
+          />
+          <span v-else class="site-card__icon" aria-hidden="true">
+            <UiIcon name="BriefcaseBusiness" :size="28" />
+          </span>
+          <h2>@{{ ownedSite.username }}</h2>
+          <span
+            class="site-status"
+            :class="{ 'site-status--published': ownedSite.published_at }"
           >
-            <div class="site-card__topline">
-              <span class="site-card__kind">{{ siteKind(ownedSite) }}</span>
-              <span
-                class="site-status"
-                :class="{ 'site-status--published': ownedSite.published_at }"
-              >
-                {{ statusLabel(Boolean(ownedSite.published_at)) }}
-              </span>
-            </div>
-
-            <div class="site-card__identity">
-              <BrandLogo
-                v-if="ownedSite.site_role === 'profile'"
-                class="site-card__logo"
-                alt="ME3"
-              />
-              <span v-else class="site-card__icon" aria-hidden="true">
-                <UiIcon name="BriefcaseBusiness" :size="24" />
-              </span>
-              <div>
-                <h3>
-                  <RouterLink :to="siteRoute(ownedSite)">
-                    @{{ ownedSite.username }}
-                  </RouterLink>
-                </h3>
-                <p v-if="ownedSite.site_role === 'profile'">
-                  Your primary identity and home on ME3.
-                </p>
-                <p v-else>
-                  A focused home for a business, project, brand, community, or
-                  organisation.
-                </p>
-              </div>
-            </div>
-
-            <div
-              class="site-card__actions"
-              role="group"
-              :aria-label="`Actions for ${ownedSite.username}`"
-            >
-              <Button color="outline" shape="soft" size="small" :to="siteRoute(ownedSite)">
-                Open
-              </Button>
-              <Button color="ghost" shape="soft" size="small" :to="editSiteRoute(ownedSite)">
-                Edit
-              </Button>
-              <template v-if="ownedSite.site_role === 'profile'">
-                <Button
-                  color="ghost"
-                  shape="soft"
-                  size="small"
-                  :to="editSiteRoute(ownedSite, 'basics')"
-                >
-                  Rename
-                </Button>
-                <Button
-                  color="ghost"
-                  shape="soft"
-                  size="small"
-                  :to="`${siteRoute(ownedSite)}#domain`"
-                >
-                  Domain
-                </Button>
-                <Button
-                  v-if="ownedSite.published_at && profilePublicUrl"
-                  color="ghost"
-                  shape="soft"
-                  size="small"
-                  :href="profilePublicUrl"
-                  target="_blank"
-                  rel="noopener"
-                >
-                  View
-                </Button>
-              </template>
-              <Button
-                v-if="!ownedSite.published_at"
-                color="ghost"
-                shape="soft"
-                size="small"
-                :to="editSiteRoute(ownedSite, 'publish')"
-              >
-                Publish
-              </Button>
-              <Button
-                v-else
-                color="ghost"
-                shape="soft"
-                size="small"
-                :disabled="actionBusy === `unpublish:${ownedSite.username}`"
-                @click="unpublishSite(ownedSite)"
-              >
-                {{
-                  actionBusy === `unpublish:${ownedSite.username}`
-                    ? "Unpublishing…"
-                    : "Unpublish"
-                }}
-              </Button>
-              <Button
-                v-if="ownedSite.site_role !== 'profile'"
-                color="danger"
-                shape="soft"
-                size="small"
-                @click="requestDelete(ownedSite)"
-              >
-                Delete
-              </Button>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section
-        v-if="
-          !dashboardLoading &&
-          profileSite &&
-          !canAddSite &&
-          !quotaFull &&
-          !quotaUnavailable
-        "
-        class="sites-message"
-        aria-label="Additional site availability"
-      >
-        <strong>
-          Add another site when your plan includes an available site slot.
-        </strong>
+            {{ statusLabel(Boolean(ownedSite.published_at)) }}
+          </span>
+        </RouterLink>
       </section>
 
       <section
@@ -485,27 +293,13 @@ onBeforeUnmount(() => {
       </section>
     </main>
 
-    <ConfirmationDialog
-      :open="Boolean(pendingDelete)"
-      title="Delete site?"
-      :message="`Delete @${pendingDelete?.username || ''}? This action cannot be undone.`"
-      confirm-label="Delete"
-      :busy="
-        Boolean(
-          pendingDelete && actionBusy === `delete:${pendingDelete.username}`,
-        )
-      "
-      danger
-      @cancel="pendingDelete = null"
-      @confirm="confirmDelete"
-    />
   </div>
 </template>
 
 <style scoped>
 .sites-page {
   min-height: 100vh;
-  padding: calc(var(--workspace-topbar-height) + 32px) 24px 72px;
+  padding: var(--workspace-topbar-height) 24px 72px;
   background: var(--ui-bg, var(--color-bg));
   color: var(--ui-text, var(--color-text));
 }
@@ -515,42 +309,50 @@ onBeforeUnmount(() => {
   margin: 0 auto;
 }
 
-.sites-header,
+.sr-only {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  margin: -1px;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
 .section-heading,
-.site-card__topline,
-.site-card__actions,
 .landing-card {
   display: flex;
   align-items: center;
 }
 
 .sites-header {
-  justify-content: space-between;
-  gap: 24px;
+  display: flex;
+  min-height: 44px;
+  justify-content: flex-end;
   margin-bottom: 28px;
 }
 
-.sites-header h1,
+.sites-header > :deep(.me3-btn) {
+  position: fixed;
+  z-index: 70;
+  top: var(--workspace-topbar-padding-block);
+  right: var(--app-shell-mobile-nav-inset-inline-start);
+  min-width: 44px;
+  min-height: 44px;
+}
+
 .section-heading h2,
 .profile-callout h2,
-.site-card h3 {
+.site-card h2 {
   margin: 0;
   letter-spacing: -0.025em;
 }
 
-.sites-header h1 {
-  font-size: clamp(1.8rem, 4vw, 2.4rem);
-}
-
-.sites-header p,
 .section-heading p,
-.profile-callout p,
-.site-card p {
+.profile-callout p {
   color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.sites-header p {
-  margin: 6px 0 0;
 }
 
 .sites-message {
@@ -629,29 +431,28 @@ onBeforeUnmount(() => {
 }
 
 .site-card {
+  position: relative;
   display: flex;
-  min-height: 250px;
+  min-height: 220px;
   flex-direction: column;
-  padding: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-lg, 16px);
   background: var(--ui-surface, var(--color-bg));
   box-shadow: var(--ui-shadow-sm, 0 1px 2px rgb(15 23 42 / 0.05));
+  color: inherit;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
 }
 
-.site-card--profile {
-  border-color: var(--ui-border-strong, var(--color-border));
-}
-
-.site-card__topline {
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.site-card__kind {
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 0.8rem;
-  font-weight: 750;
+.landing-card .site-card__icon {
+  width: 48px;
+  height: 48px;
+  margin: 0;
+  border-radius: var(--ui-radius-md, 12px);
 }
 
 .site-status {
@@ -670,62 +471,30 @@ onBeforeUnmount(() => {
   color: var(--ui-accent-strong, var(--color-accent));
 }
 
-.site-card__identity {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 14px;
-  margin-top: 26px;
-}
-
-.site-card__logo,
-.site-card__icon {
-  width: 48px;
-}
-
 .site-card__logo {
+  display: block;
+  width: 76px;
   height: auto;
-  padding: 8px;
-  box-sizing: border-box;
+  margin-bottom: 16px;
 }
 
 .site-card__icon {
   display: grid;
-  height: 48px;
+  width: 64px;
+  height: 64px;
   place-items: center;
-  border-radius: var(--ui-radius-md, 12px);
+  margin-bottom: 16px;
+  border-radius: var(--ui-radius-lg, 16px);
   background: var(--ui-surface-muted, var(--color-bg-subtle));
   color: var(--ui-text-muted, var(--color-text-muted));
 }
 
-.site-card h3 {
-  font-size: 1.2rem;
+.site-card h2 {
+  font-size: 1.35rem;
 }
 
-.site-card h3 a {
-  color: inherit;
-  text-decoration: none;
-}
-
-.site-card h3 a:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.site-card p {
-  margin: 6px 0 0;
-  line-height: 1.45;
-}
-
-.site-card__actions {
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: auto;
-  padding-top: 24px;
-}
-
-.site-card__actions :deep(.me3-btn) {
-  min-height: 44px;
+.site-card .site-status {
+  margin-top: 12px;
 }
 
 .landing-grid {
@@ -755,7 +524,7 @@ onBeforeUnmount(() => {
   color: var(--ui-text-muted, var(--color-text-muted));
 }
 
-.site-card h3 a:focus-visible,
+.site-card:focus-visible,
 .landing-card:focus-visible {
   outline: 3px solid var(--ui-accent, var(--color-accent));
   outline-offset: 3px;
@@ -764,22 +533,25 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: no-preference) {
   .site-card,
   .landing-card {
-    transition: border-color 160ms ease, box-shadow 160ms ease;
+    transition:
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease;
   }
 
   .site-card:hover,
   .landing-card:hover {
     border-color: var(--ui-border-strong, var(--color-border));
     box-shadow: var(--ui-shadow-md, 0 12px 24px rgb(15 23 42 / 0.08));
+    transform: translateY(-2px);
   }
 }
 
 @media (max-width: 720px) {
   .sites-page {
-    padding: calc(var(--workspace-topbar-height) + 20px) 16px 48px;
+    padding: var(--workspace-topbar-padding-block) 16px 48px;
   }
 
-  .sites-header,
   .section-heading {
     align-items: flex-start;
   }
@@ -799,13 +571,8 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 520px) {
-  .sites-header,
   .section-heading {
     flex-direction: column;
-  }
-
-  .sites-header > :deep(.me3-btn) {
-    width: 100%;
   }
 }
 </style>
