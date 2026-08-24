@@ -301,8 +301,10 @@ export async function runCoreAgentToolTurn(input: {
     }
     return true;
   });
-  const requiredReadTool = requiredPrivateReadTool(input.messages, tools);
-  let requiredReadToolAttempted = false;
+  const requiredTool =
+    requiredSchedulingActionTool(input.messages, tools) ||
+    requiredPrivateReadTool(input.messages, tools);
+  let requiredToolAttempted = false;
   const models = input.route.backupModel && input.route.backupModel !== input.route.model
     ? [input.route.model, input.route.backupModel]
     : [input.route.model];
@@ -317,8 +319,8 @@ export async function runCoreAgentToolTurn(input: {
         model: async (turnMessages, availableTools) => {
           throwIfStreamAborted(input.streamOptions?.signal);
           modelStep += 1;
-          const forcedTool = !requiredReadToolAttempted
-            ? requiredReadTool
+          const forcedTool = !requiredToolAttempted
+            ? requiredTool
             : null;
           const modelTools = forcedTool ? [forcedTool] : availableTools;
           await emit({
@@ -353,8 +355,8 @@ export async function runCoreAgentToolTurn(input: {
         },
         executeTool: async (call, tool) => {
           throwIfStreamAborted(input.streamOptions?.signal);
-          if (call.name === requiredReadTool?.name) {
-            requiredReadToolAttempted = true;
+          if (call.name === requiredTool?.name) {
+            requiredToolAttempted = true;
           }
           await emit({
             event: "tool",
@@ -2037,6 +2039,68 @@ function requiredPrivateReadTool(
   if (requiredCapabilities.size !== 1) return null;
   const [capabilityId] = requiredCapabilities;
   return tools.find((tool) => tool.capabilityId === capabilityId) || null;
+}
+
+function requiredSchedulingActionTool(
+  messages: readonly AgentToolMessage[],
+  tools: readonly CoreChatToolDefinition[],
+): CoreChatToolDefinition | null {
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user")
+    ?.content.toLowerCase()
+    .replaceAll("’", "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!latestUserMessage) return null;
+
+  const toolFor = (capabilityId: CoreChatToolDefinition["capabilityId"]) =>
+    tools.find((tool) => tool.capabilityId === capabilityId) || null;
+  const explicitRequest =
+    /\b(?:arrange|organise|organize|schedule|set up)\b.+\bwith\b/.test(
+      latestUserMessage,
+    ) ||
+    /\bfind\b.+\b(?:time|minutes?|hours?)\b.+\bwith\b/.test(
+      latestUserMessage,
+    ) ||
+    /\bfind\b.+\bwith\b.+\b(?:time|minutes?|hours?)\b/.test(
+      latestUserMessage,
+    );
+  if (explicitRequest) return toolFor("core.scheduling.request");
+
+  const recentAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant")
+    ?.content.toLowerCase()
+    .replaceAll("’", "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  const schedulingContext = Boolean(
+    recentAssistantMessage &&
+      /(?:scheduling request|mutual (?:free )?(?:slots|options|availability)|approve availability|selected .+ reply [“\"]?approve|nothing has been booked)/.test(
+        recentAssistantMessage,
+      ),
+  );
+  if (!schedulingContext) return null;
+
+  if (
+    /^(?:approve availability|share (?:my )?availability)\b/.test(
+      latestUserMessage,
+    ) ||
+    /^(?:book|choose|select)\s+(?:the\s+)?option\s+\d+\b/.test(
+      latestUserMessage,
+    ) ||
+    /^(?:approve|confirm|yes)(?:[.!]| please)*$/.test(latestUserMessage)
+  ) {
+    return toolFor("core.scheduling.approve");
+  }
+  if (
+    /^(?:decline|refuse)\b/.test(latestUserMessage) ||
+    /^(?:do not|don't)\s+(?:book|schedule|share)\b/.test(latestUserMessage)
+  ) {
+    return toolFor("core.scheduling.decline");
+  }
+  return null;
 }
 
 function withCoreToolInstructions(

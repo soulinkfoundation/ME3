@@ -185,9 +185,91 @@ describe("ME3 agent scheduling", () => {
       },
       expect.any(String),
     );
+    expect(aiRun.mock.calls[0]?.[1]).toMatchObject({
+      tools: [{ function: { name: "core_scheduling_request" } }],
+      tool_choice: {
+        type: "function",
+        function: { name: "core_scheduling_request" },
+      },
+    });
     expect(response).toMatchObject({
       specialist: "core.scheduling.request",
       replyText: "I found one mutual option with Sarah. Nothing is booked yet.",
+    });
+  });
+
+  it("forces an explicit scheduling approval after an incoming Soulink request", async () => {
+    const database = createExecutionDb();
+    const approve = vi.fn<CoreSchedulingToolServices["approve"]>(async () => ({
+      contactName: "Sarah",
+      status: "availability_shared",
+      selectedOption: null,
+    }));
+    const services: CoreSchedulingToolServices = {
+      async searchContacts() {
+        return { contacts: [], total: 0 };
+      },
+      async request() {
+        throw new Error("not used");
+      },
+      approve,
+      async decline() {
+        throw new Error("not used");
+      },
+    };
+    const aiRun = vi.fn()
+      .mockResolvedValueOnce({
+        tool_calls: [{
+          id: "approve-1",
+          name: "core_scheduling_approve",
+          arguments: { contact: "Sarah", confirmed: true },
+        }],
+      })
+      .mockResolvedValueOnce({
+        response: "I approved sharing availability with Sarah.",
+      });
+
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "schedule-approval",
+      turnId: "schedule-approval-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: {
+        providerId: "workers-ai",
+        model: "workers-test-model",
+        backupModel: null,
+        apiKey: null,
+        ai: { run: aiRun },
+        aiGateway: null,
+        configured: true,
+      } as never,
+      messages: [
+        { role: "system", content: "You are ME3." },
+        {
+          role: "assistant",
+          content:
+            "Sarah's ME3 assistant asked to compare availability. Reply “approve availability” to share only mutual free slots, or “decline” to refuse.",
+        },
+        { role: "user", content: "Approve availability." },
+      ],
+      schedulingServices: services,
+    });
+
+    expect(approve).toHaveBeenCalledWith(
+      { contact: "Sarah", option: undefined, confirmed: true },
+      expect.any(String),
+    );
+    expect(aiRun.mock.calls[0]?.[1]).toMatchObject({
+      tools: [{ function: { name: "core_scheduling_approve" } }],
+      tool_choice: {
+        type: "function",
+        function: { name: "core_scheduling_approve" },
+      },
+    });
+    expect(response).toMatchObject({
+      specialist: "core.scheduling.approve",
+      replyText: "I approved sharing availability with Sarah.",
     });
   });
 });
