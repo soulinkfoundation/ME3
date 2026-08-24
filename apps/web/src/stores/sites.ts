@@ -15,6 +15,7 @@ interface Site {
   username: string;
   user_id: string;
   site_type?: SiteType;
+  site_role: "profile" | "organization" | null;
   template_id?: LandingPageTemplateId | null;
   custom_domain: string | null;
   custom_domain_status: "pending" | "active" | "failed" | null;
@@ -258,7 +259,19 @@ export interface SiteQuota {
   current: number;
   limit: number;
   tier: string;
+  profile: SiteRoleQuota;
+  additional_sites: SiteRoleQuota;
+  remaining_additional_sites: number;
+  can_create_profile: boolean;
+  can_create_additional_site: boolean;
   capabilities: Record<string, unknown>;
+  can_create: boolean;
+}
+
+interface SiteRoleQuota {
+  current: number;
+  limit: number;
+  remaining: number;
   can_create: boolean;
 }
 
@@ -444,6 +457,7 @@ export const useSitesStore = defineStore("sites", () => {
     username: string,
     options: {
       siteType?: SiteType;
+      siteRole?: "profile" | "organization";
       templateId?: LandingPageTemplateId | null;
       renameFromUsername?: string;
     } = {},
@@ -455,9 +469,14 @@ export const useSitesStore = defineStore("sites", () => {
       const normalized = normalizeUsername(username);
       const response = await api.post<{ site: Site }>("/sites", {
         username: normalized,
-        siteType: options.siteType,
-        templateId: options.templateId,
-        renameFromUsername: options.renameFromUsername,
+        ...(options.siteType ? { siteType: options.siteType } : {}),
+        ...(options.siteRole ? { siteRole: options.siteRole } : {}),
+        ...(options.templateId !== undefined
+          ? { templateId: options.templateId }
+          : {}),
+        ...(options.renameFromUsername
+          ? { renameFromUsername: options.renameFromUsername }
+          : {}),
       });
       const newSite = response.site;
       sites.value.unshift(newSite);

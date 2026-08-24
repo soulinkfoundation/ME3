@@ -3646,6 +3646,7 @@ function profileSiteRow(
     user_id: "owner",
     username,
     site_type: "profile",
+    site_role: "profile",
     custom_domain: options.customDomain || null,
     custom_domain_status: options.customDomainStatus || null,
     published_at: options.published ? "2026-05-15T09:00:00Z" : null,

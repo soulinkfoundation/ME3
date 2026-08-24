@@ -113,6 +113,14 @@ import {
   unsubscribeHtml,
   verifyUnsubscribeToken,
 } from "../sites";
+import {
+  SiteLifecycleError,
+  createPersistentSite,
+  deleteAdditionalSite,
+  getSiteQuota,
+  parseSiteRole,
+  renameProfileSite,
+} from "../site-lifecycle";
 
 type LandingPageGenerateBody = {
   username?: string;
@@ -130,7 +138,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     const [result, bookingEnabledSiteIds] = await Promise.all([
       c.env.DB.prepare(
-        `SELECT id, user_id, username, site_type, template_id, custom_domain,
+        `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
                 custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
          FROM sites
          WHERE user_id = ?
@@ -153,23 +161,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
 
-    const count = await c.env.DB.prepare("SELECT COUNT(*) AS count FROM sites WHERE user_id = ?")
-      .bind(ownerId)
-      .first<{ count: number | string | null }>();
-
-    return c.json({
-      current: Number(count?.count || 0),
-      limit: 4,
-      tier: "core",
-      capabilities: {
-        maxSites: 4,
-        mailboxAlias: true,
-        approvalFirstOutbound: true,
-        soulinkAgentAccess: true,
-        telegramAgentAccess: true,
-      },
-      can_create: Number(count?.count || 0) < 4,
-    });
+    return c.json(await getSiteQuota(c.env, ownerId));
   });
 
   app.post("/api/sites/:username/products/confirmation-email/test", async (c) => {
@@ -688,15 +680,26 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (!ownerId) return deps.unauthorized(c);
 
     const body = await c.req
-      .json<{ username?: string; siteType?: string; templateId?: string | null }>()
-      .catch((): { username?: string; siteType?: string; templateId?: string | null } => ({}));
+      .json<{
+        username?: unknown;
+        siteType?: unknown;
+        siteRole?: unknown;
+        templateId?: unknown;
+        renameFromUsername?: unknown;
+      }>()
+      .catch(
+        (): {
+          username?: unknown;
+          siteType?: unknown;
+          siteRole?: unknown;
+          templateId?: unknown;
+          renameFromUsername?: unknown;
+        } => ({}),
+      );
     const username = normalizeUsername(body.username);
     if (!username || !USERNAME_REGEX.test(username)) {
       return c.json({ error: "Username must be 3-30 characters and use letters, numbers, underscores, or hyphens" }, 400);
     }
-
-    const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(c.env, username);
-    if (cloudUsernameError) return c.json({ error: cloudUsernameError }, 409);
 
     const siteType = body.siteType === "landing_page" ? "landing_page" : "profile";
     if (siteType === "landing_page") {
@@ -708,28 +711,50 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         409,
       );
     }
-    const id = crypto.randomUUID();
+
+    const requestedRole = parseSiteRole(body.siteRole);
+    if (body.siteRole !== undefined && !requestedRole) {
+      return c.json({ error: "Site role must be profile or organization" }, 400);
+    }
+    const siteRole = requestedRole || "profile";
+    const renameFromUsername = normalizeUsername(body.renameFromUsername);
+    if (body.renameFromUsername !== undefined && !renameFromUsername) {
+      return c.json({ error: "The profile being renamed is invalid" }, 400);
+    }
+    if (renameFromUsername && siteRole !== "profile") {
+      return c.json({ error: "Only the ME3 Profile can be renamed" }, 400);
+    }
+
+    const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(c.env, username);
+    if (cloudUsernameError) return c.json({ error: cloudUsernameError }, 409);
 
     try {
-      await c.env.DB.prepare(
-        `INSERT INTO sites (id, user_id, username, site_type, template_id)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-        .bind(id, ownerId, username, siteType, body.templateId || null)
-        .run();
+      if (renameFromUsername) {
+        const site = await renameProfileSite(c.env, {
+          ownerId,
+          fromUsername: renameFromUsername,
+          toUsername: username,
+        });
+        return c.json({ site, renamed: true });
+      }
 
-      const site = await c.env.DB.prepare(
-        `SELECT id, user_id, username, site_type, template_id, custom_domain,
-                custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
-         FROM sites WHERE id = ?`,
-      )
-        .bind(id)
-        .first<DbSite>();
-
+      const site = await createPersistentSite(c.env, {
+        id: crypto.randomUUID(),
+        ownerId,
+        username,
+        role: siteRole,
+        templateId:
+          typeof body.templateId === "string" && body.templateId.trim()
+            ? body.templateId.trim()
+            : null,
+      });
       return c.json({ site }, 201);
     } catch (error) {
+      if (error instanceof SiteLifecycleError) {
+        return siteLifecycleErrorResponse(c, error);
+      }
       console.error("Create site error:", error);
-      return c.json({ error: "Username is already in use" }, 409);
+      return c.json({ error: "Failed to create site" }, 500);
     }
   });
 
@@ -1539,18 +1564,30 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
 
-    const result = await c.env.DB.prepare(
-      "DELETE FROM sites WHERE user_id = ? AND username = ?",
-    )
-      .bind(ownerId, c.req.param("username").toLowerCase())
-      .run();
-
-    if ((result.meta?.changes || 0) === 0) {
-      return c.json({ error: "Site not found" }, 404);
+    try {
+      const site = await deleteAdditionalSite(
+        c.env,
+        ownerId,
+        normalizeUsername(c.req.param("username")),
+      );
+      return c.json({
+        ok: true,
+        deletedSiteId: site.id,
+        releasedAdditionalSiteSlot: site.site_role === "organization",
+      });
+    } catch (error) {
+      if (error instanceof SiteLifecycleError) {
+        return siteLifecycleErrorResponse(c, error);
+      }
+      console.error("Delete site error:", error);
+      return c.json({ error: "Failed to delete site" }, 500);
     }
-
-    return c.json({ ok: true });
   });
+}
+
+function siteLifecycleErrorResponse(c: AppContext, error: SiteLifecycleError) {
+  const status = error.code === "site_not_found" ? 404 : 409;
+  return c.json({ error: error.message, code: error.code }, status);
 }
 
 function queueNetworkDirectoryProfileSync(c: AppContext, profile: unknown): void {

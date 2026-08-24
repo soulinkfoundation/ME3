@@ -1697,7 +1697,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
   async function listAssistantOwnerProfileSites(env: Env, ownerId: string): Promise<DbSite[]> {
     const rows = await env.DB.prepare(
-      `SELECT id, user_id, username, site_type, template_id, custom_domain,
+      `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
               custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
        FROM sites
        WHERE user_id = ? AND COALESCE(site_type, 'profile') = 'profile'

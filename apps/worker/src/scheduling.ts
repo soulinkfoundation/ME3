@@ -159,7 +159,7 @@ async function getSiteForOwner(env: Env, ownerId: string, rawUsername: string): 
   if (!username) return null;
   return (
     (await env.DB.prepare(
-      `SELECT id, user_id, username, site_type, template_id, custom_domain,
+      `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
               custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
        FROM sites
        WHERE user_id = ? AND username = ?`,
@@ -338,7 +338,7 @@ async function listPublicBookingSchedulingTimeTypes(
   ownerId: string,
 ): Promise<SchedulingTimeType[]> {
   const sites = await env.DB.prepare(
-    `SELECT id, user_id, username, site_type, template_id, custom_domain,
+    `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
             custom_domain_status, custom_domain_cf_id, created_at, updated_at,
             published_at
      FROM sites

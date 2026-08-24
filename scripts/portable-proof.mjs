@@ -418,8 +418,8 @@ export function seedProofInstallation(database, r2Directory) {
        VALUES ('calendar-event-1', 'calendar-source-1', 'event-1', 'Restore drill',
                '2026-07-16T09:00:00.000Z', '2026-07-16T10:00:00.000Z');
      INSERT INTO sites
-       (id, user_id, username, site_type, custom_domain, custom_domain_status, custom_domain_cf_id)
-       VALUES ('site-1', 'owner', 'portable-owner', 'profile', 'owner.example.test', 'active',
+       (id, user_id, username, site_type, site_role, custom_domain, custom_domain_status, custom_domain_cf_id)
+       VALUES ('site-1', 'owner', 'portable-owner', 'profile', 'profile', 'owner.example.test', 'active',
                'cloudflare-domain-id-must-reset');
      INSERT INTO site_files (site_id, path, content, content_type, size, sha256)
        VALUES ('site-1', 'me.json', X'7B7D', 'application/json', 2,

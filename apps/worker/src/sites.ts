@@ -7,7 +7,10 @@ import {
 import { getOrCreateInstallSessionSecret } from "./install-secrets";
 import type { AppContext } from "./http/types";
 import type { Me3SiteProfile } from "@me3-core/site-renderer";
-import { parseMe3Json, type Me3Profile } from "me3-protocol";
+import {
+  parseMe3Json,
+  type Me3CompatibleProfile,
+} from "me3-protocol";
 import { buildPublicMe3Profile } from "./public-me-profile";
 import type { DbSite, Env, OwnerProfile } from "./types";
 
@@ -564,7 +567,7 @@ export async function serveMeJsonResponse(env: Env, request: Request): Promise<R
   );
 }
 
-function publicMeJsonResponse(profile: Me3Profile): Response {
+function publicMeJsonResponse(profile: Me3CompatibleProfile): Response {
   return new Response(JSON.stringify(profile, null, 2), {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
@@ -583,7 +586,7 @@ export async function getPublicSiteForHost(env: Env, rawHost: string): Promise<D
 
   const host = normalizeHost(rawHost);
   const customDomainSite = await env.DB.prepare(
-    `SELECT id, user_id, username, site_type, template_id, custom_domain,
+    `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
             custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
      FROM sites
      WHERE lower(custom_domain) = ?
@@ -596,7 +599,7 @@ export async function getPublicSiteForHost(env: Env, rawHost: string): Promise<D
 
   return (
     (await env.DB.prepare(
-      `SELECT id, user_id, username, site_type, template_id, custom_domain,
+      `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
               custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
        FROM sites
        WHERE COALESCE(site_type, 'profile') = 'profile'
@@ -673,7 +676,7 @@ export async function getSiteForOwner(env: Env, ownerId: string, rawUsername: st
   if (!username) return null;
   return (
     (await env.DB.prepare(
-      `SELECT id, user_id, username, site_type, template_id, custom_domain,
+      `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
               custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
        FROM sites
        WHERE user_id = ? AND username = ?`,
@@ -688,7 +691,7 @@ export async function getSiteByUsername(env: Env, rawUsername: string): Promise<
   if (!username) return null;
   return (
     (await env.DB.prepare(
-      `SELECT id, user_id, username, site_type, template_id, custom_domain,
+      `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
               custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
        FROM sites
        WHERE username = ?`,

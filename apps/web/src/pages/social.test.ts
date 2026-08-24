@@ -165,7 +165,7 @@ describe("SocialPage", () => {
       localeSource: "explicit",
     };
     useSitesStore().sites = [{
-      id: "site-1", username: "kieran", user_id: "owner", custom_domain: null,
+      id: "site-1", username: "kieran", user_id: "owner", site_role: "profile", custom_domain: null,
       custom_domain_status: null, created_at: "2026-07-01T08:00:00Z",
       updated_at: "2026-07-18T08:00:00Z", published_at: "2026-07-01T08:00:00Z",
     }];

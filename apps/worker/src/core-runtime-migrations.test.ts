@@ -55,6 +55,7 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("drive_multipart_uploads")).toBe(true);
     expect(db.tables.has("drive_multipart_parts")).toBe(true);
     expect(db.tables.has("social_media_delivery_grants")).toBe(true);
+    expect(db.columns.get("sites")?.has("site_role")).toBe(true);
     expect(
       db.statements.some(
         (sql) =>
@@ -149,6 +150,9 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.get("0035_calendar_source_event_dismissals")).toBe(
       "2026-08-18-calendar-source-event-dismissals-v1",
     );
+    expect(db.migrations.get("0038_site_roles")).toBe(
+      "2026-08-24-site-roles-v1",
+    );
     expect(
       db.statements.some(
         (sql) =>
@@ -234,6 +238,7 @@ describe("Core runtime migrations", () => {
       hasFinancialEntryProjectId: true,
       hasSitePagesAndCommerce: true,
       hasJournalEntryRevision: true,
+      hasSiteRole: true,
     });
 
     await ensureCoreRuntimeMigrations({ DB: db as unknown as D1Database } as Env);
@@ -244,11 +249,15 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.has("0010_ai_usage_events")).toBe(true);
     expect(db.migrations.has("0011_financial_entry_projects")).toBe(true);
     expect(db.migrations.has("0028_journal_entry_revision")).toBe(true);
+    expect(db.migrations.has("0038_site_roles")).toBe(true);
     expect(
       db.statements.some(
         (sql) =>
           sql.includes("ALTER TABLE subscribers") || sql.includes("ALTER TABLE bookings"),
       ),
+    ).toBe(false);
+    expect(
+      db.statements.some((sql) => sql.includes("ALTER TABLE sites")),
     ).toBe(false);
   });
 
@@ -285,6 +294,7 @@ type RuntimeMigrationDbOptions = {
   hasFinancialEntryProjectId?: boolean;
   hasSitePagesAndCommerce?: boolean;
   hasJournalEntryRevision?: boolean;
+  hasSiteRole?: boolean;
   addFinancialProjectColumnBeforeAlterError?: boolean;
   failFinancialProjectAlterOnce?: boolean;
 };
@@ -330,6 +340,17 @@ class RuntimeMigrationDb {
     ["subscribers", new Set(["id", "site_id", "email"])],
     ["bookings", new Set(["id", "site_id", "guest_email"])],
     ["journal_entries", new Set(["id", "entry_date"])],
+    [
+      "sites",
+      new Set([
+        "id",
+        "user_id",
+        "username",
+        "site_type",
+        "template_id",
+        "created_at",
+      ]),
+    ],
     [
       "social_packages",
       new Set([
@@ -387,6 +408,9 @@ class RuntimeMigrationDb {
     }
     if (options.hasJournalEntryRevision) {
       this.columns.get("journal_entries")?.add("revision");
+    }
+    if (options.hasSiteRole) {
+      this.columns.get("sites")?.add("site_role");
     }
     this.addFinancialProjectColumnBeforeAlterError = Boolean(
       options.addFinancialProjectColumnBeforeAlterError,
@@ -527,6 +551,12 @@ class RuntimeMigrationStatement {
       const columns = this.db.columns.get("journal_entries");
       if (columns?.has("revision")) throw new Error("duplicate column name: revision");
       columns?.add("revision");
+      return { success: true };
+    }
+    if (this.sql.includes("ALTER TABLE sites")) {
+      const columns = this.db.columns.get("sites");
+      if (columns?.has("site_role")) throw new Error("duplicate column name: site_role");
+      columns?.add("site_role");
       return { success: true };
     }
     if (this.sql.includes("ALTER TABLE mailbox_messages")) {

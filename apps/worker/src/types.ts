@@ -127,11 +127,14 @@ export interface OwnerProfile {
   assistant_name?: string | null;
 }
 
+export type SiteRole = "profile" | "organization";
+
 export interface DbSite {
   id: string;
   user_id: string;
   username: string;
   site_type: "profile" | "landing_page";
+  site_role: SiteRole | null;
   template_id: string | null;
   custom_domain: string | null;
   custom_domain_status: "pending" | "active" | "failed" | null;

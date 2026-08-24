@@ -122,6 +122,7 @@ function normalizeStarterProfile(value: unknown, expectedHandle: string): Starte
   const links = profileLinks(profileSource.links);
   const profile: StarterProfile["profile"] = {
     version: text(profileSource.version, 20) || "0.1",
+    visibility: profileSource.visibility === "public" ? "public" : "private",
     handle,
     name,
     ...(text(profileSource.bio, 500) ? { bio: text(profileSource.bio, 500) } : {}),
@@ -202,10 +203,10 @@ async function fetchStarterProfile(
 async function getProfileSite(env: Env, ownerId: string): Promise<DbSite | null> {
   return (
     (await env.DB.prepare(
-      `SELECT id, user_id, username, site_type, template_id, custom_domain,
+      `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
               custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
        FROM sites
-       WHERE user_id = ? AND COALESCE(site_type, 'profile') = 'profile'
+       WHERE user_id = ? AND site_role = 'profile'
        ORDER BY created_at ASC, id ASC
        LIMIT 1`,
     )
@@ -286,6 +287,7 @@ export async function importManagedStarterProfile(
       user_id: "owner",
       username: handle,
       site_type: "profile",
+      site_role: "profile",
       template_id: null,
       custom_domain: null,
       custom_domain_status: null,
@@ -306,6 +308,7 @@ export async function importManagedStarterProfile(
     user_id: "owner",
     username: handle,
     site_type: "profile",
+    site_role: "profile",
     template_id: null,
     custom_domain: null,
     custom_domain_status: null,
@@ -325,8 +328,8 @@ export async function importManagedStarterProfile(
 
   try {
     await env.DB.prepare(
-      `INSERT INTO sites (id, user_id, username, site_type, template_id)
-       VALUES (?, ?, ?, 'profile', NULL)`,
+      `INSERT INTO sites (id, user_id, username, site_type, site_role, template_id)
+       VALUES (?, ?, ?, 'profile', 'profile', NULL)`,
     )
       .bind(site.id, site.user_id, site.username)
       .run();

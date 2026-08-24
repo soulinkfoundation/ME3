@@ -18,6 +18,7 @@ const site: DbSite = {
   user_id: "owner",
   username: "owner",
   site_type: "profile",
+  site_role: "profile",
   template_id: null,
   custom_domain: null,
   custom_domain_status: null,

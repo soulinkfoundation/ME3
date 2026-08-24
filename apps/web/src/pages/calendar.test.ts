@@ -57,6 +57,7 @@ describe("Calendar Social Publishing source", () => {
       id: "site-1",
       username: "kieran",
       user_id: "owner",
+      site_role: "profile",
       custom_domain: null,
       custom_domain_status: null,
       created_at: "2026-07-01T08:00:00.000Z",

@@ -61,6 +61,7 @@ export const RUNTIME_MIGRATIONS = [
   ["0035_calendar_source_event_dismissals", "2026-08-18-calendar-source-event-dismissals-v1"],
   ["0036_calendar_push_notifications", "2026-08-19-calendar-push-notifications-v1"],
   ["0037_event_booking_capacity", "2026-08-21-event-booking-capacity-v1"],
+  ["0038_site_roles", "2026-08-24-site-roles-v1"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];
