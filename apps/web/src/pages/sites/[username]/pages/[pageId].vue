@@ -9,7 +9,7 @@ import {
   type LandingPageV3Section,
 } from "@me3-core/plugin-landing-pages";
 import { useSitesStore, type SitePageRevision } from "../../../../stores/sites";
-import { resolvePublicProfileUrl } from "../../../../utils/publicSiteUrl";
+import { resolvePublicSiteUrl } from "../../../../utils/publicSiteUrl";
 import UiIcon from "../../../../components/UiIcon.vue";
 import { api } from "../../../../api";
 import { useAppToast } from "../../../../composables/useAppToast";
@@ -65,7 +65,7 @@ async function load() {
   draft.value = structuredClone(record.document);
   activeSectionId.value = draft.value.content.sections[0]?.id || "";
   const profileSite = sites.sites.find((site) => site.username === username.value);
-  const base = await resolvePublicProfileUrl(username.value, profileSite);
+  const base = await resolvePublicSiteUrl(username.value, profileSite);
   liveUrl.value = `${base.replace(/\/+$/, "")}/${record.slug}`;
   await Promise.all([loadResources(), refreshPreview(), loadRevisions()]);
   loading.value = false;

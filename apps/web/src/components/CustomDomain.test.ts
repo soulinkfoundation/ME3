@@ -47,6 +47,76 @@ describe("CustomDomain", () => {
     expect(wrapper.emitted("domainStatusChanged")).toBeUndefined();
   });
 
+  it("uses site language before a selected site is published", async () => {
+    const wrapper = mount(CustomDomain, {
+      props: {
+        username: "studio",
+        siteRole: "organization",
+        sitePublished: false,
+        fallbackUrl: "https://owner.me3.app/site/studio/",
+      },
+      global: {
+        stubs: {
+          RouterLink: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain(
+      "Publish this site before connecting a custom domain.",
+    );
+    expect(wrapper.text()).not.toContain("Publish your profile");
+    expect(
+      wrapper.get(".domain-actions .button.primary").attributes("disabled"),
+    ).toBeDefined();
+  });
+
+  it("shows the selected site's permanent fallback beside its custom domain", async () => {
+    sitesStore.getDomainStatus.mockResolvedValue({
+      connected: true,
+      domain: "studio.example.com",
+      status: "active",
+      url: "https://studio.example.com",
+    });
+    const wrapper = mount(CustomDomain, {
+      props: {
+        username: "studio",
+        siteRole: "organization",
+        sitePublished: true,
+        fallbackUrl: "https://owner.me3.app/site/studio/",
+      },
+      global: {
+        stubs: {
+          RouterLink: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("https://owner.me3.app/site/studio/");
+  });
+
+  it("explains a disabled embedded domain form", async () => {
+    const wrapper = mount(CustomDomain, {
+      props: {
+        embedded: true,
+        username: "studio",
+        siteRole: "organization",
+        sitePublished: false,
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain(
+      "Publish this site before connecting a custom domain.",
+    );
+    expect(wrapper.get('input[aria-label="Custom domain"]')).toBeTruthy();
+    expect(
+      wrapper.get('button[type="submit"]').attributes("disabled"),
+    ).toBeDefined();
+  });
+
   it("emits a change event after connecting a domain", async () => {
     sitesStore.connectDomain.mockResolvedValue({
       ok: true,

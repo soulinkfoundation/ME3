@@ -191,7 +191,7 @@ export function getSiteHost(env: Env, publicDomain?: string | null): string {
 }
 
 export function getPublicSiteOrigin(env: Env, site: Pick<DbSite, "custom_domain">): string {
-  const host = getSiteHost(env, site.custom_domain);
+  const host = normalizeHost(site.custom_domain) || getSiteHost(env);
   return host ? `https://${host}` : "";
 }
 
@@ -416,7 +416,7 @@ export function isLikelyRootPublicSiteHost(host: string): boolean {
 
 export function getCoreDomainState(
   env: Env,
-  site: Pick<DbSite, "username">,
+  _site: Pick<DbSite, "username">,
   domain: string | null,
 ): "pending" | "active" | "failed" {
   const normalizedDomain = normalizeHost(domain);
@@ -425,14 +425,11 @@ export function getCoreDomainState(
   if (!siteHost) return "pending";
   if (normalizedDomain !== siteHost) return "pending";
 
-  const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
-  if (configuredUsername && configuredUsername !== site.username) return "pending";
-
   return "active";
 }
 
 export function buildCoreDomainStatus(env: Env, site: DbSite) {
-  const domain = normalizeHost(site.custom_domain) || getSiteHost(env);
+  const domain = normalizeHost(site.custom_domain);
   const status = domain
     ? getCoreDomainState(env, site, domain)
     : undefined;
@@ -450,9 +447,9 @@ export function buildCoreDomainStatus(env: Env, site: DbSite) {
     instructions: domain
       ? getCoreDomainInstructions(env, domain, site.username)
       : [
-          "Publish your profile first so the custom domain has a live page to serve.",
-          "Enter the root domain visitors should use for this ME3 site.",
-          "Attach the public and me3 login hostnames to the Worker as Cloudflare custom domains.",
+          "Publish this site first so the custom domain has a live page to serve.",
+          "Enter the one canonical domain visitors should use for this site.",
+          "Domain aliases are not supported yet.",
         ],
   };
 }
@@ -460,7 +457,7 @@ export function buildCoreDomainStatus(env: Env, site: DbSite) {
 export function getCoreDomainRecords(env: Env, domain: string | null | undefined) {
   const normalizedDomain = normalizeHost(domain);
   if (!normalizedDomain) return [];
-  const adminHost = getAdminHost(env, undefined, normalizedDomain);
+  const adminHost = getAdminHost(env);
   if (!adminHost) return [];
   return [
     {
@@ -473,26 +470,20 @@ export function getCoreDomainRecords(env: Env, domain: string | null | undefined
 
 export function getCoreDomainInstructions(env: Env, domain: string, username: string): string[] {
   const siteHost = getSiteHost(env, domain);
-  const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
-  const adminHost = getAdminHost(env, undefined, domain);
+  const adminHost = getAdminHost(env);
   const instructions = [
     `In Cloudflare, attach ${domain} to this same me3 Worker as a custom domain.`,
     adminHost
-      ? `Attach ${adminHost} to the same Worker for ME3 login and account settings.`
-      : `Attach me3.${domain} to the same Worker for ME3 login and account settings.`,
+      ? `Keep ME3 login, private APIs, and account settings on ${adminHost}.`
+      : "Keep ME3 login, private APIs, and account settings on the existing installation host.",
   ];
-
-  if (configuredUsername && configuredUsername !== username) {
-    instructions.push(`Set ME3_SITE_USERNAME=${username}, or clear ME3_SITE_USERNAME so the first profile site is served.`);
-  } else if (!configuredUsername) {
-    instructions.push("Optional: set ME3_SITE_USERNAME if this Worker will host more than one site record.");
-  }
 
   if (normalizeHost(env.ME3_SITE_HOST) && siteHost !== domain) {
     instructions.unshift(`Current ME3_SITE_HOST is ${siteHost}, so this domain will stay pending until the variable matches.`);
   }
 
-  instructions.push("If you also use www, redirect it to this public domain in Cloudflare.");
+  instructions.push(`Requests for ${domain} resolve only the @${username} site.`);
+  instructions.push("Domain aliases are deferred; redirect any alternate hostname to this canonical domain.");
   return instructions;
 }
 
@@ -537,7 +528,8 @@ export async function serveDefaultPublicSitePath(
 }
 
 export async function serveMeJsonResponse(env: Env, request: Request): Promise<Response> {
-  const site = await getPublicSiteForHost(env, new URL(request.url).hostname);
+  const requestHost = new URL(request.url).hostname;
+  const site = await getPublicSiteForHost(env, requestHost);
   if (site) {
     const storedPublic = await getSiteFileText(env, site.id, "public/me.json");
     if (site.published_at && storedPublic) {
@@ -555,6 +547,17 @@ export async function serveMeJsonResponse(env: Env, request: Request): Promise<R
         ),
       );
     }
+  }
+
+  if (!isKnownFallbackSiteHost(env, requestHost)) {
+    return new Response(JSON.stringify({ error: "Site not configured" }), {
+      status: 404,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
   }
 
   const owner = await getOwnerProfile(env, "owner");
@@ -583,13 +586,8 @@ function publicMeJsonResponse(profile: Me3CompatibleProfile): Response {
 }
 
 export async function getPublicSiteForHost(env: Env, rawHost: string): Promise<DbSite | null> {
-  const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
-  if (configuredUsername) {
-    const site = await getSiteByUsername(env, configuredUsername);
-    if (site) return site;
-  }
-
   const host = normalizeHost(rawHost);
+  if (!host) return null;
   const customDomainSite = await env.DB.prepare(
     `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
             custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
@@ -602,17 +600,71 @@ export async function getPublicSiteForHost(env: Env, rawHost: string): Promise<D
     .first<DbSite>();
   if (customDomainSite) return customDomainSite;
 
+  if (!isKnownFallbackSiteHost(env, host)) return null;
+
+  const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
+  if (configuredUsername) {
+    const site = await getSiteByUsername(env, configuredUsername);
+    if (site) return site;
+  }
+
   return (
     (await env.DB.prepare(
       `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
               custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
        FROM sites
-       WHERE COALESCE(site_type, 'profile') = 'profile'
+       WHERE site_role = 'profile'
+          OR (site_role IS NULL AND COALESCE(site_type, 'profile') = 'profile')
        ORDER BY created_at ASC
        LIMIT 1`,
     )
       .first<DbSite>()) || null
   );
+}
+
+export function isKnownFallbackSiteHost(env: Env, rawHost: string): boolean {
+  const host = normalizeHost(rawHost);
+  if (!host) return false;
+
+  const configuredHosts = [
+    getSiteHost(env),
+    getInferredRootPublicSiteHost(env),
+    normalizeHost(env.ME3_ADMIN_HOST) || hostnameFromUrl(env.CORE_WEB_ORIGIN),
+    normalizeHost(env.ME3_API_HOST) || hostnameFromUrl(env.CORE_API_ORIGIN),
+  ].filter(Boolean);
+  if (configuredHosts.some((candidate) => hostsMatch(host, candidate))) {
+    return true;
+  }
+  if (isLoopbackHost(host)) return true;
+
+  // Preserve legacy single-site installs that only configured a username.
+  // Once any host is explicit, all other hosts fail closed.
+  return (
+    Boolean(normalizeUsername(env.ME3_SITE_USERNAME)) &&
+    (configuredHosts.length === 0 || configuredHosts.every(isLoopbackHost))
+  );
+}
+
+export async function servePublicSiteByUsername(
+  env: Env,
+  rawHost: string,
+  rawUsername: string,
+  rawPath: string,
+): Promise<Response> {
+  if (!isKnownFallbackSiteHost(env, rawHost)) {
+    return new Response(renderNotFoundPage("Site not found"), {
+      status: 404,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  }
+  const site = await getSiteByUsername(env, rawUsername);
+  if (!site) {
+    return new Response(renderNotFoundPage("Site not found"), {
+      status: 404,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  }
+  return serveSiteFileResponse(env, site, rawPath, true);
 }
 
 export async function serveSiteFileResponse(

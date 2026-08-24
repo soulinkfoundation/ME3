@@ -9,6 +9,7 @@ import { useWizardStore } from "../../stores/wizard";
 import NewsletterSubscribers from "../../components/NewsletterSubscribers.vue";
 import Button from "../../components/Button.vue";
 import ConfirmationDialog from "../../components/ConfirmationDialog.vue";
+import CustomDomain from "../../components/CustomDomain.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import JSZip from "jszip";
 import {
@@ -18,7 +19,10 @@ import {
   type VibeId,
   vibeIds,
 } from "../../styles/vibes";
-import { resolvePublicProfileUrl } from "../../utils/publicSiteUrl";
+import {
+  permanentPublicSiteUrl,
+  resolvePublicSiteUrl,
+} from "../../utils/publicSiteUrl";
 import { useAppToast } from "../../composables/useAppToast";
 import { createContentTurndownService } from "../../utils/contentMarkdown";
 
@@ -64,12 +68,33 @@ const showLandingPageControls = computed(
 );
 
 const siteUrl = ref("/me");
+const permanentSiteUrl = computed(() =>
+  permanentPublicSiteUrl(
+    username.value,
+    site.value?.site_role === "organization" ? "organization" : "profile",
+  ),
+);
+const managedDeployment = ref(false);
 const siteUrlLabel = computed(() =>
   siteUrl.value.replace(/^https?:\/\//, "").replace(/\/$/, ""),
 );
 
 async function syncSiteUrl() {
-  siteUrl.value = await resolvePublicProfileUrl(username.value, site.value);
+  siteUrl.value = await resolvePublicSiteUrl(username.value, site.value);
+}
+
+async function syncDeploymentMode() {
+  try {
+    const config = await api.get<{ deploymentMode?: string }>("/config");
+    managedDeployment.value = config.deploymentMode === "managed";
+  } catch {
+    managedDeployment.value = false;
+  }
+}
+
+async function handleDomainStatusChanged() {
+  await sites.fetchSites();
+  await syncSiteUrl();
 }
 
 // UI State
@@ -103,6 +128,7 @@ onMounted(async () => {
     await sites.fetchSites();
   }
   await syncSiteUrl();
+  await syncDeploymentMode();
 
   await syncLandingPagesFeature();
   if (landingPagesFeatureEnabled.value && isProfileSite.value) {
@@ -728,6 +754,35 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         <p v-if="publishError" class="error">{{ publishError }}</p>
       </section>
 
+      <section
+        v-if="isPersistentSite"
+        id="domain"
+        class="domain-section"
+        aria-labelledby="domain-section-title"
+      >
+        <div class="section-heading">
+          <div>
+            <h2 id="domain-section-title">Domain</h2>
+            <p>
+              Connect one canonical public domain to this site. Your ME3 login,
+              private API, and mailbox stay on the installation address.
+            </p>
+          </div>
+        </div>
+        <CustomDomain
+          embedded
+          :managed="managedDeployment"
+          :username="username"
+          :site-role="
+            site?.site_role === 'organization' ? 'organization' : 'profile'
+          "
+          :site-published="Boolean(site?.published_at)"
+          :fallback-url="permanentSiteUrl"
+          :show-settings-link="false"
+          @domain-status-changed="handleDomainStatusChanged"
+        />
+      </section>
+
       <!-- Newsletter Subscribers -->
       <section
         v-if="site?.published_at && isPersistentSite"
@@ -1181,6 +1236,34 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   --site-danger: var(--ui-danger, #dc2626);
 
   margin-top: 24px;
+}
+
+.domain-section {
+  margin-top: 24px;
+  padding: 20px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-lg, 12px);
+  background: var(--ui-surface, var(--color-bg));
+}
+
+.domain-section .section-heading {
+  margin-bottom: 16px;
+}
+
+.domain-section .section-heading h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.domain-section .section-heading p {
+  margin: 5px 0 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.domain-section :deep(.custom-domain-section) {
+  margin-bottom: 0;
 }
 
 .danger-section h2 {

@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   generateUnsubscribeToken,
+  getPublicSiteForHost,
   hashSubscriberIdentifier,
   isMissingSitePagesTableError,
   listBookingEnabledSiteIds,
   verifyUnsubscribeToken,
 } from "./sites";
-import type { Env } from "./types";
+import type { DbSite, Env } from "./types";
 
 describe("site unsubscribe tokens", () => {
   it("keys tokens to the install secret", async () => {
@@ -64,6 +65,47 @@ describe("site pages compatibility", () => {
   });
 });
 
+describe("public site host resolution", () => {
+  const profile = siteRecord("profile", "owner", "profile", null);
+  const studio = siteRecord(
+    "studio",
+    "studio",
+    "organization",
+    "studio.example.com",
+  );
+  const otherOwnerSite = {
+    ...siteRecord(
+      "other",
+      "other-site",
+      "organization",
+      "other.example.com",
+    ),
+    user_id: "other-owner",
+  };
+
+  it("resolves the exact custom host before the configured profile", async () => {
+    const env = createPublicRoutingEnv([profile, studio, otherOwnerSite]);
+
+    await expect(
+      getPublicSiteForHost(env, "STUDIO.EXAMPLE.COM"),
+    ).resolves.toMatchObject({ id: "studio", username: "studio" });
+    await expect(
+      getPublicSiteForHost(env, "other.example.com"),
+    ).resolves.toMatchObject({ id: "other", user_id: "other-owner" });
+  });
+
+  it("uses the profile only on the installation's known fallback host", async () => {
+    const env = createPublicRoutingEnv([profile, studio]);
+
+    await expect(
+      getPublicSiteForHost(env, "owner.me3.app"),
+    ).resolves.toMatchObject({ id: "profile" });
+    await expect(
+      getPublicSiteForHost(env, "unknown.example.com"),
+    ).resolves.toBeNull();
+  });
+});
+
 type BookingProfileFile = {
   site_id: string;
   path: "src/me.json" | "public/me.json";
@@ -95,6 +137,63 @@ function createBookingCapabilityEnv(files: BookingProfileFile[]): Env {
                 return { results: files as T[] };
               },
             };
+          },
+        };
+      },
+    },
+  } as unknown as Env;
+}
+
+function siteRecord(
+  id: string,
+  username: string,
+  siteRole: "profile" | "organization",
+  customDomain: string | null,
+): DbSite {
+  return {
+    id,
+    user_id: "owner",
+    username,
+    site_type: "profile",
+    site_role: siteRole,
+    template_id: "me3",
+    custom_domain: customDomain,
+    custom_domain_status: customDomain ? "active" : null,
+    custom_domain_cf_id: null,
+    created_at: "2026-08-24T09:00:00.000Z",
+    updated_at: "2026-08-24T09:00:00.000Z",
+    published_at: "2026-08-24T10:00:00.000Z",
+  };
+}
+
+function createPublicRoutingEnv(siteRecords: DbSite[]): Env {
+  return {
+    CORE_WEB_ORIGIN: "https://owner.me3.app",
+    ME3_SITE_USERNAME: "owner",
+    DB: {
+      prepare(sql: string) {
+        return {
+          bind(...values: unknown[]) {
+            return {
+              async first<T>() {
+                if (sql.includes("lower(custom_domain)")) {
+                  const host = String(values[0] || "").toLowerCase();
+                  return (siteRecords.find(
+                    (site) => site.custom_domain?.toLowerCase() === host,
+                  ) || null) as T | null;
+                }
+                if (sql.includes("WHERE username = ?")) {
+                  return (siteRecords.find(
+                    (site) => site.username === values[0],
+                  ) || null) as T | null;
+                }
+                return null;
+              },
+            };
+          },
+          async first<T>() {
+            return (siteRecords.find((site) => site.site_role === "profile") ||
+              null) as T | null;
           },
         };
       },

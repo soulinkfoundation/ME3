@@ -3,7 +3,6 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import CustomDomain from "../components/CustomDomain.vue";
 import Button from "../components/Button.vue";
 import PageLoading from "../components/PageLoading.vue";
 import PluginList from "../components/PluginList.vue";
@@ -401,7 +400,6 @@ const emailProviderInputs = ref<Record<EmailProviderId, EmailProviderInputs>>(
   createEmptyEmailProviderInputs(),
 );
 const emailProviderError = ref<string | null>(null);
-const customDomainGuideOpen = ref(false);
 const mailboxGuideOpen = ref(false);
 const appConnectionsLoading = ref(false);
 const appConnectionsSaving = ref(false);
@@ -474,24 +472,11 @@ const openSection = ref({
 });
 const showAiModelSection = true;
 
-const customDomainSiteUsername = computed(() => {
-  const accountUsername = auth.user?.username || "";
-  const accountSite = sites.sites.find(
-    (site) => site.username === accountUsername,
-  );
-  const profileSite = sites.sites.find(
-    (site) => (site.site_type || "profile") === "profile",
-  );
-  return (
-    accountSite?.username ||
-    profileSite?.username ||
-    sites.sites[0]?.username ||
-    ""
-  );
-});
-
-const customDomainSite = computed(() =>
-  sites.sites.find((site) => site.username === customDomainSiteUsername.value),
+const siteDomainSummaries = computed(() =>
+  sites.sites.filter(
+    (site) =>
+      site.site_role === "profile" || site.site_role === "organization",
+  ),
 );
 
 const saveDisabled = computed(
@@ -535,11 +520,7 @@ const emailDisplayName = computed(() => {
 
 const installationEmailDomain = computed(() => {
   if (mailboxCloudflareManaged.value) return "me3.app";
-  const configuredDomain = customDomainSite.value?.custom_domain || "";
-  return (
-    normalizeEmailDomain(configuredDomain) ||
-    inferEmailDomainFromHost(window.location.hostname)
-  );
+  return inferEmailDomainFromHost(window.location.hostname);
 });
 
 const managedMailboxAddress = computed(() => {
@@ -562,10 +543,6 @@ const mailboxRoutedAddress = computed(() => {
   }
   return "";
 });
-
-const customDomainSuggestedDomain = computed(
-  () => customDomainSite.value?.custom_domain || "",
-);
 
 const selectedEmailProviderIsManaged = computed(
   () => selectedEmailProviderId.value === "managed_gateway",
@@ -2552,7 +2529,7 @@ onBeforeUnmount(() => {
             @click="openSection.mailbox = !openSection.mailbox"
           >
             <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Domain &amp; mailbox settings</h2>
+              <h2>Mailbox &amp; email domain</h2>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
@@ -2574,46 +2551,24 @@ onBeforeUnmount(() => {
                 <section class="domain-email-section">
                   <div class="setup-disclosure-intro">
                     <div>
-                      <h3>Custom website domain</h3>
-                      <p v-if="mailboxCloudflareManaged">
-                        Connect a public <strong>www</strong> address. Your
-                        permanent ME3 address, login, API, and mailbox stay
-                        unchanged.
-                      </p>
-                      <p v-else>
-                        Follow the steps in the
-                        <button
-                          class="setup-guide-link"
-                          type="button"
-                          @click="customDomainGuideOpen = true"
-                        >
-                          setup guide</button
-                        >.
+                      <h3>Sites and website domains</h3>
+                      <p>
+                        Public website domains are managed from each selected
+                        site. They do not change this installation's login,
+                        private API, or mailbox domain.
                       </p>
                     </div>
                   </div>
 
-                  <PageLoading
-                    v-if="sites.loading"
-                    compact
-                    label="Loading site domain settings..."
-                  />
-                  <template v-else-if="customDomainSite">
-                    <CustomDomain
-                      embedded
-                      :managed="mailboxCloudflareManaged"
-                      :username="customDomainSite.username"
-                      :show-settings-link="false"
-                      :profile-published="
-                        Boolean(customDomainSite.published_at)
-                      "
-                      :initial-domain="customDomainSuggestedDomain"
-                      @domain-status-changed="() => void sites.fetchSites()"
-                    />
-                  </template>
-                  <p v-else class="error">
-                    Create a ME3 site before connecting a custom domain.
-                  </p>
+                  <ul v-if="siteDomainSummaries.length" class="site-domain-summary">
+                    <li v-for="site in siteDomainSummaries" :key="site.id">
+                      <span>@{{ site.username }}</span>
+                      <span>{{ site.custom_domain || "Default ME3 address" }}</span>
+                    </li>
+                  </ul>
+                  <Button color="outline" shape="soft" size="compact" to="/sites">
+                    Manage site domains
+                  </Button>
                 </section>
 
                 <section class="mailbox-setup">
@@ -4372,96 +4327,6 @@ onBeforeUnmount(() => {
 
     <Teleport to="body">
       <div
-        v-if="customDomainGuideOpen"
-        class="modal-overlay"
-        @click.self="customDomainGuideOpen = false"
-      >
-        <section
-          class="modal domain-email-guide-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="custom-domain-guide-title"
-          tabindex="-1"
-          @keydown.escape="customDomainGuideOpen = false"
-        >
-          <header class="modal-header">
-            <h2 id="custom-domain-guide-title">Configure Custom Domain</h2>
-            <button
-              class="modal-close"
-              type="button"
-              aria-label="Close custom domain setup guide"
-              @click="customDomainGuideOpen = false"
-            >
-              ×
-            </button>
-          </header>
-
-          <ol class="domain-email-guide-list">
-            <li>
-              <strong>Configure domain on Cloudflare.</strong>
-              <span>
-                To buy or transfer a domain you own,
-                <a
-                  href="https://dash.cloudflare.com/?to=/:account/domains/overview"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  >click here</a
-                >.
-              </span>
-            </li>
-            <li>
-              <strong>Point your domain to your ME3 worker.</strong>
-              <ol>
-                <li>
-                  <a
-                    href="https://dash.cloudflare.com/?to=/:account/workers-and-pages"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    >Click here</a
-                  >.
-                </li>
-                <li>
-                  Click on your ME3 installation, for example
-                  <code>kierans-me3</code>.
-                </li>
-                <li>
-                  Click the <strong>Domains</strong> tab, then
-                  <strong>+ Add Domain</strong> to add the domain you just
-                  added.
-                </li>
-                <li>
-                  Do this again and for field
-                  <strong>Subdomain (optional)</strong> use
-                  <code>me3.yourdomain.com</code>.
-                </li>
-              </ol>
-            </li>
-            <li>
-              <strong>Save your domain in ME3.</strong>
-              <span>
-                In ME3 Account, save your domain in the
-                <strong>Custom domain</strong> section.
-              </span>
-            </li>
-            <li>
-              <strong>Visit your custom ME3 host.</strong>
-              <span>
-                Wait a few minutes, then visit
-                <a
-                  href="https://me3.yourdomain.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  >https://me3.yourdomain.com</a
-                >. You will need to log in again.
-              </span>
-            </li>
-          </ol>
-        </section>
-      </div>
-    </Teleport>
-
-    <Teleport to="body">
-      <div
         v-if="mailboxGuideOpen"
         class="modal-overlay"
         @click.self="mailboxGuideOpen = false"
@@ -5443,6 +5308,34 @@ h1 {
 .domain-email-section {
   display: grid;
   gap: 12px;
+}
+
+.site-domain-summary {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-domain-summary li {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text, var(--color-text));
+  font-size: 13px;
+}
+
+.site-domain-summary li span:last-child {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .setup-guide-link {

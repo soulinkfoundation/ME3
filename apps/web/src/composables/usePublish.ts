@@ -5,7 +5,7 @@ import { useSitesStore, type PublishManifest } from "../stores/sites";
 import { useAuthStore } from "../stores/auth";
 import { api } from "../api";
 import { createContentTurndownService } from "../utils/contentMarkdown";
-import { resolvePublicProfileUrl } from "../utils/publicSiteUrl";
+import { resolvePublicSiteUrl } from "../utils/publicSiteUrl";
 
 type ExportedContentImage = {
   contentSlug: string;
@@ -547,7 +547,6 @@ export function usePublish() {
 
       const isPublicProfile =
         wizard.siteRole !== "profile" || wizard.profile.visibility === "public";
-      const siteUrl = await resolvePublicProfileUrl(username);
 
       // Trigger celebration animation if enabled
       if (celebrate) {
@@ -556,6 +555,9 @@ export function usePublish() {
 
       // Open the published site in a new tab if enabled
       if (openSite && isPublicProfile) {
+        const siteUrl = await resolvePublicSiteUrl(username, {
+          site_role: wizard.siteRole,
+        });
         setTimeout(() => {
           window.open(siteUrl, "_blank");
         }, 900);

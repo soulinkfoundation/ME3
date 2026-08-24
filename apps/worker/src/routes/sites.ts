@@ -101,6 +101,7 @@ import {
   savePublishManifest,
   serveDefaultPublicSitePath,
   serveMeJsonResponse,
+  servePublicSiteByUsername,
   serveSiteFileResponse,
   sha256Buffer,
   sha256Text,
@@ -822,7 +823,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     if (isManagedSiteDomainDeployment(c.env)) {
       try {
-        const status = await getManagedSiteDomainStatus(c.env);
+        const status = await getManagedSiteDomainStatus(c.env, site);
         await syncManagedDomainSite(c.env, site, status);
         return c.json(status);
       } catch (error) {
@@ -849,7 +850,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       return c.json(
         {
           error:
-            "Publish your profile before connecting a custom domain. This prevents an empty domain from going live.",
+            "Publish this site before connecting a custom domain. This prevents an empty domain from going live.",
         },
         409,
       );
@@ -861,9 +862,20 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       return c.json({ error: "Use a domain you control, for example kieranbutler.com." }, 400);
     }
 
+    const domainOwner = await c.env.DB.prepare(
+      `SELECT id FROM sites
+       WHERE lower(custom_domain) = ? AND id <> ?
+       LIMIT 1`,
+    )
+      .bind(domain, site.id)
+      .first<{ id: string }>();
+    if (domainOwner) {
+      return c.json({ error: "This domain is already connected to another site." }, 409);
+    }
+
     if (isManagedSiteDomainDeployment(c.env)) {
       try {
-        const status = await connectManagedSiteDomain(c.env, domain);
+        const status = await connectManagedSiteDomain(c.env, site, domain);
         await syncManagedDomainSite(c.env, site, status);
         return c.json(status);
       } catch (error) {
@@ -906,7 +918,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     if (isManagedSiteDomainDeployment(c.env)) {
       try {
-        const status = await getManagedSiteDomainStatus(c.env);
+        const status = await getManagedSiteDomainStatus(c.env, site);
         await syncManagedDomainSite(c.env, site, status);
         return c.json(status);
       } catch (error) {
@@ -941,7 +953,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     if (isManagedSiteDomainDeployment(c.env)) {
       try {
-        await disconnectManagedSiteDomain(c.env);
+        await disconnectManagedSiteDomain(c.env, site);
       } catch (error) {
         if (error instanceof ManagedSiteDomainError) {
           return c.json(
@@ -1665,6 +1677,24 @@ export function registerPublicSiteRoutes(app: AppHono) {
   app.get("/me/*", async (c) => {
     const requestedPath = c.req.path.replace(/^\/me\/?/, "") || "index.html";
     return serveDefaultPublicSitePath(c.env, c.req.raw, requestedPath);
+  });
+
+  app.get("/site/:username", async (c) => {
+    const canonicalUrl = new URL(c.req.url);
+    canonicalUrl.pathname = `${canonicalUrl.pathname}/`;
+    return c.redirect(canonicalUrl.toString(), 308);
+  });
+
+  app.get("/site/:username/*", async (c) => {
+    const username = normalizeUsername(c.req.param("username"));
+    const prefix = `/site/${username}/`;
+    const requestedPath = c.req.path.replace(prefix, "") || "index.html";
+    return servePublicSiteByUsername(
+      c.env,
+      new URL(c.req.url).hostname,
+      username,
+      requestedPath,
+    );
   });
 
   app.get("/me.json", async (c) => {

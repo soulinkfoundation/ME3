@@ -1,5 +1,5 @@
 import { buildApiUrl, getMe3CloudApiOrigin, normalizeDomain } from "./sites";
-import type { Env } from "./types";
+import type { DbSite, Env } from "./types";
 
 const CORE_INSTALL_ID_SECRET = "ME3_CORE_INSTALL_ID";
 const CORE_UPDATE_TOKEN_SECRET = "ME3_CLOUD_CORE_TOKEN";
@@ -25,6 +25,8 @@ export type ManagedSiteDomainStatus = {
   instructions?: string[];
 };
 
+type ManagedDomainSite = Pick<DbSite, "id" | "username" | "site_role">;
+
 export class ManagedSiteDomainError extends Error {
   readonly status: number;
 
@@ -44,15 +46,17 @@ export function isManagedSiteDomainDeployment(env: Env): boolean {
 
 export async function getManagedSiteDomainStatus(
   env: Env,
+  site: ManagedDomainSite,
 ): Promise<ManagedSiteDomainStatus> {
-  return requestManagedSiteDomain(env, "GET");
+  return requestManagedSiteDomain(env, site, "GET");
 }
 
 export async function connectManagedSiteDomain(
   env: Env,
+  site: ManagedDomainSite,
   domain: string,
 ): Promise<ManagedSiteDomainStatus & { ok: true }> {
-  const status = await requestManagedSiteDomain(env, "POST", {
+  const status = await requestManagedSiteDomain(env, site, "POST", {
     domain: normalizeDomain(domain),
   });
   return { ok: true, ...status };
@@ -60,13 +64,15 @@ export async function connectManagedSiteDomain(
 
 export async function disconnectManagedSiteDomain(
   env: Env,
+  site: ManagedDomainSite,
 ): Promise<{ ok: true }> {
-  await requestManagedSiteDomain(env, "DELETE");
+  await requestManagedSiteDomain(env, site, "DELETE");
   return { ok: true };
 }
 
 async function requestManagedSiteDomain(
   env: Env,
+  site: ManagedDomainSite,
   method: "GET" | "POST" | "DELETE",
   body?: Record<string, unknown>,
 ): Promise<ManagedSiteDomainStatus> {
@@ -85,22 +91,38 @@ async function requestManagedSiteDomain(
     );
   }
 
-  const response = await fetch(
-    buildApiUrl(
-      getMe3CloudApiOrigin(env),
-      `/v1/installs/${encodeURIComponent(coreInstallId)}/domain`,
-    ),
-    {
+  const requestInit: RequestInit = {
       method,
       headers: {
         "X-ME3-Core-Install-ID": coreInstallId,
         "X-ME3-Core-Update-Token": coreUpdateToken,
+        "X-ME3-Core-Site-ID": site.id,
+        "X-ME3-Core-Site-Username": site.username,
         ...(body ? { "Content-Type": "application/json" } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
-    },
+    };
+  let response = await fetch(
+    buildApiUrl(
+      getMe3CloudApiOrigin(env),
+      `/v1/installs/${encodeURIComponent(coreInstallId)}/sites/${encodeURIComponent(site.id)}/domain`,
+    ),
+    requestInit,
   );
-  const result = await readJson(response);
+  let result = await readJson(response);
+  if (
+    (response.status === 404 || response.status === 405) &&
+    site.site_role === "profile"
+  ) {
+    response = await fetch(
+      buildApiUrl(
+        getMe3CloudApiOrigin(env),
+        `/v1/installs/${encodeURIComponent(coreInstallId)}/domain`,
+      ),
+      requestInit,
+    );
+    result = await readJson(response);
+  }
   if (!response.ok) {
     throw new ManagedSiteDomainError(
       normalizeMessage(result.error) ||

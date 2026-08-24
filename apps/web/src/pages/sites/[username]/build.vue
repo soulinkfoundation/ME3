@@ -18,7 +18,7 @@ import {
   getLandingPageSectionImage,
   getLandingPageTemplateId,
 } from "@me3-core/plugin-landing-pages";
-import { resolvePublicProfileUrl } from "../../../utils/publicSiteUrl";
+import { resolvePublicSiteUrl } from "../../../utils/publicSiteUrl";
 
 definePage({
   meta: {
@@ -249,7 +249,7 @@ async function uploadAndRegenerate(
 
 onMounted(async () => {
   await loadBuilder();
-  liveUrl.value = await resolvePublicProfileUrl(username.value, site.value);
+  liveUrl.value = await resolvePublicSiteUrl(username.value, site.value);
   if (site.value && !isLandingPage.value) {
     router.replace(`/sites/${username.value}`);
     return;

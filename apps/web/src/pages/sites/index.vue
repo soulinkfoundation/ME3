@@ -13,7 +13,7 @@ import BrandLogo from "../../components/BrandLogo.vue";
 import Button from "../../components/Button.vue";
 import ConfirmationDialog from "../../components/ConfirmationDialog.vue";
 import UiIcon from "../../components/UiIcon.vue";
-import { resolvePublicProfileUrl } from "../../utils/publicSiteUrl";
+import { resolvePublicSiteUrl } from "../../utils/publicSiteUrl";
 
 definePage({
   meta: {
@@ -138,7 +138,7 @@ async function syncProfilePublicUrl(): Promise<void> {
     profilePublicUrl.value = "";
     return;
   }
-  profilePublicUrl.value = await resolvePublicProfileUrl(
+  profilePublicUrl.value = await resolvePublicSiteUrl(
     profileSite.value.username,
     profileSite.value,
   );
@@ -375,7 +375,7 @@ onBeforeUnmount(() => {
                   color="ghost"
                   shape="soft"
                   size="small"
-                  :to="{ path: '/account', query: { section: 'custom-domain' } }"
+                  :to="`${siteRoute(ownedSite)}#domain`"
                 >
                   Domain
                 </Button>

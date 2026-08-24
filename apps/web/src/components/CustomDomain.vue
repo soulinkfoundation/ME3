@@ -1,9 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
 import { useSitesStore, type DomainStatus } from "../stores/sites";
+import ConfirmationDialog from "./ConfirmationDialog.vue";
+import { permanentPublicSiteUrl } from "../utils/publicSiteUrl";
+
 const props = defineProps<{
   username: string;
   showSettingsLink?: boolean;
+  sitePublished?: boolean;
+  siteRole?: "profile" | "organization";
+  fallbackUrl?: string;
+  /** @deprecated Use sitePublished. */
   profilePublished?: boolean;
   initialDomain?: string;
   embedded?: boolean;
@@ -29,11 +36,14 @@ const isConnected = computed(
   () => domainStatus.value?.connected && domainStatus.value?.domain,
 );
 const isDomainActive = computed(() => domainStatus.value?.status === "active");
-const isProfilePublished = computed(() => props.profilePublished === true);
-const workerFallbackUrl = computed(() => {
-  if (typeof window === "undefined") return "/me";
-  return `${window.location.origin.replace(/\/+$/, "")}/me`;
-});
+const isSitePublished = computed(
+  () => props.sitePublished === true || props.profilePublished === true,
+);
+const workerFallbackUrl = computed(
+  () =>
+    props.fallbackUrl ||
+    permanentPublicSiteUrl(props.username, props.siteRole || "profile"),
+);
 onMounted(async () => {
   await loadDomainStatus();
   applyInitialDomain();
@@ -68,8 +78,8 @@ async function connectDomain() {
   const domainToConnect = domainInputForConnect.value;
   if (!domainToConnect) return;
 
-  if (!isProfilePublished.value) {
-    domainError.value = "Publish your profile before connecting a custom domain.";
+  if (!isSitePublished.value) {
+    domainError.value = "Publish this site before connecting a custom domain.";
     return;
   }
 
@@ -353,12 +363,8 @@ watch(
           </div>
 
           <div v-if="props.showSettingsLink !== false" class="support-link">
-            <router-link
-              to="/account"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Settings
+            <router-link :to="`/sites/${encodeURIComponent(username)}`">
+              Site settings
             </router-link>
           </div>
 
@@ -385,26 +391,32 @@ watch(
       <div v-else class="no-domain">
         <!-- Connect existing domain -->
         <div v-if="!showDomainInput && !embedded" class="domain-actions">
-          <p v-if="!isProfilePublished" class="domain-requirement">
-            Publish your profile before connecting a custom domain.
+          <p v-if="!isSitePublished" class="domain-requirement">
+            Publish this site before connecting a custom domain.
           </p>
           <button
             class="button primary"
-            :disabled="!isProfilePublished"
+            :disabled="!isSitePublished"
             @click="showDomainInput = true"
           >
             {{ managed ? "Connect domain" : "Connect root domain" }}
           </button>
           <router-link
-            v-if="!isProfilePublished"
+            v-if="!isSitePublished"
             class="button secondary"
-            to="/create"
+            :to="{
+              path: '/create',
+              query: { site: username, step: 'publish', return: `/sites/${username}` },
+            }"
           >
-            Publish profile
+            Publish site
           </router-link>
         </div>
 
         <!-- Domain input -->
+        <p v-if="embedded && !isSitePublished" class="domain-requirement">
+          Publish this site before connecting a custom domain.
+        </p>
         <form
           v-if="showDomainInput"
           class="domain-input-wrapper"
@@ -415,6 +427,7 @@ watch(
             <input
               v-model="newDomain"
               type="text"
+              aria-label="Custom domain"
               placeholder="yourdomain.com"
               class="domain-input"
             />
@@ -423,7 +436,7 @@ watch(
               type="submit"
               :disabled="
                 domainLoading ||
-                !isProfilePublished ||
+                !isSitePublished ||
                 !normalizedDomainInput ||
                 !isValidDomain
               "
@@ -447,7 +460,7 @@ watch(
           </div>
           <div class="domain-options">
             <span v-if="domainPreview" class="domain-preview">
-              Public profile: <strong>{{ domainPreview }}</strong>
+              Public site: <strong>{{ domainPreview }}</strong>
               <template v-if="adminHost">
                 · ME3 login: <strong>{{ adminHost }}</strong>
               </template>
@@ -470,67 +483,22 @@ watch(
       </div>
     </div>
 
-    <!-- Disconnect confirmation modal -->
-    <div
-      v-if="showDisconnectConfirm"
-      class="modal-overlay"
-      @click.self="showDisconnectConfirm = false"
-    >
-      <div class="modal">
-        <h3>Disconnect domain?</h3>
-        <p>
-          Are you sure you want to disconnect
-          <strong>{{ domainStatus?.domain }}</strong
-          >? Your site will still be accessible at
-          <strong>/me</strong> on this Worker.
-        </p>
-        <div class="modal-actions">
-          <button
-            class="button secondary"
-            @click="showDisconnectConfirm = false"
-          >
-            Cancel
-          </button>
-          <button
-            class="button danger"
-            :disabled="domainLoading"
-            @click="disconnectDomain"
-          >
-            {{ domainLoading ? "Disconnecting..." : "Disconnect" }}
-          </button>
-        </div>
-      </div>
-    </div>
+    <ConfirmationDialog
+      :open="showDisconnectConfirm"
+      title="Disconnect domain?"
+      :message="`Disconnect ${domainStatus?.domain || 'this domain'}? Your site will remain available at ${workerFallbackUrl}.`"
+      confirm-label="Disconnect"
+      :busy="domainLoading"
+      danger
+      @cancel="showDisconnectConfirm = false"
+      @confirm="disconnectDomain"
+    />
   </section>
 </template>
 
 <style scoped>
 .custom-domain-section {
   margin-bottom: 24px;
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.section-header h2 {
-  font-size: 20px;
-  margin: 0;
-}
-
-.upgrade-prompt {
-  padding: 24px;
-  background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
-  border-radius: 12px;
-  text-align: center;
-}
-
-.upgrade-prompt p {
-  margin-bottom: 16px;
-  color: var(--color-text-muted);
 }
 
 .link-btn {
@@ -989,75 +957,12 @@ watch(
   font-size: 13px;
 }
 
-/* Modal */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  z-index: 100;
-}
-
-.modal {
-  background: var(--color-bg);
-  border-radius: 16px;
-  padding: 32px;
-  width: 100%;
-  max-width: 400px;
-}
-
-.modal h3 {
-  font-size: 20px;
-  margin-bottom: 12px;
-}
-
-.modal p {
-  color: var(--color-text-muted);
-  margin-bottom: 24px;
-}
-
-.modal strong {
-  color: var(--color-text);
-}
-
-.modal-actions {
-  display: flex;
-  gap: 12px;
-}
-
-.modal-actions .button {
-  flex: 1;
-}
-
-.modal-list {
-  margin: 0 0 16px 18px;
-  padding: 0;
-  color: var(--color-text-muted);
-}
-
-.modal-list li {
-  margin-bottom: 8px;
-}
-
-.modal-note {
-  font-size: 13px;
-  color: var(--color-text-muted);
-  margin-bottom: 20px;
-}
-
 .button.disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 @media (prefers-color-scheme: dark) {
-  .upgrade-prompt {
-    background: linear-gradient(135deg, #1a1625 0%, #2d1f47 100%);
-  }
-
   .status-badge.active {
     background: #1b5e20;
     color: #a5d6a7;

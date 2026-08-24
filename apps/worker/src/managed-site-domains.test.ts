@@ -37,6 +37,7 @@ describe("managed site domains", () => {
       createEnv({
         ME3_CLOUD_API_ORIGIN: "https://api.me3.example/",
       }),
+      managedSite("studio", "organization"),
       "WWW.Example.com",
     );
 
@@ -47,12 +48,14 @@ describe("managed site domains", () => {
       status: "pending",
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      `https://api.me3.example/v1/installs/${CORE_INSTALL_ID}/domain`,
+      `https://api.me3.example/v1/installs/${CORE_INSTALL_ID}/sites/site-studio/domain`,
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
           "X-ME3-Core-Install-ID": CORE_INSTALL_ID,
           "X-ME3-Core-Update-Token": "core-update-token",
+          "X-ME3-Core-Site-ID": "site-studio",
+          "X-ME3-Core-Site-Username": "studio",
         }),
         body: JSON.stringify({ domain: "www.example.com" }),
       }),
@@ -72,23 +75,59 @@ describe("managed site domains", () => {
       )
       .mockResolvedValueOnce(Response.json({ ok: true, connected: false }));
     const env = createEnv();
+    const site = managedSite("owner", "profile");
 
-    await expect(getManagedSiteDomainStatus(env)).resolves.toMatchObject({
+    await expect(getManagedSiteDomainStatus(env, site)).resolves.toMatchObject({
       connected: true,
       url: "https://www.example.com",
     });
-    await expect(disconnectManagedSiteDomain(env)).resolves.toEqual({
+    await expect(disconnectManagedSiteDomain(env, site)).resolves.toEqual({
       ok: true,
     });
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
   });
 
+  it("uses the legacy installation endpoint only for a profile during rollout", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ error: "Not found" }, { status: 404 }))
+      .mockResolvedValueOnce(Response.json({ connected: false }));
+
+    await expect(
+      getManagedSiteDomainStatus(
+        createEnv(),
+        managedSite("owner", "profile"),
+      ),
+    ).resolves.toMatchObject({ connected: false });
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      `https://api.me3.app/v1/installs/${CORE_INSTALL_ID}/sites/site-owner/domain`,
+      `https://api.me3.app/v1/installs/${CORE_INSTALL_ID}/domain`,
+    ]);
+  });
+
+  it("fails closed instead of mapping an additional site to the legacy endpoint", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ error: "Not found" }, { status: 404 }));
+
+    await expect(
+      getManagedSiteDomainStatus(
+        createEnv(),
+        managedSite("studio", "organization"),
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("fails closed when the managed install credentials are missing", async () => {
     const env = createEnv();
     env.DB = secretDb(new Map());
 
-    await expect(getManagedSiteDomainStatus(env)).rejects.toMatchObject({
+    await expect(
+      getManagedSiteDomainStatus(env, managedSite("owner", "profile")),
+    ).rejects.toMatchObject({
       name: "ManagedSiteDomainError",
       status: 503,
     });
@@ -103,7 +142,11 @@ describe("managed site domains", () => {
     );
 
     await expect(
-      connectManagedSiteDomain(createEnv(), "example.com"),
+      connectManagedSiteDomain(
+        createEnv(),
+        managedSite("studio", "organization"),
+        "example.com",
+      ),
     ).rejects.toEqual(
       expect.objectContaining<Partial<ManagedSiteDomainError>>({
         message: "Only www subdomains are supported.",
@@ -135,6 +178,17 @@ function createEnv(overrides: Partial<Env> = {}): Env {
     ME3_MANAGED_INSTALLATION_ID: "mi-1234567890abcdef",
     ...overrides,
   } as Env;
+}
+
+function managedSite(
+  username: string,
+  siteRole: "profile" | "organization",
+) {
+  return {
+    id: `site-${username}`,
+    username,
+    site_role: siteRole,
+  } as const;
 }
 
 function secretDb(values: Map<string, string>): D1Database {

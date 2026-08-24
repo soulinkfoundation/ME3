@@ -136,6 +136,7 @@ export interface DbSite {
   site_type: "profile" | "landing_page";
   site_role: SiteRole | null;
   template_id: string | null;
+  /** One canonical public hostname for this site. Domain aliases are intentionally deferred. */
   custom_domain: string | null;
   custom_domain_status: "pending" | "active" | "failed" | null;
   custom_domain_cf_id: string | null;

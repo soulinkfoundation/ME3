@@ -521,6 +521,11 @@ function createEnv(): Env & {
                 }
               : null) as T | null;
           }
+          if (sql.includes("FROM sites") && sql.includes("site_role = 'profile'")) {
+            return (
+              state.sites.find((site) => site.site_role === "profile") || null
+            ) as T | null;
+          }
           return null;
         },
         async all<T>() {
@@ -2589,6 +2594,16 @@ function createEnv(): Env & {
                 ) as T | null;
               }
               if (sql.includes("FROM sites")) {
+                if (sql.includes("lower(custom_domain)")) {
+                  const domain = String(values[0] || "").toLowerCase();
+                  return (
+                    state.sites.find(
+                      (site) =>
+                        site.custom_domain?.toLowerCase() === domain &&
+                        (!sql.includes("id <> ?") || site.id !== values[1]),
+                    ) || null
+                  ) as T | null;
+                }
                 if (values.length === 1) {
                   return (
                     state.sites.find((site) =>
@@ -3828,10 +3843,97 @@ describe("ME3 Worker auth", () => {
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
     expect(response.headers.get("Access-Control-Allow-Credentials")).toBeNull();
-    expect(body.version).toBe("0.2");
+    expect(body.version).toBe("0.3");
     expect(body.kind).toBe("person");
     expect(body.name).toBe("Booking Owner");
     expect(body.handle).toBe("owner");
+  });
+
+  it("serves each published site from its stable fallback path", async () => {
+    const env = createEnv();
+    env.CORE_WEB_ORIGIN = "https://owner.me3.app";
+    env.sites.push({
+      id: "site-studio",
+      user_id: "owner",
+      username: "studio",
+      site_type: "profile",
+      site_role: "organization",
+      template_id: "me3",
+      custom_domain: null,
+      custom_domain_status: null,
+      custom_domain_cf_id: null,
+      created_at: "2026-08-24T09:00:00Z",
+      updated_at: "2026-08-24T09:00:00Z",
+      published_at: "2026-08-24T10:00:00Z",
+    });
+    addSiteFileText(
+      env,
+      "site-studio",
+      "public/index.html",
+      "<!doctype html><h1>Studio site</h1>",
+      "text/html; charset=utf-8",
+    );
+
+    const response = await app.fetch(
+      new Request("https://owner.me3.app/site/studio/"),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Studio site");
+  });
+
+  it("routes exact custom hosts and rejects discovery on unknown hosts", async () => {
+    const env = createEnv();
+    env.CORE_WEB_ORIGIN = "https://owner.me3.app";
+    env.sites.push({
+      id: "site-studio",
+      user_id: "owner",
+      username: "studio",
+      site_type: "profile",
+      site_role: "organization",
+      template_id: "me3",
+      custom_domain: "studio.example.com",
+      custom_domain_status: "active",
+      custom_domain_cf_id: null,
+      created_at: "2026-08-24T09:00:00Z",
+      updated_at: "2026-08-24T09:00:00Z",
+      published_at: "2026-08-24T10:00:00Z",
+    });
+    addSiteFileText(
+      env,
+      "site-studio",
+      "public/index.html",
+      "<!doctype html><h1>Exact studio</h1>",
+      "text/html; charset=utf-8",
+    );
+
+    const exact = await app.fetch(
+      new Request("https://studio.example.com/"),
+      env,
+    );
+    const unknown = await app.fetch(
+      new Request("https://unknown.example.com/me.json"),
+      env,
+    );
+    const unknownFallbackPath = await app.fetch(
+      new Request("https://unknown.example.com/site/studio/"),
+      env,
+    );
+    const privateAuth = await app.fetch(
+      new Request("https://studio.example.com/api/auth/session"),
+      env,
+    );
+
+    expect(exact.status).toBe(200);
+    expect(await exact.text()).toContain("Exact studio");
+    expect(unknown.status).toBe(404);
+    await expect(unknown.json()).resolves.toEqual({
+      error: "Site not configured",
+    });
+    expect(unknownFallbackPath.status).toBe(404);
+    expect(await unknownFallbackPath.text()).not.toContain("Exact studio");
+    expect(privateAuth.status).toBe(404);
   });
 
   it("preserves public site image caching while adding safe response headers", async () => {
@@ -3969,7 +4071,7 @@ describe("ME3 Worker auth", () => {
     };
 
     expect(response.status).toBe(200);
-    expect(body.version).toBe("0.2");
+    expect(body.version).toBe("0.3");
     expect(body.kind).toBe("person");
     expect(body.name).toBe("ME3 Owner");
     expect(body.handle).toBe("owner");
@@ -4076,17 +4178,59 @@ describe("ME3 Worker auth", () => {
         custom_domain_status: "pending",
       });
       expect(fetchMock).toHaveBeenCalledWith(
-        "https://api.me3.example/v1/installs/core_11111111-1111-4111-8111-111111111111/domain",
+        "https://api.me3.example/v1/installs/core_11111111-1111-4111-8111-111111111111/sites/site-booking/domain",
         expect.objectContaining({
           method: "POST",
           headers: expect.objectContaining({
             "X-ME3-Core-Update-Token": "core-update-token",
+            "X-ME3-Core-Site-ID": "site-booking",
+            "X-ME3-Core-Site-Username": "owner",
           }),
         }),
       );
     } finally {
       fetchMock.mockRestore();
     }
+  });
+
+  it("does not attach one canonical domain to two sites", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addBookableSite(env);
+    env.sites[0].custom_domain = "shared.example.com";
+    env.sites[0].custom_domain_status = "active";
+    env.sites.push({
+      id: "site-studio",
+      user_id: "owner",
+      username: "studio",
+      site_type: "profile",
+      site_role: "organization",
+      template_id: "me3",
+      custom_domain: null,
+      custom_domain_status: null,
+      custom_domain_cf_id: null,
+      created_at: "2026-08-24T09:00:00Z",
+      updated_at: "2026-08-24T09:00:00Z",
+      published_at: "2026-08-24T10:00:00Z",
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/domains/studio", {
+        method: "POST",
+        headers: {
+          Cookie: session,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ domain: "shared.example.com" }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "This domain is already connected to another site.",
+    });
+    expect(env.sites[1].custom_domain).toBeNull();
   });
 
   it("blocks owner auth endpoints on the public root domain", async () => {

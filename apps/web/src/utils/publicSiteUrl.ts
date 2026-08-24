@@ -4,8 +4,10 @@ type CoreConfig = {
   siteHost?: string | null;
 };
 
-type PublicProfileSite = {
+type PublicSite = {
   custom_domain?: string | null;
+  custom_domain_status?: "pending" | "active" | "failed" | null;
+  site_role?: "profile" | "organization" | null;
 };
 
 function browserOrigin(): string {
@@ -18,9 +20,12 @@ function fallbackPublicSiteUrl(): string {
   return origin ? `${origin}/me` : "/me";
 }
 
-export function configuredPublicProfileUrl(
-  site?: PublicProfileSite | null,
+export function configuredPublicSiteUrl(
+  site?: PublicSite | null,
 ): string | null {
+  if (site?.custom_domain_status && site.custom_domain_status !== "active") {
+    return null;
+  }
   const domain = site?.custom_domain
     ?.trim()
     .replace(/^https?:\/\//, "")
@@ -28,7 +33,9 @@ export function configuredPublicProfileUrl(
   return domain ? `https://${domain}` : null;
 }
 
-export async function resolvePublicSiteUrl(): Promise<string> {
+export const configuredPublicProfileUrl = configuredPublicSiteUrl;
+
+async function resolveDefaultPublicSiteUrl(): Promise<string> {
   if (import.meta.env.DEV) return "http://localhost:8787/preview";
 
   try {
@@ -42,18 +49,49 @@ export async function resolvePublicSiteUrl(): Promise<string> {
   return fallbackPublicSiteUrl();
 }
 
-export async function resolvePublicProfileUrl(
+export function permanentPublicSitePath(
   username: string,
-  site?: PublicProfileSite | null,
+  siteRole: PublicSite["site_role"] = "profile",
+): string {
+  return siteRole === "organization"
+    ? `/site/${encodeURIComponent(username)}/`
+    : "/me/";
+}
+
+export function permanentPublicSiteUrl(
+  username: string,
+  siteRole: PublicSite["site_role"] = "profile",
+): string {
+  if (import.meta.env.DEV) {
+    return `http://localhost:8787/preview/${encodeURIComponent(username)}/`;
+  }
+  const origin = browserOrigin();
+  const path = permanentPublicSitePath(username, siteRole);
+  return origin ? `${origin}${path}` : path;
+}
+
+export async function resolvePublicSiteUrl(
+  username: string,
+  site?: PublicSite | null,
 ): Promise<string> {
   if (import.meta.env.DEV) {
     return `http://localhost:8787/preview/${encodeURIComponent(username)}/`;
   }
 
-  const configuredUrl = configuredPublicProfileUrl(site);
+  const configuredUrl = configuredPublicSiteUrl(site);
   if (configuredUrl) return configuredUrl;
 
-  return resolvePublicSiteUrl();
+  if (site?.site_role === "organization") {
+    return permanentPublicSiteUrl(username, "organization");
+  }
+  return resolveDefaultPublicSiteUrl();
+}
+
+export async function resolvePublicProfileUrl(
+  username: string,
+  site?: PublicSite | null,
+): Promise<string> {
+  return resolvePublicSiteUrl(username, site);
 }
 
 export function defaultPublicProfileUrlLabel(): string {

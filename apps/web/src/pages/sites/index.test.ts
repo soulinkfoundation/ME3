@@ -26,7 +26,7 @@ vi.mock("../../api", () => ({
 }));
 
 vi.mock("../../utils/publicSiteUrl", () => ({
-  resolvePublicProfileUrl: vi.fn(async (username: string) => `/preview/${username}`),
+  resolvePublicSiteUrl: vi.fn(async (username: string) => `/preview/${username}`),
 }));
 
 const ConfirmationDialogStub = defineComponent({
@@ -110,6 +110,11 @@ describe("Sites dashboard", () => {
     expect(cards[0].text()).not.toContain("Delete");
     expect(cards[1].text()).toContain("Publish");
     expect(cards[1].text()).toContain("Delete");
+    expect(
+      cards[0]
+        .findAll("a")
+        .some((link) => link.text().trim() === "Domain" && link.attributes("href") === "/sites/owner#domain"),
+    ).toBe(true);
 
     const siteLinks = wrapper
       .findAll("a")
