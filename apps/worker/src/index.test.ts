@@ -4185,6 +4185,7 @@ describe("ME3 Worker auth", () => {
             "X-ME3-Core-Update-Token": "core-update-token",
             "X-ME3-Core-Site-ID": "site-booking",
             "X-ME3-Core-Site-Username": "owner",
+            "X-ME3-Core-Site-Role": "profile",
           }),
         }),
       );

@@ -56,6 +56,7 @@ describe("managed site domains", () => {
           "X-ME3-Core-Update-Token": "core-update-token",
           "X-ME3-Core-Site-ID": "site-studio",
           "X-ME3-Core-Site-Username": "studio",
+          "X-ME3-Core-Site-Role": "organization",
         }),
         body: JSON.stringify({ domain: "www.example.com" }),
       }),

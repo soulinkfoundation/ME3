@@ -98,6 +98,7 @@ async function requestManagedSiteDomain(
         "X-ME3-Core-Update-Token": coreUpdateToken,
         "X-ME3-Core-Site-ID": site.id,
         "X-ME3-Core-Site-Username": site.username,
+        "X-ME3-Core-Site-Role": site.site_role || "profile",
         ...(body ? { "Content-Type": "application/json" } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
