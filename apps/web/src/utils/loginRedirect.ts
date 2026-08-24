@@ -54,6 +54,22 @@ export function normalizeSafeLoginRedirect(
   return null;
 }
 
+export function resolveAuthenticatedLoginRedirect(
+  raw: unknown,
+  options: LoginRedirectOptions,
+): string | null {
+  const redirect = normalizeSafeLoginRedirect(raw, options);
+  if (!redirect) return null;
+  if (redirect.startsWith("/")) return redirect;
+
+  try {
+    const parsed = new URL(redirect);
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveMe3OAuthRedirect(
   raw: unknown,
   options: LoginRedirectOptions,

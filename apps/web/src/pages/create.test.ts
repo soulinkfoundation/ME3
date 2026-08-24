@@ -82,6 +82,61 @@ describe("Site Wizard route initialization", () => {
     expect(wrapper.find(".site-role-label").exists()).toBe(false);
   });
 
+  it("hydrates an existing site from its published content when no draft exists", async () => {
+    const site = siteRecord("sarahshook", "profile", "2026-08-24T09:00:00.000Z");
+    const sites = useSitesStore();
+    sites.sites = [site];
+    sites.ensureSites = vi.fn(async () => undefined) as never;
+    sites.getSiteContent = vi.fn(async () => ({
+      ok: true,
+      profile: {
+        name: "Sarah Shook",
+        handle: "sarahshook",
+        bio: "Published profile biography",
+      },
+      pages: [
+        {
+          slug: "learn-to-channel",
+          title: "Learn To Channel",
+          content: "Published page content",
+        },
+      ],
+      posts: [],
+      products: [],
+    })) as never;
+
+    await router.push({
+      path: "/create",
+      query: {
+        siteId: site.id,
+        site: site.username,
+        return: `/sites/${site.username}`,
+      },
+    });
+    await router.isReady();
+
+    const wrapper = shallowMount(CreatePage, {
+      global: { plugins: [router] },
+    });
+    await flushPromises();
+
+    expect(sites.getSiteContent).toHaveBeenCalledWith("sarahshook");
+    expect(wizardProfile()).toMatchObject({
+      name: "Sarah Shook",
+      handle: "sarahshook",
+      bio: "Published profile biography",
+    });
+    expect(useWizardStore().pages).toEqual([
+      expect.objectContaining({
+        slug: "learn-to-channel",
+        title: "Learn To Channel",
+        content: "Published page content",
+      }),
+    ]);
+    expect(wrapper.find(".wizard-intro").exists()).toBe(false);
+    expect(wrapper.get(".site-context-name").text()).toBe("Sarah Shook");
+  });
+
   it("keeps onboarding for an explicitly new organization site", async () => {
     const sites = useSitesStore();
     sites.sites = [];
@@ -101,6 +156,10 @@ describe("Site Wizard route initialization", () => {
     expect(wrapper.get(".wizard-intro").text()).toContain("Create a new site");
   });
 });
+
+function wizardProfile() {
+  return useWizardStore().profile;
+}
 
 function siteRecord(
   username: string,

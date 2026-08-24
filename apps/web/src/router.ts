@@ -5,7 +5,10 @@ import { useSitesStore } from "./stores/sites";
 import { useWizardStore } from "./stores/wizard";
 import { updateFeatureFavicon } from "./utils/favicon";
 import { DEFAULT_APP_PATH } from "./utils/navigation";
-import { resolveProfileSetupPath } from "./utils/loginRedirect";
+import {
+  resolveAuthenticatedLoginRedirect,
+  resolveProfileSetupPath,
+} from "./utils/loginRedirect";
 import {
   invalidatePluginAccess,
   isPluginAccessEnabled,
@@ -106,8 +109,25 @@ router.beforeEach(async (to, _from, next) => {
     syncedSessionUserId = currentSessionUserId;
   }
 
-  // Redirect logged-in users from public setup routes to the app landing path.
-  if ((to.path === "/" || to.path === "/login") && auth.isAuthenticated) {
+  // Resume the originally requested app route after authentication. This guard
+  // runs before the login page mounts, so dropping its redirect here would send
+  // an authenticated callback to the default app page instead.
+  if (to.path === "/login" && auth.isAuthenticated) {
+    const redirect = resolveAuthenticatedLoginRedirect(to.query.redirect, {
+      origin: window.location.origin,
+      hostname: window.location.hostname,
+      dev: import.meta.env.DEV,
+    });
+    if (redirect) {
+      next(redirect);
+      return;
+    }
+    next({ path: await resolveDefaultAppPathForSession() });
+    return;
+  }
+
+  // Redirect logged-in users from the public root to the app landing path.
+  if (to.path === "/" && auth.isAuthenticated) {
     next({ path: await resolveDefaultAppPathForSession() });
     return;
   }
