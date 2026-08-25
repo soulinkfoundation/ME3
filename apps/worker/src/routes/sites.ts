@@ -1275,7 +1275,10 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
     if (!site) return c.json({ error: "Site not found" }, 404);
 
-    const meJson = await getSiteFileText(c.env, site.id, "src/me.json");
+    const meJson =
+      (await getSiteFileText(c.env, site.id, "src/me.json")) ||
+      (await getSiteFileText(c.env, site.id, "public/me.json")) ||
+      (await getSiteFileText(c.env, site.id, "me.json"));
     if (!meJson) {
       return c.json({
         ok: true,

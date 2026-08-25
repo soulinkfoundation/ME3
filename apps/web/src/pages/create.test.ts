@@ -78,7 +78,7 @@ describe("Site Wizard route initialization", () => {
     expect(wizard.lastPublishedAt).toBe(site.published_at);
     expect(wizard.needsPublish).toBe(true);
     expect(wrapper.find(".wizard-intro").exists()).toBe(false);
-    expect(wrapper.get(".site-context-name").text()).toBe("Kieran Butler");
+    expect(wrapper.find(".site-context-name").exists()).toBe(false);
     expect(wrapper.find(".site-role-label").exists()).toBe(false);
   });
 
@@ -134,7 +134,62 @@ describe("Site Wizard route initialization", () => {
       }),
     ]);
     expect(wrapper.find(".wizard-intro").exists()).toBe(false);
-    expect(wrapper.get(".site-context-name").text()).toBe("Sarah Shook");
+    expect(wrapper.find(".site-context-name").exists()).toBe(false);
+  });
+
+  it("replaces an empty cached draft with the published site content", async () => {
+    const site = siteRecord("connie", "profile", "2026-08-24T09:00:00.000Z");
+    localStorage.setItem(
+      `me3_wizard_state:v2:anonymous:site:${site.id}`,
+      JSON.stringify({
+        profile: { name: "", handle: "", bio: "", links: {}, buttons: [] },
+        username: "",
+        siteRole: "profile",
+        pages: [],
+        posts: [],
+        products: [],
+        testimonials: [],
+        lastPublishedAt: null,
+        lastSiteEditAt: "2026-08-25T09:00:00.000Z",
+      }),
+    );
+
+    const sites = useSitesStore();
+    sites.sites = [site];
+    sites.ensureSites = vi.fn(async () => undefined) as never;
+    sites.getSiteContent = vi.fn(async () => ({
+      ok: true,
+      profile: {
+        name: "Connie Fahy",
+        handle: "connie",
+        bio: "Published profile biography",
+      },
+      pages: [],
+      posts: [],
+      products: [],
+    })) as never;
+
+    await router.push({
+      path: "/create",
+      query: {
+        siteId: site.id,
+        site: site.username,
+        return: `/sites/${site.username}`,
+      },
+    });
+    await router.isReady();
+
+    shallowMount(CreatePage, {
+      global: { plugins: [router] },
+    });
+    await flushPromises();
+
+    expect(sites.getSiteContent).toHaveBeenCalledWith("connie");
+    expect(wizardProfile()).toMatchObject({
+      name: "Connie Fahy",
+      handle: "connie",
+      bio: "Published profile biography",
+    });
   });
 
   it("keeps onboarding for an explicitly new organization site", async () => {
@@ -154,6 +209,25 @@ describe("Site Wizard route initialization", () => {
     await flushPromises();
 
     expect(wrapper.get(".wizard-intro").text()).toContain("Create a new site");
+  });
+
+  it("exits an empty wizard to the sites dashboard", async () => {
+    const sites = useSitesStore();
+    sites.sites = [];
+    sites.ensureSites = vi.fn(async () => undefined) as never;
+
+    await router.push("/create");
+    await router.isReady();
+
+    const wrapper = shallowMount(CreatePage, {
+      global: { plugins: [router] },
+    });
+    await flushPromises();
+    await wrapper.get(".intro-button").trigger("click");
+    await wrapper.get(".exit-btn").trigger("click");
+    await flushPromises();
+
+    expect(router.currentRoute.value.path).toBe("/sites");
   });
 });
 

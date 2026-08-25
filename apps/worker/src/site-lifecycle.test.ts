@@ -213,6 +213,47 @@ describe("site role API lifecycle", () => {
     });
   });
 
+  it("loads editable profile data from a legacy public-only site", async () => {
+    const created = await postSite(app, env, { username: "connie" });
+    const profileId = String(created.body.site.id);
+    const publicProfile = JSON.stringify({
+      version: "0.1",
+      visibility: "public",
+      handle: "connie",
+      name: "Connie Fahy",
+      bio: "Published profile biography",
+    });
+    db.raw
+      .prepare(
+        `INSERT INTO site_files (site_id, path, content, content_type, size)
+         VALUES (?, 'public/me.json', ?, 'application/json', ?)`,
+      )
+      .run(
+        profileId,
+        new TextEncoder().encode(publicProfile),
+        publicProfile.length,
+      );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/sites/connie/content"),
+      env,
+    );
+    const body = (await response.json()) as Record<string, any>;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      profile: {
+        handle: "connie",
+        name: "Connie Fahy",
+        bio: "Published profile biography",
+      },
+      pages: [],
+      posts: [],
+      products: [],
+    });
+  });
+
   it("renames only the organization selected by stable site id", async () => {
     const profile = await postSite(app, env, { username: "owner" });
     const studio = await postSite(app, env, {
@@ -372,6 +413,8 @@ class SqliteD1 {
         content BLOB NOT NULL,
         content_type TEXT NOT NULL,
         size INTEGER NOT NULL DEFAULT 0,
+        sha256 TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (site_id, path),
         FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
       );

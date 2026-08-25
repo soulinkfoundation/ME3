@@ -148,6 +148,34 @@ const showImportedDraftRecovery = computed(
     !showIntroScreen.value,
 );
 
+function hasMeaningfulRestoredDraft(): boolean {
+  const profile = wizard.profile;
+  return Boolean(
+    profile.name.trim() ||
+      profile.bio.trim() ||
+      profile.location.trim() ||
+      profile.logo ||
+      profile.avatar ||
+      profile.banner ||
+      Object.values(profile.links).some(
+        (value) => typeof value === "string" && value.trim(),
+      ) ||
+      profile.buttons.length ||
+      profile.business.goals.length ||
+      profile.business.positioningStatement.trim() ||
+      profile.business.audience.trim() ||
+      profile.business.primaryProblem.trim() ||
+      profile.business.solution.trim() ||
+      profile.business.targetMarket.trim() ||
+      profile.business.primaryOutcome.trim() ||
+      wizard.pages.length ||
+      wizard.posts.length ||
+      wizard.products.length ||
+      wizard.testimonials.length ||
+      wizard.furthestStep > 1
+  );
+}
+
 // Progress percentage
 const progress = computed(
   () => ((wizard.currentStep - 1) / (wizard.totalSteps - 1)) * 100,
@@ -256,7 +284,7 @@ function exitWizardDestination(): string {
     .trim()
     .toLowerCase();
   if (site.length >= 3) return `/sites/${site}`;
-  return "/calendar";
+  return "/sites";
 }
 
 function handleExit() {
@@ -306,7 +334,9 @@ async function openWizardTarget() {
         role: targetRole,
       });
       const preserveLocalDraft =
-        draft.restored && (draft.migratedLegacy || wizard.needsPublish);
+        draft.restored &&
+        hasMeaningfulRestoredDraft() &&
+        (draft.migratedLegacy || wizard.needsPublish);
       if (preserveLocalDraft && targetSite.published_at) {
         wizard.restorePublishedBaseline(targetSite.published_at);
       }
@@ -364,11 +394,6 @@ watch(
   <div v-else class="wizard-page">
     <!-- Header -->
     <header v-if="!showIntroScreen" class="wizard-header">
-      <div class="header-left" aria-live="polite">
-        <strong class="site-context-name">
-          {{ wizard.profile.name || wizard.username || "New site" }}
-        </strong>
-      </div>
       <div class="header-center">
         <div class="step-indicator">
           <span class="step-current">{{ wizard.currentStep }}</span>
@@ -581,23 +606,6 @@ watch(
   display: flex;
   align-items: center;
   gap: 16px;
-}
-
-.header-left {
-  grid-column: 1;
-  justify-self: start;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.site-context-name {
-  overflow: hidden;
-  color: var(--color-text);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .logo {
@@ -1037,10 +1045,6 @@ watch(
   }
 
   .step-name {
-    display: none;
-  }
-
-  .site-context-name {
     display: none;
   }
 
