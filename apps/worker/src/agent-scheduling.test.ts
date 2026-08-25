@@ -126,6 +126,43 @@ describe("ME3 agent scheduling", () => {
     });
   });
 
+  it("accepts only a grant-backed free one-to-one network relay", () => {
+    const candidate = slot("2026-08-25T09:00:00.000Z", "2026-08-25T09:30:00.000Z");
+    const envelope = {
+      version: "2026-08-25",
+      kind: "schedule.request",
+      requestId: "network-request",
+      sourceNodeId: "source",
+      sourceName: "Source",
+      targetNodeId: "target",
+      durationMinutes: 30,
+      dateRange: { start: "2026-08-25", end: "2026-08-31" },
+      reason: null,
+      candidateSlots: [candidate],
+      selectedSlot: null,
+      meetingUrl: "https://soulinkfoundation.org/calls/@source",
+      target: { kind: "public_profile", id: "profile-target" },
+      request: { kind: "meeting", participantMode: "one_to_one", paymentMode: "free" },
+      access: {
+        path: "public_profile",
+        profileId: "profile-target",
+        grantId: "network-grant",
+      },
+      issuedAt: "2026-08-24T12:00:00.000Z",
+      expiresAt: "2026-08-26T12:00:00.000Z",
+    };
+
+    expect(parseAgentSchedulingRelayMessage(envelope)).toMatchObject({
+      version: "2026-08-25",
+      target: { kind: "public_profile", id: "profile-target" },
+      access: { profileId: "profile-target", grantId: "network-grant" },
+    });
+    expect(parseAgentSchedulingRelayMessage({
+      ...envelope,
+      access: { ...envelope.access, profileId: "another-profile" },
+    })).toBeNull();
+  });
+
   it("lets the model request scheduling without asking for duration or dates", async () => {
     const database = createExecutionDb();
     const request = vi.fn<CoreSchedulingToolServices["request"]>(async (input) => ({
@@ -205,6 +242,92 @@ describe("ME3 agent scheduling", () => {
     expect(response).toMatchObject({
       specialist: "core.scheduling.request",
       replyText: "I found one mutual option with Sarah. Nothing is booked yet.",
+    });
+  });
+
+  it("uses the stable directory profile identity for an explicit network request", async () => {
+    const database = createExecutionDb();
+    const requestNetwork = vi.fn<NonNullable<CoreSchedulingToolServices["requestNetwork"]>>(
+      async () => ({
+        contactName: "Aoife Lens",
+        durationMinutes: 30,
+        dateRange: { start: "2026-08-25", end: "2026-08-31" },
+        usedDefaultDuration: true,
+        usedDefaultDateRange: true,
+        status: "waiting_for_target_review",
+        options: [],
+      }),
+    );
+    const services: CoreSchedulingToolServices = {
+      async searchContacts() {
+        return { contacts: [], total: 0 };
+      },
+      async request() {
+        throw new Error("contact flow must not be used");
+      },
+      requestNetwork,
+      async approve() {
+        throw new Error("not used");
+      },
+      async decline() {
+        throw new Error("not used");
+      },
+    };
+    const aiRun = vi.fn()
+      .mockResolvedValueOnce({
+        tool_calls: [{
+          id: "network-schedule-1",
+          name: "core_network_scheduling_request",
+          arguments: { profileId: "profile-aoife", confirmed: true },
+        }],
+      })
+      .mockResolvedValueOnce({
+        response: "I sent Aoife a meeting request without adding her as a contact.",
+      });
+
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "network-schedule-request",
+      turnId: "network-schedule-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: {
+        providerId: "workers-ai",
+        model: "workers-test-model",
+        backupModel: null,
+        apiKey: null,
+        ai: { run: aiRun },
+        aiGateway: null,
+        configured: true,
+      } as never,
+      messages: [
+        { role: "system", content: "You are ME3." },
+        {
+          role: "assistant",
+          content: "2. Aoife Lens\nME3 profile reference: profile-aoife",
+        },
+        { role: "user", content: "Schedule a meeting with the second result." },
+      ],
+      schedulingServices: services,
+    });
+
+    expect(requestNetwork).toHaveBeenCalledWith({
+      target: { kind: "public_profile", profileId: "profile-aoife" },
+      request: { kind: "meeting", participantMode: "one_to_one", paymentMode: "free" },
+      durationMinutes: undefined,
+      dateFrom: undefined,
+      dateTo: undefined,
+      reason: undefined,
+    }, expect.any(String));
+    expect(aiRun.mock.calls[0]?.[1]).toMatchObject({
+      tools: [{ function: { name: "core_network_scheduling_request" } }],
+      tool_choice: {
+        type: "function",
+        function: { name: "core_network_scheduling_request" },
+      },
+    });
+    expect(response).toMatchObject({
+      specialist: "core.network.scheduling.request",
     });
   });
 

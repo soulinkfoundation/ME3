@@ -325,7 +325,7 @@ export const CORE_CHAT_CAPABILITIES = [
     pluginId: null,
     ownerFacingLabel: "Search ME3 Network",
     summary:
-      "Search public, opt-in ME3 profiles and offerings for people, services, or products that match the owner's need.",
+      "Search public ME3 Network profiles and offerings for people, services, or products that match the owner's need.",
     category: "messaging",
     handler: {
       surface: "chat",
@@ -369,6 +369,70 @@ export const CORE_CHAT_CAPABILITIES = [
     chat: {
       intentKind: "read_action",
       sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.network.scheduling.request",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Request time with a network profile",
+    summary:
+      "Send a free one-to-one meeting request to one exact public ME3 Network profile previously selected by its stable profile ID. This does not create a contact.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.network.scheduling.request",
+    },
+    sideEffect: "external_send",
+    approvalMode: "approval_required",
+    requiresSetup: ["me3.app", "soulink", "calendar.events"],
+    inputSchema: {
+      type: "object",
+      required: ["profileId", "confirmed"],
+      properties: {
+        profileId: {
+          type: "string",
+          description: "Stable profile ID copied exactly from one unambiguous ME3 Network search result.",
+        },
+        durationMinutes: {
+          type: "integer",
+          description: "Optional meeting duration from 15 to 180 minutes. Defaults to 30.",
+        },
+        dateFrom: {
+          type: "string",
+          description: "Optional inclusive start date as YYYY-MM-DD in the owner's timezone.",
+          format: "date",
+        },
+        dateTo: {
+          type: "string",
+          description: "Optional inclusive end date as YYYY-MM-DD in the owner's timezone.",
+          format: "date",
+        },
+        reason: {
+          type: "string",
+          description: "Optional short reason or agenda to share with the profile owner.",
+        },
+        confirmed: {
+          type: "boolean",
+          description: "True only when the owner explicitly asked to send this meeting request.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_network_scheduling_requested",
+    examples: {
+      positive: [
+        "Request a 30-minute meeting with the second ME3 Network result.",
+        "Ask that selected profile to meet next week about the launch.",
+      ],
+      negative: [
+        "Tell me more about the second result.",
+        "Add that person to my contacts.",
+      ],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
     },
   }),
   defineCoreChatCapability({

@@ -99,6 +99,70 @@ export async function searchMe3Network(
   return normalizeSearchResponse(data, input.query);
 }
 
+export async function authorizeMe3NetworkSchedulingTarget(
+  env: Env,
+  profileIdInput: string,
+  requestIdInput: string,
+) {
+  const profileId = string(profileIdInput, 200);
+  const requestId = string(requestIdInput, 160);
+  if (!profileId || !requestId) {
+    throw new Me3NetworkDirectoryError(
+      "Select one exact ME3 Network profile before requesting a meeting.",
+      400,
+      "network_profile_required",
+    );
+  }
+  const config = await getNetworkDirectoryBridgeConfig(env);
+  if (!config) {
+    throw new Me3NetworkDirectoryError(
+      "Connect this installation to me3.app before requesting a network meeting.",
+      503,
+      "me3_cloud_not_connected",
+    );
+  }
+  const response = await fetchWithTimeout(
+    `${config.origin}/v1/network/scheduling/authorize`,
+    {
+      method: "POST",
+      headers: { ...config.headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ profileId, requestId }),
+    },
+  );
+  const data = await readJson(response);
+  if (!response.ok) {
+    throw bridgeError(
+      data,
+      response.status,
+      "The selected ME3 Network profile could not receive a meeting request.",
+    );
+  }
+  const authorizedProfileId = string(data.profileId, 200);
+  const name = string(data.name, 160);
+  const authorization = string(data.authorization, 8_000);
+  const expiresAt = string(data.expiresAt, 80);
+  if (
+    authorizedProfileId !== profileId ||
+    !name ||
+    !authorization ||
+    !expiresAt ||
+    !Number.isFinite(Date.parse(expiresAt))
+  ) {
+    throw new Me3NetworkDirectoryError(
+      "ME3 Cloud returned an invalid network scheduling authorization.",
+      502,
+      "invalid_network_scheduling_authorization",
+    );
+  }
+  return {
+    profileId: authorizedProfileId,
+    name,
+    handle: string(data.handle, 120),
+    authorization,
+    expiresAt: new Date(Date.parse(expiresAt)).toISOString(),
+  };
+}
+
 export async function getNetworkDirectoryBridgeConfig(
   env: Env,
 ): Promise<NetworkDirectoryBridgeConfig | null> {
@@ -126,13 +190,15 @@ function normalizeSearchResponse(
     ? data.results.slice(0, 10).flatMap((value) => {
         if (!value || typeof value !== "object") return [];
         const result = value as Record<string, unknown>;
+        const profileId = string(result.profileId, 200);
         const name = string(result.name, 160);
         const profileUrl = httpsUrl(result.profileUrl);
-        if (!name || !profileUrl) return [];
+        if (!profileId || !name || !profileUrl) return [];
         const rawLocation = result.location && typeof result.location === "object"
           ? result.location as Record<string, unknown>
           : null;
         return [{
+          profileId,
           name,
           handle: string(result.handle, 120),
           kind: string(result.kind, 40) || "person",

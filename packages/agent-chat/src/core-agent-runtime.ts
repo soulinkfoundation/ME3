@@ -166,6 +166,29 @@ export type CoreSchedulingToolServices = {
       | "no_mutual_availability";
     options: CoreSchedulingOption[];
   }>;
+  requestNetwork?(input: {
+    target: { kind: "public_profile"; profileId: string };
+    request: {
+      kind: "meeting";
+      participantMode: "one_to_one";
+      paymentMode: "free";
+    };
+    durationMinutes?: number;
+    dateFrom?: string;
+    dateTo?: string;
+    reason?: string;
+  }, idempotencyKey: string): Promise<{
+    contactName: string;
+    durationMinutes: number;
+    dateRange: { start: string; end: string };
+    usedDefaultDuration: boolean;
+    usedDefaultDateRange: boolean;
+    status:
+      | "waiting_for_target_review"
+      | "pending_target"
+      | "no_owner_availability";
+    options: CoreSchedulingOption[];
+  }>;
   approve(input: {
     contact?: string;
     option?: number;
@@ -195,6 +218,7 @@ export type CoreNetworkDirectoryOffering = {
 };
 
 export type CoreNetworkDirectoryResult = {
+  profileId: string;
   name: string;
   handle: string | null;
   kind: string;
@@ -235,6 +259,7 @@ const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
     tool.capabilityId === "core.bookings.lookup" ||
     tool.capabilityId === "core.contacts.search" ||
     tool.capabilityId === "core.network.directory.search" ||
+    tool.capabilityId === "core.network.scheduling.request" ||
     tool.capabilityId.startsWith("core.scheduling.") ||
     tool.capabilityId.startsWith("core.reminders.") ||
     tool.capabilityId === "core.journal.read" ||
@@ -292,7 +317,8 @@ export async function runCoreAgentToolTurn(input: {
     }
     if (
       (tool.capabilityId === "core.contacts.search" ||
-        tool.capabilityId.startsWith("core.scheduling.")) &&
+        tool.capabilityId.startsWith("core.scheduling.") ||
+        tool.capabilityId === "core.network.scheduling.request") &&
       !input.schedulingServices
     ) {
       return false;
@@ -300,6 +326,12 @@ export async function runCoreAgentToolTurn(input: {
     if (
       tool.capabilityId === "core.network.directory.search" &&
       !input.networkDirectoryServices
+    ) {
+      return false;
+    }
+    if (
+      tool.capabilityId === "core.network.scheduling.request" &&
+      !input.schedulingServices?.requestNetwork
     ) {
       return false;
     }
@@ -634,7 +666,8 @@ function executeCoreToolCall(input: {
   }
   if (
     input.tool.capabilityId === "core.contacts.search" ||
-    input.tool.capabilityId.startsWith("core.scheduling.")
+    input.tool.capabilityId.startsWith("core.scheduling.") ||
+    input.tool.capabilityId === "core.network.scheduling.request"
   ) {
     return executeSchedulingToolCall(input);
   }
@@ -716,6 +749,54 @@ async function executeSchedulingToolCall(input: {
   const services = input.schedulingServices;
   if (!services) throw new Error("Soulink scheduling is not connected.");
   assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+
+  if (input.tool.capabilityId === "core.network.scheduling.request") {
+    enforceNetworkSchedulingToolPolicy(input.tool);
+    if (input.call.arguments.confirmed !== true) {
+      throw new Error("A network scheduling request requires the owner's explicit confirmation.");
+    }
+    if (!services.requestNetwork) {
+      throw new Error("ME3 Network scheduling is not connected.");
+    }
+    const result = await services.requestNetwork({
+      target: {
+        kind: "public_profile",
+        profileId: requiredToolString(
+          input.call.arguments.profileId,
+          "ME3 Network profile ID",
+        ),
+      },
+      request: {
+        kind: "meeting",
+        participantMode: "one_to_one",
+        paymentMode: "free",
+      },
+      durationMinutes: optionalToolNumber(input.call.arguments.durationMinutes),
+      dateFrom: optionalToolString(input.call.arguments.dateFrom),
+      dateTo: optionalToolString(input.call.arguments.dateTo),
+      reason: optionalToolString(input.call.arguments.reason),
+    }, input.idempotencyKey);
+    const defaults = [
+      result.usedDefaultDuration ? `${result.durationMinutes} minutes` : null,
+      result.usedDefaultDateRange
+        ? `${result.dateRange.start} to ${result.dateRange.end}`
+        : null,
+    ].filter(Boolean);
+    const defaultNote = defaults.length
+      ? ` I used the streamlined defaults: ${defaults.join(" and ")}.`
+      : "";
+    return {
+      capabilityId: "core.network.scheduling.request",
+      result: { ok: true, ...result },
+      fallbackReply: result.status === "waiting_for_target_review"
+        ? `I asked ${result.contactName} to review the meeting request and choose up to three suitable times.${defaultNote} I’ll post their options here when they respond. They were not added to your contacts.`
+        : result.status === "pending_target"
+          ? `I sent the meeting request to ${result.contactName}'s ME3 assistant.${defaultNote} It is queued safely, nothing has been booked, and no contact was created.`
+          : `I couldn't find an open ${result.durationMinutes}-minute slot on your calendar from ${result.dateRange.start} to ${result.dateRange.end}.${defaultNote} I did not contact ${result.contactName}'s assistant or book anything.`,
+      reminderAction: null,
+      actionCards: [],
+    };
+  }
 
   if (input.tool.capabilityId === "core.contacts.search") {
     enforceSchedulingToolPolicy(input.tool, "contacts");
@@ -2173,8 +2254,21 @@ function requiredSchedulingActionTool(
 
   const toolFor = (capabilityId: CoreChatToolDefinition["capabilityId"]) =>
     tools.find((tool) => tool.capabilityId === capabilityId) || null;
+  const recentAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant")
+    ?.content.toLowerCase()
+    .replaceAll("’", "'")
+    .replace(/\s+/g, " ")
+    .trim();
   const explicitRequest =
     /\b(?:arrange|organise|organize|schedule|set up)\b.+\bwith\b/.test(
+      latestUserMessage,
+    ) ||
+    /\brequest\b.+\b(?:meeting|call|time)\b.+\bwith\b/.test(
+      latestUserMessage,
+    ) ||
+    /\bask\b.+\b(?:to meet|for (?:a )?(?:meeting|call))\b/.test(
       latestUserMessage,
     ) ||
     /\bfind\b.+\b(?:time|minutes?|hours?)\b.+\bwith\b/.test(
@@ -2183,15 +2277,15 @@ function requiredSchedulingActionTool(
     /\bfind\b.+\bwith\b.+\b(?:time|minutes?|hours?)\b/.test(
       latestUserMessage,
     );
-  if (explicitRequest) return toolFor("core.scheduling.request");
+  if (explicitRequest) {
+    const networkSelectionContext = Boolean(
+      recentAssistantMessage?.includes("me3 profile reference:"),
+    );
+    return networkSelectionContext
+      ? toolFor("core.network.scheduling.request")
+      : toolFor("core.scheduling.request");
+  }
 
-  const recentAssistantMessage = [...messages]
-    .reverse()
-    .find((message) => message.role === "assistant")
-    ?.content.toLowerCase()
-    .replaceAll("’", "'")
-    .replace(/\s+/g, " ")
-    .trim();
   const schedulingContext = Boolean(
     recentAssistantMessage &&
       /(?:scheduling request|mutual (?:free )?(?:slots|options|availability)|these times work for both calendars|available at these times|offer any suitable options|approve availability|selected .+ reply [“\"]?approve|nothing has been booked)/.test(
@@ -2257,9 +2351,11 @@ function withCoreToolInstructions(
     "- Recipient authorization applies only to the exact offered slots. The requester’s selection of one of those slots completes both-owner approval; do not ask the recipient to approve it again. Never claim a meeting is booked while the result says waiting_for_other_owner.",
     "- Never mention scheduling request IDs or internal Soulink identifiers in the user-facing reply.",
     "ME3 Network directory rules:",
-    "- Use core_network_directory_search when the owner asks to find a person, service, product, provider, skill, or collaborator among opt-in ME3 Network profiles.",
+    "- Use core_network_directory_search when the owner asks to find a person, service, product, provider, skill, or collaborator among public ME3 Network profiles.",
     "- Search with the owner's actual need in plain language. Use offeringType only when the owner clearly asks for a service or product, and countryCode only when a country is explicit.",
     "- Treat matches as discovery candidates, not endorsements. Explain the public fields or offerings that made each result relevant and include its public profile link.",
+    "- Each result includes a stable profileId. Include its exact ME3 profile reference in the reply. Use core_network_scheduling_request only after the owner explicitly asks to meet one unambiguous result, and copy that exact profileId. If the selection is ambiguous or no stable profile ID is present in the conversation, search again or ask which result they mean.",
+    "- Network scheduling sends a free one-to-one meeting request for recipient review. It never creates a contact. Paid bookings and group scheduling are not supported by this tool.",
     "- Directory results are public profile data only. Never imply access to private ME3 memory, contacts, messages, assistant chats, or precise location.",
     "- Location in v1 is a textual filter. Do not claim distance, travel time, or 'near me' ranking.",
     "Site blog read tool rules:",
@@ -2468,11 +2564,25 @@ function enforceNetworkDirectoryToolPolicy(tool: CoreChatToolDefinition): void {
   }
 }
 
+function enforceNetworkSchedulingToolPolicy(tool: CoreChatToolDefinition): void {
+  const allowedChecks = new Set(["me3.app", "soulink", "calendar.events"]);
+  if (
+    tool.capabilityId !== "core.network.scheduling.request" ||
+    tool.handlerRoute !== tool.capabilityId ||
+    tool.approvalMode !== "approval_required" ||
+    tool.requiredSetupChecks.some((check) => !allowedChecks.has(check))
+  ) {
+    throw new Error(
+      `Tool "${tool.name}" is not allowed by the ME3 Network scheduling runtime policy.`,
+    );
+  }
+}
+
 function formatNetworkDirectorySearchReply(
   results: readonly CoreNetworkDirectoryResult[],
 ): string {
   if (!results.length) {
-    return "I couldn't find an opt-in ME3 Network profile matching that need. Try broader terms or remove the location filter.";
+    return "I couldn't find a public ME3 Network profile matching that need. Try broader terms or remove the location filter.";
   }
   return results.map((result, index) => {
     const handle = result.handle ? ` (@${result.handle.replace(/^@/, "")})` : "";
@@ -2488,6 +2598,7 @@ function formatNetworkDirectorySearchReply(
     });
     return [
       `${index + 1}. ${result.name}${handle}${location}`,
+      `ME3 profile reference: ${result.profileId}`,
       reasons,
       offerings.length ? `Offers: ${offerings.join(", ")}` : null,
       result.publicUrl || result.profileUrl,
@@ -2683,7 +2794,11 @@ function userFacingToolReply(
   replyText: string,
   outcome: CoreToolOutcome | null,
 ): string {
-  if (outcome?.capabilityId === "core.calendar.event.create") {
+  if (
+    outcome?.capabilityId === "core.calendar.event.create" ||
+    outcome?.capabilityId === "core.network.directory.search" ||
+    outcome?.capabilityId === "core.network.scheduling.request"
+  ) {
     return outcome.fallbackReply;
   }
   if (

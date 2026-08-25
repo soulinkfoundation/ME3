@@ -6,6 +6,7 @@ import {
 } from "@me3-core/plugin-agent-chat";
 import {
   getNetworkDirectoryBridgeConfig,
+  authorizeMe3NetworkSchedulingTarget,
   removePublishedProfileFromMe3Network,
   searchMe3Network,
   syncPublishedProfileToMe3Network,
@@ -70,6 +71,7 @@ describe("ME3 Network directory bridge", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
       query: "event photographer",
       results: [{
+        profileId: "profile-aoife",
         name: "Aoife Lens",
         handle: "aoife",
         kind: "person",
@@ -105,11 +107,47 @@ describe("ME3 Network directory bridge", () => {
     });
 
     expect(result.results[0]).toMatchObject({
+      profileId: "profile-aoife",
       name: "Aoife Lens",
       location: { label: "Galway, Ireland", countryCode: "IE" },
       offerings: [{ type: "service", title: "Event photography" }],
     });
     expect(result.results[0].location).not.toHaveProperty("latitude");
+  });
+
+  it("authorizes one exact stable profile for the private Soulink relay", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      profileId: "profile-aoife",
+      name: "Aoife Lens",
+      handle: "aoife",
+      authorization: "signed-network-authorization",
+      expiresAt: "2026-08-27T12:00:00.000Z",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      authorizeMe3NetworkSchedulingTarget(
+        createEnv(SECRETS),
+        "profile-aoife",
+        "schedule-request",
+      ),
+    ).resolves.toEqual({
+      profileId: "profile-aoife",
+      name: "Aoife Lens",
+      handle: "aoife",
+      authorization: "signed-network-authorization",
+      expiresAt: "2026-08-27T12:00:00.000Z",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.me3.app/v1/network/scheduling/authorize",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          profileId: "profile-aoife",
+          requestId: "schedule-request",
+        }),
+      }),
+    );
   });
 });
 
@@ -119,6 +157,7 @@ describe("ME3 Network agent tool", () => {
       query: "event photographer in Ireland",
       total: 1,
       results: [{
+        profileId: "profile-aoife",
         name: "Aoife Lens",
         handle: "aoife",
         kind: "person",
@@ -192,8 +231,8 @@ describe("ME3 Network agent tool", () => {
     });
     expect(response).toMatchObject({
       specialist: "core.network.directory.search",
-      replyText: "Aoife Lens looks relevant because she offers event photography in Galway.",
     });
+    expect(response.replyText).toContain("ME3 profile reference: profile-aoife");
   });
 });
 

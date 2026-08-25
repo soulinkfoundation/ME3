@@ -22,9 +22,11 @@ import type {
   Env,
 } from "./types";
 import { ensureSoulinkContactsFresh } from "./routes/channels";
+import { authorizeMe3NetworkSchedulingTarget } from "./network-directory";
 
 const DEFAULT_SOULINK_API_ORIGIN = "https://soulinkfoundation.org";
 const AGENT_SCHEDULING_PROTOCOL_VERSION = "2026-08-24";
+const NETWORK_SCHEDULING_PROTOCOL_VERSION = "2026-08-25";
 const LEGACY_AGENT_SCHEDULING_PROTOCOL_VERSION = "2026-08-19";
 const AGENT_SCHEDULING_TTL_MS = 48 * 60 * 60 * 1000;
 const DEFAULT_DURATION_MINUTES = 30;
@@ -43,6 +45,7 @@ type AgentSchedulingRelayKind =
 export type AgentSchedulingRelayMessage = {
   version:
     | typeof AGENT_SCHEDULING_PROTOCOL_VERSION
+    | typeof NETWORK_SCHEDULING_PROTOCOL_VERSION
     | typeof LEGACY_AGENT_SCHEDULING_PROTOCOL_VERSION;
   kind: AgentSchedulingRelayKind;
   requestId: string;
@@ -55,6 +58,18 @@ export type AgentSchedulingRelayMessage = {
   candidateSlots: SchedulingRequestSlot[];
   selectedSlot: SchedulingRequestSlot | null;
   meetingUrl: string | null;
+  target?: { kind: "public_profile"; id: string };
+  request?: {
+    kind: "meeting";
+    participantMode: "one_to_one";
+    paymentMode: "free";
+  };
+  access?: {
+    path: "public_profile";
+    profileId: string;
+    authorization?: string;
+    grantId?: string;
+  };
   issuedAt: string;
   expiresAt: string;
 };
@@ -85,6 +100,17 @@ type SchedulingPeerPolicy = {
   durationMinutes: number;
   expiresAt: string;
   meetingUrl: string | null;
+  target?: { kind: "public_profile"; id: string };
+  request?: {
+    kind: "meeting";
+    participantMode: "one_to_one";
+    paymentMode: "free";
+  };
+  access?: {
+    path: "public_profile";
+    profileId: string;
+    grantId: string;
+  };
 };
 
 type SchedulingRequestWithContact = DbSchedulingRequest & {
@@ -102,6 +128,8 @@ export function createAgentSchedulingToolServices(
     },
     request: (input, idempotencyKey) =>
       requestAgentScheduling(env, ownerId, input, idempotencyKey),
+    requestNetwork: (input, idempotencyKey) =>
+      requestNetworkAgentScheduling(env, ownerId, input, idempotencyKey),
     approve: (input, idempotencyKey) =>
       approveAgentScheduling(env, ownerId, input, idempotencyKey),
     decline: (input, idempotencyKey) =>
@@ -172,6 +200,7 @@ export function parseAgentSchedulingRelayMessage(
   if (!isRecord(value)) return null;
   if (
     value.version !== AGENT_SCHEDULING_PROTOCOL_VERSION &&
+    value.version !== NETWORK_SCHEDULING_PROTOCOL_VERSION &&
     value.version !== LEGACY_AGENT_SCHEDULING_PROTOCOL_VERSION
   ) return null;
   if (
@@ -199,6 +228,28 @@ export function parseAgentSchedulingRelayMessage(
     ? null
     : parseRelaySlot(value.selectedSlot);
   const meetingUrl = parseHttpsUrl(value.meetingUrl);
+  const networkProfileId = isRecord(value.target) && value.target.kind === "public_profile"
+    ? shortText(value.target.id, 200)
+    : "";
+  const networkAccess = isRecord(value.access) &&
+      value.access.path === "public_profile"
+    ? {
+        path: "public_profile" as const,
+        profileId: shortText(value.access.profileId, 200),
+        grantId: shortText(value.access.grantId, 200),
+      }
+    : null;
+  const networkRequest = isRecord(value.request) &&
+      value.request.kind === "meeting" &&
+      value.request.participantMode === "one_to_one" &&
+      value.request.paymentMode === "free"
+    ? {
+        kind: "meeting" as const,
+        participantMode: "one_to_one" as const,
+        paymentMode: "free" as const,
+      }
+    : null;
+  const isNetworkRelay = value.version === NETWORK_SCHEDULING_PROTOCOL_VERSION;
   const now = new Date();
   const issuedAt = value.version === LEGACY_AGENT_SCHEDULING_PROTOCOL_VERSION
     ? now.toISOString()
@@ -218,13 +269,22 @@ export function parseAgentSchedulingRelayMessage(
     !issuedAt ||
     !expiresAt ||
     Date.parse(expiresAt) <= Date.parse(issuedAt) ||
+    (isNetworkRelay && (
+      !networkProfileId ||
+      !networkAccess?.grantId ||
+      networkAccess.profileId !== networkProfileId ||
+      !networkRequest ||
+      (value.kind === "schedule.options" && candidateSlots.length > MAX_PRESENTED_OPTIONS)
+    )) ||
     (value.kind === "schedule.request" && candidateSlots.length === 0) ||
     ((value.kind === "schedule.selection" || value.kind === "schedule.approval") && !selectedSlot)
   ) {
     return null;
   }
   return {
-    version: AGENT_SCHEDULING_PROTOCOL_VERSION,
+    version: value.version === NETWORK_SCHEDULING_PROTOCOL_VERSION
+      ? NETWORK_SCHEDULING_PROTOCOL_VERSION
+      : AGENT_SCHEDULING_PROTOCOL_VERSION,
     kind: value.kind,
     requestId,
     sourceNodeId,
@@ -236,6 +296,17 @@ export function parseAgentSchedulingRelayMessage(
     candidateSlots,
     selectedSlot,
     meetingUrl,
+    ...(isNetworkRelay
+      ? {
+          target: { kind: "public_profile" as const, id: networkProfileId },
+          request: networkRequest!,
+          access: {
+            path: "public_profile" as const,
+            profileId: networkAccess!.profileId,
+            grantId: networkAccess!.grantId,
+          },
+        }
+      : {}),
     issuedAt,
     expiresAt,
   };
@@ -522,6 +593,152 @@ async function requestAgentScheduling(
   };
 }
 
+async function requestNetworkAgentScheduling(
+  env: Env,
+  ownerId: string,
+  input: {
+    target: { kind: "public_profile"; profileId: string };
+    request: {
+      kind: "meeting";
+      participantMode: "one_to_one";
+      paymentMode: "free";
+    };
+    durationMinutes?: number;
+    dateFrom?: string;
+    dateTo?: string;
+    reason?: string;
+  },
+  idempotencyKey: string,
+) {
+  const profileId = shortText(input.target.profileId, 200);
+  if (
+    input.target.kind !== "public_profile" ||
+    !profileId ||
+    input.request.kind !== "meeting" ||
+    input.request.participantMode !== "one_to_one" ||
+    input.request.paymentMode !== "free"
+  ) {
+    throw new AgentSchedulingError(
+      "Network scheduling requires one exact free one-to-one public profile target.",
+      400,
+    );
+  }
+  const owner = await getSchedulingOwner(env, ownerId);
+  const defaults = resolveAgentSchedulingDefaults(input, owner.timezone);
+  const timeType = await schedulingTimeTypeForDuration(
+    env,
+    ownerId,
+    defaults.durationMinutes,
+  );
+  const proposedSlots = await generateSchedulingCandidateSlots(env, ownerId, {
+    timeType,
+    dateRange: defaults.dateRange,
+    limit: MAX_RELAY_CANDIDATES,
+  });
+  if (proposedSlots.length === 0) {
+    return {
+      contactName: "the selected ME3 Network profile",
+      durationMinutes: defaults.durationMinutes,
+      dateRange: defaults.dateRange,
+      usedDefaultDuration: defaults.usedDefaultDuration,
+      usedDefaultDateRange: defaults.usedDefaultDateRange,
+      status: "no_owner_availability" as const,
+      options: [],
+    };
+  }
+
+  const connection = await getOwnerSchedulingConnection(env, ownerId);
+  if (!connection) {
+    throw new AgentSchedulingError("Connect Soulink before requesting a network meeting.", 409);
+  }
+  const sourceNodeId = schedulingConnectionOwnerNodeId(connection);
+  if (!sourceNodeId) {
+    throw new AgentSchedulingError("The Soulink connection is missing its owner identity.", 409);
+  }
+  const authorized = await authorizeMe3NetworkSchedulingTarget(
+    env,
+    profileId,
+    idempotencyKey,
+  );
+  const reason = shortText(input.reason, 500) || null;
+  const envelopeTimes = schedulingEnvelopeTimes(authorized.expiresAt);
+  const relayed = await relayAgentSchedulingMessage(env, connection, {
+    version: NETWORK_SCHEDULING_PROTOCOL_VERSION,
+    kind: "schedule.request",
+    requestId: idempotencyKey,
+    sourceNodeId,
+    sourceName: owner.name || "ME3 owner",
+    targetNodeId: profileId,
+    durationMinutes: defaults.durationMinutes,
+    dateRange: defaults.dateRange,
+    reason,
+    candidateSlots: proposedSlots,
+    selectedSlot: null,
+    meetingUrl: null,
+    target: { kind: "public_profile", id: profileId },
+    request: input.request,
+    access: {
+      path: "public_profile",
+      profileId,
+      authorization: authorized.authorization,
+    },
+    ...envelopeTimes,
+  });
+  const peerNodeId = shortText(relayed.peerNodeId, 200);
+  const relayAccess = parseNetworkSchedulingRelayAccess(relayed.relayAccess);
+  if (
+    !peerNodeId ||
+    !relayAccess ||
+    relayAccess.profileId !== profileId
+  ) {
+    throw new AgentSchedulingError(
+      "Soulink returned an invalid network scheduling grant.",
+      502,
+    );
+  }
+  const relayStatus = shortText(relayed.status, 80);
+  if (relayStatus !== "pending_target" && relayStatus !== "waiting_for_target_review") {
+    throw new AgentSchedulingError(
+      "The public profile did not enter recipient review as required.",
+      409,
+    );
+  }
+  await upsertPeerSchedulingRequest(env, {
+    requestId: idempotencyKey,
+    ownerId,
+    contact: null,
+    timeType,
+    role: "requester",
+    peerNodeId,
+    requesterName: owner.name || "ME3 owner",
+    targetName: authorized.name,
+    reason,
+    dateRange: defaults.dateRange,
+    candidateSlots: [],
+    proposedSlots,
+    selectedSlot: null,
+    status: "draft",
+    expiresAt: earlierIsoInstant(envelopeTimes.expiresAt, authorized.expiresAt),
+    meetingUrl: null,
+    network: {
+      target: { kind: "public_profile", id: profileId },
+      request: input.request,
+      access: relayAccess,
+    },
+  });
+  return {
+    contactName: authorized.name,
+    durationMinutes: defaults.durationMinutes,
+    dateRange: defaults.dateRange,
+    usedDefaultDuration: defaults.usedDefaultDuration,
+    usedDefaultDateRange: defaults.usedDefaultDateRange,
+    status: relayStatus === "pending_target"
+      ? "pending_target" as const
+      : "waiting_for_target_review" as const,
+    options: [],
+  };
+}
+
 async function approveAgentScheduling(
   env: Env,
   ownerId: string,
@@ -591,7 +808,7 @@ async function performSchedulingOwnerAction(
   const owner = await getSchedulingOwner(env, ownerId);
   const peerName = request.contact_name || request.requester_name || request.target_name || "your contact";
   const envelope = {
-    version: AGENT_SCHEDULING_PROTOCOL_VERSION as typeof AGENT_SCHEDULING_PROTOCOL_VERSION,
+    ...schedulingRelayContract(policy),
     requestId: request.id,
     sourceNodeId: schedulingConnectionOwnerNodeId(connection) || "",
     sourceName: owner.name || "ME3 owner",
@@ -729,12 +946,15 @@ async function receiveAgentSchedulingRequest(
       ),
     };
   }
-  const contact = await resolveAgentSchedulingContactByNode(
-    env,
-    connection.user_id,
-    message.sourceNodeId,
-  );
-  if (!contact) {
+  const networkRequest = message.version === NETWORK_SCHEDULING_PROTOCOL_VERSION;
+  const contact = networkRequest
+    ? null
+    : await resolveAgentSchedulingContactByNode(
+      env,
+      connection.user_id,
+      message.sourceNodeId,
+    );
+  if (!networkRequest && !contact) {
     throw new AgentSchedulingError(
       "The requesting ME3 owner is not an active synced Soulink contact.",
       403,
@@ -746,14 +966,16 @@ async function receiveAgentSchedulingRequest(
     connection.user_id,
     message.durationMinutes,
   );
-  const policy = await resolveSchedulingPolicy(env, connection.user_id, {
-    contactId: contact.id,
-    timeTypeId: timeType.id,
-  });
-  if ("error" in policy) {
+  const policy = networkRequest
+    ? null
+    : await resolveSchedulingPolicy(env, connection.user_id, {
+      contactId: contact!.id,
+      timeTypeId: timeType.id,
+    });
+  if (policy && "error" in policy) {
     throw new AgentSchedulingError(policy.error, policy.status);
   }
-  if (!policy.allowed) {
+  if (policy && !policy.allowed) {
     throw new AgentSchedulingError(policy.reason, 403);
   }
   const available = await generateSchedulingCandidateSlots(env, connection.user_id, {
@@ -766,7 +988,7 @@ async function receiveAgentSchedulingRequest(
     available,
     MAX_PRESENTED_OPTIONS,
   );
-  if (policy.ownerReviewRequired || !policy.candidateSharingAllowed) {
+  if (networkRequest || !policy || policy.ownerReviewRequired || !policy.candidateSharingAllowed) {
     await upsertPeerSchedulingRequest(env, {
       requestId: message.requestId,
       ownerId: connection.user_id,
@@ -784,6 +1006,9 @@ async function receiveAgentSchedulingRequest(
       status: "review_required",
       expiresAt: message.expiresAt,
       meetingUrl: message.meetingUrl,
+      network: networkRequest
+        ? requireNetworkSchedulingContract(message)
+        : undefined,
     });
     const options = schedulingOptions(mutual, owner.timezone);
     const storedRequest = await getSchedulingRequest(
@@ -808,6 +1033,9 @@ async function receiveAgentSchedulingRequest(
           durationMinutes: message.durationMinutes,
           expiresAt: message.expiresAt,
           meetingUrl: message.meetingUrl,
+          ...(networkRequest
+            ? requireNetworkSchedulingContract(message)
+            : {}),
         },
         owner.timezone,
         message.sourceName,
@@ -835,6 +1063,7 @@ async function receiveAgentSchedulingRequest(
     status: "candidates_shared",
     expiresAt: message.expiresAt,
     meetingUrl: message.meetingUrl,
+    network: undefined,
   });
   await recordSchedulingAudit(env, message.requestId, connection.user_id, "candidates_shared", "assistant",
     `Returned ${mutual.length} mutual candidate slots to ${message.sourceName}'s ME3 assistant`,
@@ -977,7 +1206,7 @@ async function receiveAgentSchedulingSelection(
   const owner = await getSchedulingOwner(env, connection.user_id);
   const label = schedulingOptions([selectedSlot], owner.timezone)[0].label;
   await relayAgentSchedulingMessage(env, connection, {
-    version: AGENT_SCHEDULING_PROTOCOL_VERSION,
+    ...schedulingRelayContract(policy),
     kind: "schedule.approval",
     requestId: request.id,
     sourceNodeId: schedulingConnectionOwnerNodeId(connection) || "",
@@ -1122,7 +1351,7 @@ async function upsertPeerSchedulingRequest(
   input: {
     requestId: string;
     ownerId: string;
-    contact: DbContact;
+    contact: DbContact | null;
     timeType: SchedulingTimeType;
     role: AgentSchedulingRole;
     peerNodeId: string;
@@ -1136,15 +1365,31 @@ async function upsertPeerSchedulingRequest(
     status: "draft" | "review_required" | "candidates_shared";
     expiresAt: string;
     meetingUrl: string | null;
+    network?: {
+      target: { kind: "public_profile"; id: string };
+      request: {
+        kind: "meeting";
+        participantMode: "one_to_one";
+        paymentMode: "free";
+      };
+      access: {
+        path: "public_profile";
+        profileId: string;
+        grantId: string;
+      };
+    };
   },
 ) {
   const policy: SchedulingPeerPolicy = {
-    protocolVersion: AGENT_SCHEDULING_PROTOCOL_VERSION,
+    protocolVersion: input.network
+      ? NETWORK_SCHEDULING_PROTOCOL_VERSION
+      : AGENT_SCHEDULING_PROTOCOL_VERSION,
     role: input.role,
     peerNodeId: input.peerNodeId,
     durationMinutes: input.timeType.durationMinutes,
     expiresAt: input.expiresAt,
     meetingUrl: input.meetingUrl,
+    ...(input.network || {}),
   };
   const inserted = await env.DB.prepare(
     `INSERT OR IGNORE INTO scheduling_requests
@@ -1159,7 +1404,7 @@ async function upsertPeerSchedulingRequest(
     .bind(
       input.requestId,
       input.ownerId,
-      input.contact.id,
+      input.contact?.id || null,
       input.timeType.id,
       input.status,
       input.requesterName,
@@ -1182,7 +1427,7 @@ async function upsertPeerSchedulingRequest(
      WHERE id = ? AND user_id = ? AND status NOT IN ('finalized', 'cancelled')`,
   )
     .bind(
-      input.contact.id,
+      input.contact?.id || null,
       input.timeType.id,
       input.status,
       input.requesterName,
@@ -1623,13 +1868,35 @@ function peerPolicy(value: string | null): SchedulingPeerPolicy | null {
         ? new Date(0).toISOString()
         : null);
     const meetingUrl = parseHttpsUrl(parsed.meetingUrl);
+    const isNetworkPolicy = protocolVersion === NETWORK_SCHEDULING_PROTOCOL_VERSION;
+    const targetId = isRecord(parsed.target) && parsed.target.kind === "public_profile"
+      ? shortText(parsed.target.id, 200)
+      : "";
+    const access = parseNetworkSchedulingRelayAccess(parsed.access);
+    const request = isRecord(parsed.request) &&
+        parsed.request.kind === "meeting" &&
+        parsed.request.participantMode === "one_to_one" &&
+        parsed.request.paymentMode === "free"
+      ? {
+          kind: "meeting" as const,
+          participantMode: "one_to_one" as const,
+          paymentMode: "free" as const,
+        }
+      : null;
     if (
       (protocolVersion !== AGENT_SCHEDULING_PROTOCOL_VERSION &&
+        protocolVersion !== NETWORK_SCHEDULING_PROTOCOL_VERSION &&
         protocolVersion !== LEGACY_AGENT_SCHEDULING_PROTOCOL_VERSION) ||
       !role ||
       !peerNodeId ||
       durationMinutes === null ||
-      !expiresAt
+      !expiresAt ||
+      (isNetworkPolicy && (
+        !targetId ||
+        !request ||
+        !access ||
+        access.profileId !== targetId
+      ))
     ) {
       return null;
     }
@@ -1640,10 +1907,73 @@ function peerPolicy(value: string | null): SchedulingPeerPolicy | null {
       durationMinutes,
       expiresAt,
       meetingUrl,
+      ...(isNetworkPolicy
+        ? {
+            target: { kind: "public_profile" as const, id: targetId },
+            request: request!,
+            access: access!,
+          }
+        : {}),
     };
   } catch {
     return null;
   }
+}
+
+function parseNetworkSchedulingRelayAccess(value: unknown) {
+  if (!isRecord(value) || value.path !== "public_profile") return null;
+  const profileId = shortText(value.profileId, 200);
+  const grantId = shortText(value.grantId, 200);
+  return profileId && grantId
+    ? { path: "public_profile" as const, profileId, grantId }
+    : null;
+}
+
+function requireNetworkSchedulingContract(message: AgentSchedulingRelayMessage) {
+  const access = parseNetworkSchedulingRelayAccess(message.access);
+  if (
+    message.version !== NETWORK_SCHEDULING_PROTOCOL_VERSION ||
+    message.target?.kind !== "public_profile" ||
+    !message.target.id ||
+    message.request?.kind !== "meeting" ||
+    message.request.participantMode !== "one_to_one" ||
+    message.request.paymentMode !== "free" ||
+    !access ||
+    access.profileId !== message.target.id
+  ) {
+    throw new AgentSchedulingError("Network scheduling relay access is invalid.", 403);
+  }
+  return {
+    target: message.target,
+    request: message.request,
+    access,
+  };
+}
+
+function schedulingRelayContract(policy: SchedulingPeerPolicy): {
+  version:
+    | typeof AGENT_SCHEDULING_PROTOCOL_VERSION
+    | typeof NETWORK_SCHEDULING_PROTOCOL_VERSION;
+  target?: AgentSchedulingRelayMessage["target"];
+  request?: AgentSchedulingRelayMessage["request"];
+  access?: AgentSchedulingRelayMessage["access"];
+} {
+  if (policy.protocolVersion !== NETWORK_SCHEDULING_PROTOCOL_VERSION) {
+    return { version: AGENT_SCHEDULING_PROTOCOL_VERSION };
+  }
+  if (!policy.target || !policy.request || !policy.access) {
+    throw new AgentSchedulingError("Network scheduling grant is missing.", 410);
+  }
+  return {
+    version: NETWORK_SCHEDULING_PROTOCOL_VERSION,
+    target: policy.target,
+    request: policy.request,
+    access: policy.access,
+  };
+}
+
+function earlierIsoInstant(first: string, second: string) {
+  return Date.parse(first) <= Date.parse(second) ? first : second;
 }
 
 function schedulingEnvelopeTimes(existingExpiresAt?: string) {
