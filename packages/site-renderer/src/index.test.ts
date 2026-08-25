@@ -95,6 +95,13 @@ describe("site generator", () => {
       'class="site-navigation site-navigation-home site-navigation-compact"',
     );
     expect(files["index.html"]).not.toContain('class="nav nav-inline"');
+    expect(files["index.html"]).toContain(
+      'class="site-menu-trigger" type="button" data-site-menu-open aria-label="Open menu"',
+    );
+    expect(files["index.html"]).not.toContain('<span>Menu</span>');
+    expect(files["index.html"]).toContain(
+      ".site-navigation-home.site-navigation-compact{position:absolute;top:16px;right:16px",
+    );
     expect(files["index.html"]).toContain('aria-haspopup="dialog"');
     expect(files["index.html"]).toContain(
       '<dialog id="site-navigation-dialog"',
