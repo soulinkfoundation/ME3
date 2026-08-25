@@ -22,7 +22,7 @@
     "@me3-core/plugin-telegram": "workspace:*",
     "@me3-core/site-renderer": "workspace:*",
     "@me3/knowledge": "workspace:*",
-    "hono": "^4.12.26",
+    "hono": "^4.12.34",
     "ical.js": "^2.2.1",
     "me3-protocol": "4.0.1",
     "stripe": "^17.0.0"
@@ -31,6 +31,6 @@
     "@cloudflare/workers-types": "^4.20260620.1",
     "typescript": "^5.3.3",
     "vitest": "^4.1.9",
-    "wrangler": "^4.103.0"
+    "wrangler": "^4.125.0"
   }
 }
