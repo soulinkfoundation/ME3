@@ -191,6 +191,8 @@ const DEFAULT_VIBE = "warm";
 
 const VIBE_FONT_URLS: Record<string, string> = {
   tech: "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap",
+  paper:
+    "https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap",
 };
 
 const ICONS: Record<string, string> = {
@@ -419,7 +421,7 @@ function pageShell(
   <title>${escapeHtml(options.title)}</title>
   <meta name="description" content="${escapeHtml(options.description)}">
   ${headLinks}
-  <style>${siteCss(options.vibe, profile.links?._accent)}${siteCssOverrides(options.vibe)}${contentImageCss()}${contentAudioCss()}${navigationGroupCss()}${bookingControlsCss()}.main.no-banner .profile-header{margin-top:0}</style>
+  <style>${siteCss(options.vibe, profile.links?._accent)}${options.vibe === "paper" ? paperSiteCss() : ""}${siteCssOverrides(options.vibe)}${contentImageCss()}${contentAudioCss()}${navigationGroupCss()}${bookingControlsCss()}.main.no-banner .profile-header{margin-top:0}</style>
 </head>
 <body data-vibe="${escapeHtml(options.vibe)}" data-navigation-style="${navigationStyle}">
   <div class="container">
@@ -1680,7 +1682,8 @@ function formatLinkHref(platform: string, value: string): string {
 }
 
 function getVibe(profile: Me3SiteProfile): string {
-  return profile.links?._vibe || DEFAULT_VIBE;
+  const vibe = profile.links?._vibe || DEFAULT_VIBE;
+  return vibe === "natural" ? "paper" : vibe;
 }
 
 function timestampForSort(value?: string): number {
@@ -1911,6 +1914,10 @@ function escapeHtml(value: string): string {
 
 function siteCssOverrides(vibe: string): string {
   return `.name{font-size:28px;line-height:1.2;margin:12px 0 6px}.location{font-size:14px;line-height:1.5}.bio{font-size:16px;line-height:1.5}.newsletter form{display:flex;flex-wrap:wrap;gap:10px;max-width:520px;margin:18px auto 10px}.newsletter input[type=email]{min-width:200px;flex:1;background:var(--bg);border:2px solid var(--border);color:var(--text);cursor:text}.newsletter input[type=email]::placeholder{color:var(--muted)}.newsletter-honeypot{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important}.newsletter-status{min-height:1.4em;margin:8px 0 0!important;color:var(--muted);font-size:.95rem!important}.newsletter-status.is-error{color:#b42318}.newsletter button:disabled{cursor:wait;opacity:.7}.booking-widget{max-width:760px;margin:0 auto}.booking-date-picker{display:flex;flex-direction:column;align-items:stretch;gap:12px;margin:0 auto 8px;width:100%;max-width:520px}.booking-date-picker label{text-align:center;font-weight:700;color:var(--text);font-size:1.1rem}.booking-date-input-wrap{width:100%;overflow:hidden;border-radius:var(--radius);cursor:pointer}.booking-date-picker input[type=date]{display:block;width:100%;max-width:100%;min-width:0;margin:0;padding:16px 20px;border:0;border-radius:18px;background:var(--surface);color:var(--text);box-sizing:border-box;cursor:pointer;color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:1.1rem}.booking-date-picker input[type=date]::-webkit-calendar-picker-indicator{cursor:pointer}.booking-date-picker input[type=date]::-webkit-date-and-time-value{text-align:left;min-width:0}.testimonials-section{padding:24px 0;margin:32px 0}.testimonials-section .section-title{font-size:18px;font-weight:700;text-align:center;margin:0 0 16px}.testimonials-carousel{overflow:hidden}.testimonials-track{display:flex;gap:12px;padding:15px;transition:transform .25s ease}.testimonials-slide{flex:0 0 85%}.testimonials-single{display:flex;justify-content:center}.carousel-dots{display:flex;justify-content:center;gap:6px;margin-top:12px}.carousel-dot{width:8px;height:8px;border-radius:999px;border:0;background:var(--border);cursor:pointer;padding:0}.carousel-dot.active{background:var(--text)}.testimonial-card{border:1px solid var(--border);border-radius:18px;background:var(--bg);padding:20px;box-shadow:0 12px 24px rgba(0,0,0,.05);margin:0;color:var(--text)}.testimonial-header{display:flex;align-items:center;gap:14px;margin-bottom:12px}.testimonial-avatar{width:52px;height:52px;border-radius:999px;object-fit:cover;border:1px solid var(--border);flex:0 0 auto}.testimonial-avatar.placeholder{display:flex;align-items:center;justify-content:center;background:var(--border);color:var(--text);font-weight:700}.testimonial-meta{flex:1;min-width:0}.testimonial-name{font-weight:700;font-size:16px;margin:0}.testimonial-handle{color:var(--muted);font-size:14px;margin:0}.testimonial-link{font-weight:700;font-size:13px;text-decoration:underline;color:var(--accent)}.testimonial-quote{font-size:16px;line-height:1.6;margin:0}@media(max-width:480px){.newsletter input[type=email]{min-width:100%}.newsletter button{width:100%}.testimonials-slide{flex-basis:100%}}${vibe === "tech" ? `body[data-vibe=tech]{font-size:14px;line-height:1.5}body[data-vibe=tech] .name{font-size:24px;line-height:1.2;font-weight:700;letter-spacing:0;margin:12px 0 4px}body[data-vibe=tech] .bio{font-size:16px}body[data-vibe=tech] .location{font-size:14px}body[data-vibe=tech] .newsletter input[type=email],body[data-vibe=tech] .booking-date-picker input[type=date]{background:#0a0a0a;border-color:#2a2a2a;color:#e0e0e0;color-scheme:dark}body[data-vibe=tech] .testimonial-card{background:#050505;border-color:#2a2a2a;border-radius:24px;box-shadow:none}body[data-vibe=tech] .testimonial-avatar.placeholder{background:#242424}body[data-vibe=tech] .testimonials-section{background:transparent}` : ""}`;
+}
+
+function paperSiteCss(): string {
+  return `body[data-vibe=paper]{font-size:17px;line-height:1.65}body[data-vibe=paper] .container{border-right:1px solid var(--border);border-left:1px solid var(--border)}body[data-vibe=paper] .banner{border-bottom:1px solid var(--border);border-radius:0}body[data-vibe=paper] .avatar{border:5px double var(--surface);box-shadow:0 0 0 1px var(--border)}body[data-vibe=paper] .name,body[data-vibe=paper] .content h1,body[data-vibe=paper] .content h2,body[data-vibe=paper] .content h3,body[data-vibe=paper] .booking h2,body[data-vibe=paper] .newsletter h2,body[data-vibe=paper] .testimonials h2{font-family:"Fraunces","Iowan Old Style",Georgia,serif}body[data-vibe=paper] .name{font-size:40px;font-weight:600;letter-spacing:-.025em;line-height:1.05}body[data-vibe=paper] .location{font-size:13px;font-style:normal;letter-spacing:.12em;text-transform:uppercase}body[data-vibe=paper] .bio{max-width:470px;font-size:18px;line-height:1.65}body[data-vibe=paper] .site-navigation-home{padding:8px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}body[data-vibe=paper] .nav-link{border-radius:var(--radius-sm);font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}body[data-vibe=paper] .nav-link:hover{background:rgba(181,82,45,.08);color:var(--accent)}body[data-vibe=paper] .nav-link.active{background:var(--accent);color:#fffaf2}body[data-vibe=paper] .buttons{gap:10px}body[data-vibe=paper] .cta-button{border:1px solid var(--accent);border-radius:var(--radius-sm);font-size:15px;font-weight:600;letter-spacing:.02em}body[data-vibe=paper] .cta-button.primary{background:var(--accent);color:#fffaf2}body[data-vibe=paper] .cta-button.secondary,body[data-vibe=paper] .cta-button.outline{border-color:var(--accent);background:transparent;color:var(--accent)}body[data-vibe=paper] .links{gap:8px}body[data-vibe=paper] .link-item{width:44px;height:44px;border:1px solid var(--border);background:transparent}body[data-vibe=paper] .link-item:hover{border-color:var(--accent);color:var(--accent)}body[data-vibe=paper] .content{font-size:18px;line-height:1.72}body[data-vibe=paper] .content h1{font-size:42px;font-weight:600;letter-spacing:-.025em;line-height:1.08}body[data-vibe=paper] .content h2{margin-top:1.8em;font-size:30px;font-weight:600;line-height:1.15}body[data-vibe=paper] .content h3{font-size:22px;font-weight:600}body[data-vibe=paper] .content a,body[data-vibe=paper] .testimonial-link,body[data-vibe=paper] .footer a{color:var(--accent);text-decoration-color:rgba(181,82,45,.5);text-decoration-thickness:1px;text-underline-offset:3px}body[data-vibe=paper] .content blockquote{margin-left:0;border-left:3px solid var(--accent);padding-left:20px;color:var(--muted);font-family:"Fraunces","Iowan Old Style",Georgia,serif;font-size:1.12em;font-style:italic}body[data-vibe=paper] .content code{border-radius:var(--radius-sm);background:#f3e5d6}body[data-vibe=paper] .content pre,body[data-vibe=paper] .collection-card,body[data-vibe=paper] .blog-item,body[data-vibe=paper] .shop-item{border:1px solid var(--border);border-radius:var(--radius-sm);background:transparent}body[data-vibe=paper] .testimonials,body[data-vibe=paper] .booking,body[data-vibe=paper] .newsletter{border:1px solid var(--border);border-radius:var(--radius-md);background:#f8efe3}body[data-vibe=paper] .testimonial-card,body[data-vibe=paper] .booking-card,body[data-vibe=paper] input,body[data-vibe=paper] select,body[data-vibe=paper] textarea{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);box-shadow:none}body[data-vibe=paper] .footer{border-top:1px solid var(--border);font-size:13px;letter-spacing:.04em}@media(max-width:640px){body[data-vibe=paper] .container{border-right:0;border-left:0}body[data-vibe=paper] .name{font-size:34px}body[data-vibe=paper] .content h1{font-size:36px}}`;
 }
 
 function contentImageCss(): string {
@@ -2163,6 +2170,19 @@ function siteThemeTokens(vibe: string, accentOverride?: string): {
       accent: accentOverride || "#00ff88",
       accentText: "#050505",
       font: '"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace',
+    };
+  }
+
+  if (vibe === "paper") {
+    return {
+      bg: "#efe5d7",
+      surface: "#fffaf2",
+      text: "#2b211b",
+      muted: "#6f6258",
+      border: "#d8c8b6",
+      accent: accentOverride || "#b5522d",
+      accentText: "#fffaf2",
+      font: '"Newsreader","Iowan Old Style","Palatino Linotype",serif',
     };
   }
 

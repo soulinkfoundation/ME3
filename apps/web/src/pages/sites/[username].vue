@@ -2,7 +2,7 @@
 import { definePage } from "unplugin-vue-router/runtime";
 import { ref, computed, onBeforeUnmount, onMounted } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
-import { useSitesStore } from "../../stores/sites";
+import { useSitesStore, type SiteContent } from "../../stores/sites";
 import { LANDING_PAGES_PLUGIN_ID } from "@me3-core/plugin-landing-pages";
 import { api } from "../../api";
 import { useWizardStore } from "../../stores/wizard";
@@ -13,11 +13,9 @@ import CustomDomain from "../../components/CustomDomain.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import JSZip from "jszip";
 import {
-  defaultVibe,
   getVibeCss,
   getVibeFontUrl,
-  type VibeId,
-  vibeIds,
+  normalizeVibeId,
 } from "../../styles/vibes";
 import {
   permanentPublicSiteUrl,
@@ -39,7 +37,7 @@ const route = useRoute();
 const router = useRouter();
 const sites = useSitesStore();
 const wizard = useWizardStore();
-const { toastError } = useAppToast();
+const { toastError, toastSuccess } = useAppToast();
 
 /** Nested children need the parent RouterView or their pages never appear. */
 const isNestedSitesTool = computed(
@@ -54,6 +52,8 @@ const username = computed(() => route.params.username as string);
 const site = computed(() =>
   sites.sites.find((s) => s.username === username.value),
 );
+// Keep the existing exporter dormant while its product value is reassessed.
+const siteZipExportEnabled = false;
 const siteType = computed(() => site.value?.site_type || "profile");
 const isLandingPage = computed(() => siteType.value === "landing_page");
 const isProfileSite = computed(() => site.value?.site_role === "profile");
@@ -102,6 +102,135 @@ const showDeleteConfirm = ref(false);
 const isDeleting = ref(false);
 const publishBusy = ref(false);
 const publishError = ref("");
+type SiteProfile = NonNullable<SiteContent["profile"]>;
+const siteProfile = ref<SiteProfile | null>(null);
+const siteLogoFileInput = ref<HTMLInputElement | null>(null);
+const siteLogoLoading = ref(false);
+const siteLogoSaving = ref(false);
+const siteLogoError = ref("");
+const siteLogoStatus = ref("");
+const siteLogoRevision = ref(0);
+const hasSiteLogo = computed(() => Boolean(siteProfile.value?.logo));
+const siteLogoPreview = computed(() => {
+  const source =
+    siteProfile.value?.logo ||
+    siteProfile.value?.avatar ||
+    site.value?.avatar;
+  if (!source) return null;
+
+  try {
+    const siteBase = new URL(
+      `${siteUrl.value.replace(/\/$/, "")}/`,
+      window.location.origin,
+    );
+    const preview = new URL(source, siteBase);
+    if (siteLogoRevision.value > 0) {
+      preview.searchParams.set("me3-logo", String(siteLogoRevision.value));
+    }
+    return preview.toString();
+  } catch {
+    return source;
+  }
+});
+
+async function loadSiteProfile(): Promise<SiteProfile | null> {
+  if (!isPersistentSite.value) return null;
+
+  siteLogoLoading.value = true;
+  try {
+    const content = await sites.getSiteContent(username.value);
+    if (!content?.ok || !content.profile) {
+      siteLogoError.value = "Could not load the current site logo.";
+      return null;
+    }
+    siteProfile.value = structuredClone(content.profile);
+    siteLogoError.value = "";
+    return siteProfile.value;
+  } finally {
+    siteLogoLoading.value = false;
+  }
+}
+
+function openSiteLogoPicker() {
+  if (!siteLogoSaving.value) siteLogoFileInput.value?.click();
+}
+
+async function saveSiteProfile(
+  nextProfile: SiteProfile,
+  successMessage: string,
+): Promise<boolean> {
+  const sourceFile = new File(
+    [JSON.stringify(nextProfile, null, 2)],
+    "me.json",
+    { type: "application/json" },
+  );
+  const saved = await sites.uploadSite(username.value, [sourceFile]);
+  if (!saved) {
+    siteLogoError.value = sites.error || "Could not update the site logo.";
+    return false;
+  }
+
+  siteProfile.value = nextProfile;
+  siteLogoRevision.value = Date.now();
+  siteLogoStatus.value = successMessage;
+  toastSuccess(successMessage);
+  return true;
+}
+
+async function handleSiteLogoSelect(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file || siteLogoSaving.value) return;
+
+  siteLogoError.value = "";
+  siteLogoStatus.value = "";
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    siteLogoError.value = "Choose a PNG, JPEG, or WebP image.";
+    return;
+  }
+  if (file.size > 1_900_000) {
+    siteLogoError.value = "Choose an image smaller than 1.9 MB.";
+    return;
+  }
+
+  siteLogoSaving.value = true;
+  try {
+    const currentProfile = siteProfile.value || (await loadSiteProfile());
+    if (!currentProfile) return;
+
+    const uploaded = await sites.uploadImage(username.value, file, "logo");
+    if (!uploaded?.ok) {
+      siteLogoError.value = sites.error || "Could not upload the site logo.";
+      return;
+    }
+
+    const nextProfile = structuredClone(currentProfile);
+    nextProfile.logo = `./${uploaded.path}`;
+    await saveSiteProfile(nextProfile, "Site logo updated.");
+  } finally {
+    siteLogoSaving.value = false;
+  }
+}
+
+async function removeSiteLogo() {
+  if (siteLogoSaving.value) return;
+
+  siteLogoSaving.value = true;
+  siteLogoError.value = "";
+  siteLogoStatus.value = "";
+  try {
+    const currentProfile = siteProfile.value || (await loadSiteProfile());
+    if (!currentProfile) return;
+
+    const nextProfile = structuredClone(currentProfile);
+    delete nextProfile.logo;
+    await saveSiteProfile(nextProfile, "The site avatar is now used as the logo.");
+  } finally {
+    siteLogoSaving.value = false;
+  }
+}
+
 async function syncLandingPagesFeature() {
   try {
     const response = await api.get<{
@@ -137,8 +266,12 @@ onMounted(async () => {
   window.addEventListener("me3:plugins-changed", handlePluginsChanged);
 
   if (!site.value) {
-    router.push("/calendar");
+    router.replace("/sites");
     return;
+  }
+
+  if (isPersistentSite.value) {
+    await loadSiteProfile();
   }
 
   if (typeof route.query.edit === "string") {
@@ -478,9 +611,7 @@ async function downloadSite() {
     // Get vibe CSS (default to configured default if not available)
     const rawVibe =
       typeof me3Json.links?._vibe === "string" ? me3Json.links._vibe : "";
-    const vibeId = vibeIds.includes(rawVibe as VibeId)
-      ? (rawVibe as VibeId)
-      : defaultVibe;
+    const vibeId = normalizeVibeId(rawVibe);
     const vibeCss = getVibeCss(vibeId);
     const vibeFontUrl = getVibeFontUrl(vibeId);
     const vibeFontLink = vibeFontUrl
@@ -699,7 +830,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
           </button>
 
           <button
-            v-if="site?.published_at && isPersistentSite"
+            v-if="siteZipExportEnabled && site?.published_at && isPersistentSite"
             class="action-card"
             @click="downloadSite"
           >
@@ -713,6 +844,91 @@ Note: Opening index.html directly (file://) won't work due to browser security.
           </button>
         </div>
         <p v-if="publishError" class="error">{{ publishError }}</p>
+      </section>
+
+      <section
+        v-if="isPersistentSite"
+        class="site-logo-section"
+        aria-labelledby="site-logo-title"
+        :aria-busy="siteLogoLoading || siteLogoSaving"
+      >
+        <div class="section-heading">
+          <div>
+            <h2 id="site-logo-title">Site logo</h2>
+            <p>
+              Used in browser tabs and bookmarks. If you don’t add one, the site
+              avatar is used automatically.
+            </p>
+          </div>
+        </div>
+
+        <p
+          v-if="siteLogoLoading"
+          class="site-logo-loading"
+          role="status"
+          aria-live="polite"
+        >
+          Loading site logo…
+        </p>
+        <div v-else class="site-logo-control">
+          <div class="site-logo-preview" aria-hidden="true">
+            <img v-if="siteLogoPreview" :src="siteLogoPreview" alt="" />
+            <UiIcon v-else name="Image" :size="24" />
+          </div>
+          <div class="site-logo-actions">
+            <Button
+              color="neutral"
+              shape="soft"
+              size="compact"
+              type="button"
+              :disabled="siteLogoSaving"
+              @click="openSiteLogoPicker"
+            >
+              {{
+                siteLogoSaving
+                  ? "Saving…"
+                  : hasSiteLogo
+                    ? "Change logo"
+                    : "Upload logo"
+              }}
+            </Button>
+            <Button
+              v-if="hasSiteLogo"
+              color="ghost"
+              shape="soft"
+              size="compact"
+              type="button"
+              :disabled="siteLogoSaving"
+              @click="removeSiteLogo"
+            >
+              Use avatar
+            </Button>
+            <input
+              ref="siteLogoFileInput"
+              class="site-logo-input"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              aria-label="Choose site logo"
+              aria-describedby="site-logo-hint"
+              :disabled="siteLogoSaving"
+              @change="handleSiteLogoSelect"
+            />
+            <span id="site-logo-hint" class="site-logo-hint">
+              Square PNG, JPEG, or WebP · 1.9 MB max
+            </span>
+          </div>
+        </div>
+        <p v-if="siteLogoError" class="site-logo-error" role="alert">
+          {{ siteLogoError }}
+        </p>
+        <p
+          v-else-if="siteLogoStatus"
+          class="site-logo-status"
+          role="status"
+          aria-live="polite"
+        >
+          {{ siteLogoStatus }}
+        </p>
       </section>
 
       <section
@@ -1197,6 +1413,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   margin-top: 24px;
 }
 
+.site-logo-section,
 .domain-section {
   margin-top: 24px;
   margin-bottom: 24px;
@@ -1206,20 +1423,112 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   background: var(--ui-surface, var(--color-bg));
 }
 
+.domain-section {
+  margin-top: 0;
+}
+
+.site-logo-section {
+  display: grid;
+  gap: 16px;
+}
+
+.site-logo-section .section-heading,
 .domain-section .section-heading {
   margin-bottom: 16px;
 }
 
+.site-logo-section .section-heading {
+  margin-bottom: 0;
+}
+
+.site-logo-section .section-heading h2,
 .domain-section .section-heading h2 {
   margin: 0;
   font-size: 18px;
 }
 
+.site-logo-section .section-heading p,
 .domain-section .section-heading p {
   margin: 5px 0 0;
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 13px;
   line-height: 1.5;
+}
+
+.site-logo-control {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.site-logo-preview {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface-muted, var(--color-border));
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.site-logo-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.site-logo-actions {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.site-logo-actions :deep(.me3-btn) {
+  min-height: 44px;
+}
+
+.site-logo-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.site-logo-hint {
+  flex-basis: 100%;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+}
+
+.site-logo-loading,
+.site-logo-error,
+.site-logo-status {
+  margin: 0;
+  font-size: 13px;
+}
+
+.site-logo-loading {
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.site-logo-error {
+  color: var(--ui-danger, #dc2626);
+}
+
+.site-logo-status {
+  color: var(--ui-success, #15803d);
 }
 
 .domain-section :deep(.custom-domain-section) {
@@ -1281,6 +1590,9 @@ Note: Opening index.html directly (file://) won't work due to browser security.
     grid-template-columns: 1fr;
   }
 
+  .site-logo-control {
+    align-items: flex-start;
+  }
 }
 
 @media (prefers-color-scheme: dark) {

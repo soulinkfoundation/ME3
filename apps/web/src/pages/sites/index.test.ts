@@ -117,13 +117,33 @@ describe("Sites dashboard", () => {
     );
   });
 
+  it("renders cached site cards immediately without loading copy", async () => {
+    const sites = useSitesStore();
+    sites.sites = [
+      siteRecord("owner", "profile", "2026-08-20T10:00:00.000Z"),
+    ];
+    sites.loaded = true;
+    sites.ensureSites = vi.fn(async () => undefined) as never;
+    sites.fetchSitePages = vi.fn(async () => []) as never;
+    sites.getSiteQuota = vi.fn(
+      () => new Promise<SiteQuota | null>(() => undefined),
+    ) as never;
+
+    const wrapper = mount(SitesPage, mountOptions(router));
+    await flushPromises();
+
+    expect(wrapper.findAll("a.site-card")).toHaveLength(1);
+    expect(wrapper.text()).toContain("@owner");
+    expect(wrapper.text()).not.toContain("Loading your sites");
+  });
+
   async function mountDashboard(
     records: Site[],
     siteQuota: SiteQuota,
   ) {
     const sites = useSitesStore();
     sites.sites = records;
-    sites.fetchSites = vi.fn(async () => undefined) as never;
+    sites.ensureSites = vi.fn(async () => undefined) as never;
     sites.fetchSitePages = vi.fn(async () => []) as never;
     sites.getSiteQuota = vi.fn(async () => siteQuota) as never;
     const wrapper = mount(SitesPage, mountOptions(router));

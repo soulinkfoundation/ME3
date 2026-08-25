@@ -9,7 +9,7 @@
 import warmCss from "./warm.css?raw";
 import techCss from "./tech.css?raw";
 import retroCss from "./retro.css?raw";
-import naturalCss from "./natural.css?raw";
+import paperCss from "./paper.css?raw";
 import me3Css from "./me3.css?raw";
 
 export type VibeId =
@@ -17,6 +17,7 @@ export type VibeId =
   | "tech"
   | "retro"
   | "natural"
+  | "paper"
   | "me3";
 export type VibeMode = "light" | "dark";
 
@@ -92,20 +93,37 @@ export const vibes: Record<VibeId, Vibe> = {
   },
   natural: {
     id: "natural",
-    name: "natural",
-    description: "Botanical and airy, like a field journal",
-    css: naturalCss,
-    fontFamily: "'Fraunces', 'Cormorant Garamond', serif",
+    name: "paper",
+    description: "Paper-white and editorial with a burnt-orange accent",
+    css: paperCss,
+    fontFamily: "'Fraunces', 'Newsreader', serif",
     colors: {
-      bg: "#edf4ea",
-      text: "#233126",
-      textMuted: "#5d6b60",
-      border: "#c8d8c3",
-      accent: "#2f5d3a",
+      bg: "#fffaf2",
+      text: "#2b211b",
+      textMuted: "#6f6258",
+      border: "#d8c8b6",
+      accent: "#b5522d",
     },
     mode: "light",
     fontUrl:
-      "https://fonts.googleapis.com/css2?family=Fraunces:wght@500;700&family=Newsreader:wght@400;500;600&display=swap",
+      "https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap",
+  },
+  paper: {
+    id: "paper",
+    name: "paper",
+    description: "Paper-white and editorial with a burnt-orange accent",
+    css: paperCss,
+    fontFamily: "'Fraunces', 'Newsreader', serif",
+    colors: {
+      bg: "#fffaf2",
+      text: "#2b211b",
+      textMuted: "#6f6258",
+      border: "#d8c8b6",
+      accent: "#b5522d",
+    },
+    mode: "light",
+    fontUrl:
+      "https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap",
   },
   me3: {
     id: "me3",
@@ -128,9 +146,17 @@ export const vibes: Record<VibeId, Vibe> = {
 };
 
 export const vibeIds = Object.keys(vibes) as VibeId[];
-export const selectableVibeIds: VibeId[] = ["warm", "tech", "me3"];
+export const selectableVibeIds: VibeId[] = ["warm", "tech", "paper", "me3"];
 export const legacyVibeIds: VibeId[] = ["retro", "natural"];
 export const defaultVibe: VibeId = "warm";
+
+/** Map retired theme names to their current selectable equivalent. */
+export function normalizeVibeId(value: unknown): VibeId {
+  if (value === "natural") return "paper";
+  return typeof value === "string" && isVibeId(value)
+    ? value
+    : defaultVibe;
+}
 
 /**
  * Get the CSS for a vibe by ID

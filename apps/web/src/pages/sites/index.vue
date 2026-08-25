@@ -25,7 +25,8 @@ definePage({
 const sites = useSitesStore();
 const landingPagesEnabled = ref(false);
 const quota = ref<SiteQuota | null>(null);
-const dashboardLoading = ref(true);
+const sitesReady = ref(sites.loaded);
+const quotaLoading = ref(true);
 
 const profileSite = computed(() =>
   sites.sites.find((site) => site.site_role === "profile"),
@@ -85,7 +86,7 @@ const quotaFull = computed(
     !quota.value.can_create_additional_site,
 );
 const quotaUnavailable = computed(
-  () => Boolean(profileSite.value) && !dashboardLoading.value && !quota.value,
+  () => Boolean(profileSite.value) && !quotaLoading.value && !quota.value,
 );
 
 const createProfileRoute = {
@@ -159,17 +160,22 @@ function handlePluginsChanged() {
   void syncLandingPagesPlugin();
 }
 
-onMounted(async () => {
+async function loadDashboardDetails(): Promise<void> {
   try {
-    await sites.fetchSites();
     await Promise.all([
       refreshQuota(),
       syncLandingPagesPlugin(),
     ]);
   } finally {
-    dashboardLoading.value = false;
+    quotaLoading.value = false;
   }
+}
+
+onMounted(async () => {
   window.addEventListener("me3:plugins-changed", handlePluginsChanged);
+  await sites.ensureSites();
+  sitesReady.value = true;
+  void loadDashboardDetails();
 });
 
 onBeforeUnmount(() => {
@@ -197,15 +203,6 @@ onBeforeUnmount(() => {
       </header>
 
       <p
-        v-if="dashboardLoading"
-        class="sites-message"
-        role="status"
-        aria-live="polite"
-      >
-        Loading your sites…
-      </p>
-
-      <p
         v-if="visibleSitesError"
         class="sites-message sites-message--error"
         role="alert"
@@ -214,7 +211,7 @@ onBeforeUnmount(() => {
       </p>
 
       <section
-        v-if="!dashboardLoading && !profileSite"
+        v-if="sitesReady && !visibleSitesError && !profileSite"
         class="profile-callout"
         aria-labelledby="profile-callout-title"
       >
@@ -243,7 +240,7 @@ onBeforeUnmount(() => {
       </p>
 
       <section
-        v-if="!dashboardLoading && persistentSites.length"
+        v-if="sitesReady && persistentSites.length"
         class="sites-grid"
         aria-label="Your sites"
       >

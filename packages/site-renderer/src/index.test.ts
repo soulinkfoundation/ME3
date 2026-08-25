@@ -751,6 +751,44 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain(".newsletter button{font:inherit;font-weight:800;min-height:48px;border:0;border-radius:var(--radius-md);background:var(--accent);color:#ffffff;padding:12px 22px");
   });
 
+  it("publishes the paper vibe with editorial type and burnt-orange ink", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        name: "Paper Site",
+        bio: "Notes from the edge of the page.",
+        links: { _vibe: "paper" },
+        buttons: [{ text: "Read the latest", url: "https://example.com" }],
+      },
+      [],
+    );
+
+    const html = files["index.html"];
+    expect(html).toContain('body data-vibe="paper"');
+    expect(html).toContain("family=Fraunces");
+    expect(html).toContain("--bg:#efe5d7");
+    expect(html).toContain("--surface:#fffaf2");
+    expect(html).toContain("--accent:#b5522d");
+    expect(html).toContain("body[data-vibe=paper] .name");
+    expect(html).toContain("font-family:\"Fraunces\"");
+    expect(html).toContain(
+      "body[data-vibe=paper] .cta-button.primary{background:var(--accent);color:#fffaf2}",
+    );
+  });
+
+  it("renders the retired natural vibe as paper", async () => {
+    const files = await generateSiteHtml(
+      {
+        name: "Legacy Natural Site",
+        links: { _vibe: "natural" },
+      },
+      [],
+    );
+
+    expect(files["index.html"]).toContain('body data-vibe="paper"');
+    expect(files["index.html"]).toContain("--accent:#b5522d");
+  });
+
   it("uses title-derived blog and offerings paths in generated navigation", async () => {
     const files = await generateSiteHtml(
       {

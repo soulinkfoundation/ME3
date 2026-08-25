@@ -8,7 +8,11 @@ import {
 } from "@me3-core/site-renderer";
 import { productSendsPurchaseConfirmation } from "../../../../shared/product-purchase-confirmation";
 import { API_BASE } from "../api";
-import { type VibeId, defaultVibe, vibeIds } from "../styles/vibes";
+import {
+  type VibeId,
+  defaultVibe,
+  normalizeVibeId,
+} from "../styles/vibes";
 import {
   getStoredTestimonialPlacement,
   normalizeTestimonialPlacement,
@@ -4092,7 +4096,7 @@ export const useWizardStore = defineStore("wizard", () => {
         username.value = storedUsername || "";
         siteRole.value =
           state.siteRole === "organization" ? "organization" : "profile";
-        vibe.value = state.vibe || defaultVibe;
+        vibe.value = normalizeVibeId(state.vibe);
         accentOverride.value = state.accentOverride || null;
         const hasOptionalWebsiteFeatureState =
           state.optionalWebsiteFeaturesVersion === 1;
@@ -4620,12 +4624,8 @@ export const useWizardStore = defineStore("wizard", () => {
       }
     }
 
-    // Set vibe if valid, otherwise use default
-    if (savedVibe && vibeIds.includes(savedVibe as VibeId)) {
-      vibe.value = savedVibe as VibeId;
-    } else {
-      vibe.value = defaultVibe;
-    }
+    // Retired vibe names are upgraded to their selectable replacement.
+    vibe.value = normalizeVibeId(savedVibe);
 
     // Set accent override if present
     accentOverride.value = savedAccent || null;

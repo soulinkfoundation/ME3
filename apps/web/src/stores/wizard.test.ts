@@ -63,6 +63,27 @@ describe("wizard store", () => {
       expect(store.draftSourceUrl).toBe("https://example.com");
     });
 
+    it("migrates the retired natural vibe to paper", () => {
+      localStorage.setItem(
+        "me3_wizard_state",
+        JSON.stringify({
+          profile: {
+            name: "Test User",
+            handle: "testuser",
+            links: {},
+            buttons: [],
+          },
+          pages: [],
+          products: [],
+          vibe: "natural",
+        }),
+      );
+
+      const store = useWizardStore();
+
+      expect(store.vibe).toBe("paper");
+    });
+
     it("keeps the active editor when migrating a legacy numeric wizard step", () => {
       localStorage.setItem(
         "me3_wizard_state",
@@ -1117,6 +1138,25 @@ describe("wizard store", () => {
       expect(store.pages).toHaveLength(1);
       expect(store.username).toBe("existing");
       expect(store.isUsernameAvailable).toBe(true);
+    });
+
+    it("upgrades a published natural vibe to paper when editing", () => {
+      const store = useWizardStore();
+
+      store.loadFromSiteContent(
+        {
+          name: "Existing User",
+          handle: "existing",
+          links: { _vibe: "natural" },
+        },
+        [],
+        [],
+        [],
+        "existing",
+      );
+
+      expect(store.vibe).toBe("paper");
+      expect(store.generateMe3Json().links?._vibe).toBe("paper");
     });
 
     it("keeps the selected additional-site role when loading site content", () => {

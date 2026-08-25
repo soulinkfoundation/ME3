@@ -66,6 +66,8 @@ async function contentAssetBlob(
 }
 
 const wizard = useWizardStore();
+// Keep the existing exporter dormant while its product value is reassessed.
+const siteZipExportEnabled = false;
 const isOrganization = computed(() => wizard.siteRole === "organization");
 const auth = useAuthStore();
 const router = useRouter();
@@ -79,14 +81,9 @@ const {
 const { toastError } = useAppToast();
 
 const isDownloading = ref(false);
-const logoFileInput = ref<HTMLInputElement | null>(null);
-const logoError = ref<string | null>(null);
 
 const isLoggedIn = computed(() => auth.isAuthenticated);
 const canCustomizeFooter = computed(() => true);
-const siteIconPreview = computed(
-  () => wizard.profile.logo || wizard.profile.avatar,
-);
 
 // Footer customization modal
 const showFooterModal = ref(false);
@@ -109,50 +106,6 @@ function setAccentOverride(color: string) {
 
 function resetAccentOverride() {
   wizard.setAccentOverride(null);
-}
-
-function openLogoPicker() {
-  logoFileInput.value?.click();
-}
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () =>
-      typeof reader.result === "string"
-        ? resolve(reader.result)
-        : reject(new Error("Failed to read image"));
-    reader.onerror = () => reject(new Error("Failed to read image"));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function handleLogoSelect(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  if (!file) return;
-
-  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
-    logoError.value = "Choose a PNG, JPEG, or WebP image.";
-    return;
-  }
-  if (file.size > 1_900_000) {
-    logoError.value = "Choose an image smaller than 1.9 MB.";
-    return;
-  }
-
-  try {
-    wizard.updateProfile({ logo: await fileToDataUrl(file), logoBlob: file });
-    logoError.value = null;
-  } catch {
-    logoError.value = "We couldn’t read that image. Try another file.";
-  }
-}
-
-function removeLogo() {
-  wizard.updateProfile({ logo: null, logoBlob: null });
-  logoError.value = null;
 }
 
 async function downloadZip() {
@@ -433,7 +386,7 @@ function closeFooterModal() {
 <template>
   <div class="step-publish">
     <h2>{{ isOrganization ? "This site is ready!" : "Your site is ready!" }}</h2>
-    <p class="step-desc">Choose a vibe, then publish or download.</p>
+    <p class="step-desc">Choose a vibe, then publish.</p>
 
     <!-- Vibe Selector -->
     <div class="vibe-section">
@@ -503,46 +456,6 @@ function closeFooterModal() {
       </div>
     </div>
 
-    <section class="site-logo-section" aria-labelledby="site-logo-title">
-      <div class="site-logo-copy">
-        <h3 id="site-logo-title">Site logo</h3>
-        <p>
-          Used in browser tabs and bookmarks. If you don’t add one, the
-          {{ isOrganization ? "site logo" : "avatar" }} is used automatically.
-        </p>
-      </div>
-      <div class="site-logo-control">
-        <div class="site-logo-preview" aria-hidden="true">
-          <img v-if="siteIconPreview" :src="siteIconPreview" alt="" />
-          <UiIcon v-else name="Image" :size="24" />
-        </div>
-        <div class="site-logo-actions">
-          <button class="site-logo-button" type="button" @click="openLogoPicker">
-            {{ wizard.profile.logo ? "Change logo" : "Upload logo" }}
-          </button>
-          <button
-            v-if="wizard.profile.logo"
-            class="site-logo-remove"
-            type="button"
-            @click="removeLogo"
-          >
-            Use avatar
-          </button>
-          <input
-            ref="logoFileInput"
-            class="site-logo-input"
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            @change="handleLogoSelect"
-          />
-          <span class="site-logo-hint">Square PNG, JPEG, or WebP · 1.9 MB max</span>
-        </div>
-      </div>
-      <p v-if="logoError" class="site-logo-error" role="alert">
-        {{ logoError }}
-      </p>
-    </section>
-
     <!-- Preview -->
     <div class="publish-preview">
       <GeneratedSitePreview
@@ -580,7 +493,7 @@ function closeFooterModal() {
         </p>
       </div>
 
-      <div class="publish-action">
+      <div v-if="siteZipExportEnabled" class="publish-action">
         <button
           class="btn secondary"
           :disabled="isDownloading"
@@ -736,116 +649,6 @@ function closeFooterModal() {
 /* Vibe Selector */
 .vibe-section {
   margin-bottom: 32px;
-}
-
-.site-logo-section {
-  display: grid;
-  gap: 14px;
-  margin: 0 0 32px;
-  padding: 18px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 12px);
-  background: var(--ui-surface, var(--color-bg));
-}
-
-.site-logo-copy h3 {
-  margin: 0 0 4px;
-  font-size: 16px;
-}
-
-.site-logo-copy p,
-.site-logo-hint {
-  color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.site-logo-copy p {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.site-logo-control {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.site-logo-preview {
-  display: grid;
-  width: 56px;
-  height: 56px;
-  flex: 0 0 56px;
-  place-items: center;
-  overflow: hidden;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 8px);
-  background: var(--ui-surface-muted, var(--color-border));
-  color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.site-logo-preview img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.site-logo-actions {
-  display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-}
-
-.site-logo-button,
-.site-logo-remove {
-  min-height: 38px;
-  padding: 8px 12px;
-  border-radius: var(--ui-radius-sm, 8px);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.site-logo-button {
-  border: 1px solid var(--ui-border-strong, var(--color-border));
-  background: var(--ui-text, var(--color-text));
-  color: var(--ui-bg, var(--color-bg));
-}
-
-.site-logo-remove {
-  border: 0;
-  background: transparent;
-  color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.site-logo-button:focus-visible,
-.site-logo-remove:focus-visible {
-  outline: 3px solid var(--ui-accent, var(--color-text));
-  outline-offset: 2px;
-}
-
-.site-logo-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-}
-
-.site-logo-hint {
-  flex-basis: 100%;
-  font-size: 12px;
-}
-
-.site-logo-error {
-  margin: 0;
-  color: #b42318;
-  font-size: 13px;
 }
 
 .vibe-title {
