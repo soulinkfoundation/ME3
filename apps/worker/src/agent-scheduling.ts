@@ -21,6 +21,7 @@ import type {
   DbSchedulingRequest,
   Env,
 } from "./types";
+import { ensureSoulinkContactsFresh } from "./routes/channels";
 
 const DEFAULT_SOULINK_API_ORIGIN = "https://soulinkfoundation.org";
 const AGENT_SCHEDULING_PROTOCOL_VERSION = "2026-08-24";
@@ -29,6 +30,7 @@ const AGENT_SCHEDULING_TTL_MS = 48 * 60 * 60 * 1000;
 const DEFAULT_DURATION_MINUTES = 30;
 const DEFAULT_WINDOW_DAYS = 7;
 const MAX_RELAY_CANDIDATES = 180;
+const MAX_PRESENTED_OPTIONS = 3;
 
 type AgentSchedulingRole = "requester" | "target";
 type AgentSchedulingRelayKind =
@@ -52,8 +54,28 @@ export type AgentSchedulingRelayMessage = {
   reason: string | null;
   candidateSlots: SchedulingRequestSlot[];
   selectedSlot: SchedulingRequestSlot | null;
+  meetingUrl: string | null;
   issuedAt: string;
   expiresAt: string;
+};
+
+export type AgentSchedulingNotification = {
+  version: 1;
+  requestId: string;
+  phase: "offer" | "choose" | "waiting" | "confirmed" | "declined";
+  peerName: string;
+  timezone: string;
+  options: CoreSchedulingOption[];
+  actions: Array<"offer" | "select" | "decline">;
+  expiresAt: string;
+};
+
+export type AgentSchedulingOwnerAction = {
+  requestId: string;
+  action: "offer" | "select" | "decline";
+  option?: number;
+  selectedOptions?: number[];
+  reason?: string;
 };
 
 type SchedulingPeerPolicy = {
@@ -62,6 +84,7 @@ type SchedulingPeerPolicy = {
   peerNodeId: string;
   durationMinutes: number;
   expiresAt: string;
+  meetingUrl: string | null;
 };
 
 type SchedulingRequestWithContact = DbSchedulingRequest & {
@@ -73,7 +96,10 @@ export function createAgentSchedulingToolServices(
   ownerId: string,
 ): CoreSchedulingToolServices {
   return {
-    searchContacts: (input) => searchAgentSchedulingContacts(env, ownerId, input),
+    searchContacts: async (input) => {
+      await ensureSoulinkContactsFresh(env, ownerId);
+      return searchAgentSchedulingContacts(env, ownerId, input);
+    },
     request: (input, idempotencyKey) =>
       requestAgentScheduling(env, ownerId, input, idempotencyKey),
     approve: (input, idempotencyKey) =>
@@ -131,6 +157,15 @@ export function intersectAgentSchedulingSlots(
     .slice(0, Math.max(0, limit));
 }
 
+export function isAgentSchedulingSlotAuthorized(
+  selected: SchedulingRequestSlot,
+  authorized: readonly SchedulingRequestSlot[],
+) {
+  return authorized.some(
+    (slot) => slot.startsAt === selected.startsAt && slot.endsAt === selected.endsAt,
+  );
+}
+
 export function parseAgentSchedulingRelayMessage(
   value: unknown,
 ): AgentSchedulingRelayMessage | null {
@@ -163,6 +198,7 @@ export function parseAgentSchedulingRelayMessage(
   const selectedSlot = value.selectedSlot === null || value.selectedSlot === undefined
     ? null
     : parseRelaySlot(value.selectedSlot);
+  const meetingUrl = parseHttpsUrl(value.meetingUrl);
   const now = new Date();
   const issuedAt = value.version === LEGACY_AGENT_SCHEDULING_PROTOCOL_VERSION
     ? now.toISOString()
@@ -199,6 +235,7 @@ export function parseAgentSchedulingRelayMessage(
     reason: shortText(value.reason, 500) || null,
     candidateSlots,
     selectedSlot,
+    meetingUrl,
     issuedAt,
     expiresAt,
   };
@@ -326,6 +363,7 @@ async function requestAgentScheduling(
   },
   idempotencyKey: string,
 ) {
+  await ensureSoulinkContactsFresh(env, ownerId);
   const contact = await resolveAgentSchedulingContact(env, ownerId, input.contact);
   const targetNodeId = soulinkPeerNodeId(contact);
   if (!targetNodeId) {
@@ -395,6 +433,7 @@ async function requestAgentScheduling(
     selectedSlot: null,
     status: "draft",
     expiresAt: envelopeTimes.expiresAt,
+    meetingUrl: null,
   });
 
   const message: AgentSchedulingRelayMessage = {
@@ -409,6 +448,7 @@ async function requestAgentScheduling(
     reason,
     candidateSlots: proposedSlots,
     selectedSlot: null,
+    meetingUrl: null,
     ...envelopeTimes,
   };
   const relayed = await relayAgentSchedulingMessage(env, connection, message);
@@ -443,10 +483,31 @@ async function requestAgentScheduling(
     selectedSlot: null,
     status: "candidates_shared",
     expiresAt: envelopeTimes.expiresAt,
+    meetingUrl: null,
   });
   await recordSchedulingAudit(env, requestId, ownerId, "candidates_shared", "assistant",
     `Received ${slots.length} mutual candidate slots from ${contact.name}'s ME3 assistant`,
     { peerNodeId: targetNodeId, durationMinutes: defaults.durationMinutes });
+  if (slots.length > 0) {
+    const storedRequest = await getSchedulingRequest(env, ownerId, requestId);
+    if (storedRequest) {
+      await notifySchedulingOwner(
+        env,
+        connection,
+        `${contact.name} is available at these times. Choose one and I’ll add it to both calendars.`,
+        `scheduling:${requestId}:options`,
+        schedulingNotification(
+          storedRequest,
+          requireOpenPeerPolicy(storedRequest),
+          owner.timezone,
+          contact.name,
+          "choose",
+          slots,
+          ["select", "decline"],
+        ),
+      );
+    }
+  }
 
   return {
     contactName: contact.name,
@@ -471,142 +532,18 @@ async function approveAgentScheduling(
     throw new AgentSchedulingError("The owner must explicitly approve the scheduling action.", 400);
   }
   const request = await findOpenPeerSchedulingRequest(env, ownerId, input.contact);
-  const policy = peerPolicy(request.policy_json);
-  if (!policy) throw new AgentSchedulingError("This scheduling request is not an agent relay.", 409);
-  if (Date.parse(policy.expiresAt) <= Date.now()) {
-    await cancelPeerSchedulingRequest(env, ownerId, request.id, "expired");
-    throw new AgentSchedulingError("This scheduling request expired.", 410);
-  }
   const connection = await getOwnerSchedulingConnection(env, ownerId);
   if (!connection) throw new AgentSchedulingError("Soulink is no longer connected.", 409);
-  const owner = await getSchedulingOwner(env, ownerId);
-  const envelopeTimes = schedulingEnvelopeTimes(policy.expiresAt);
-
-  if (policy.role === "requester") {
-    const candidates = parseStoredSlots(request.candidate_slots_json);
-    const option = input.option ?? (candidates.length === 1 ? 1 : null);
-    if (!option || option < 1 || option > candidates.length) {
-      throw new AgentSchedulingError(
-        "Choose one of the numbered mutual scheduling options before approving.",
-        400,
-      );
-    }
-    const selectedSlot = candidates[option - 1];
-    const approved = await approveSchedulingRequest(env, ownerId, request.id, {
-      participantRole: "requester",
-      startsAt: selectedSlot.startsAt,
-      endsAt: selectedSlot.endsAt,
-    });
-    if ("error" in approved) throw new AgentSchedulingError(approved.error, approved.status);
-    await relayAgentSchedulingMessage(env, connection, {
-      version: AGENT_SCHEDULING_PROTOCOL_VERSION,
-      kind: "schedule.selection",
-      requestId: request.id,
-      sourceNodeId: schedulingConnectionOwnerNodeId(connection) || "",
-      sourceName: owner.name || "ME3 owner",
-      targetNodeId: policy.peerNodeId,
-      durationMinutes: policy.durationMinutes,
-      dateRange: {
-        start: request.date_range_start,
-        end: request.date_range_end,
-      },
-      reason: request.reason,
-      candidateSlots: [],
-      selectedSlot,
-      ...envelopeTimes,
-    });
-    return {
-      contactName: request.contact_name || request.target_name || "your contact",
-      status: "waiting_for_other_owner" as const,
-      selectedOption: schedulingOptions([selectedSlot], owner.timezone)[0],
-    };
-  }
-
-  const selectedSlot = parseStoredSlot(request.selected_slot_json);
-  if (!selectedSlot && request.status === "review_required") {
-    const timeType = (await listSchedulingTimeTypes(env, ownerId)).find(
-      (entry) => entry.id === request.time_type_id,
-    );
-    if (!timeType) throw new AgentSchedulingError("Scheduling time type was not found.", 409);
-    const proposed = parseStoredSlots(request.stream_payload_json);
-    if (proposed.length === 0) {
-      throw new AgentSchedulingError("The scheduling request has no availability proposal.", 409);
-    }
-    const available = await generateSchedulingCandidateSlots(env, ownerId, {
-      timeType,
-      dateRange: { start: request.date_range_start, end: request.date_range_end },
-      limit: MAX_RELAY_CANDIDATES,
-    });
-    const mutual = intersectAgentSchedulingSlots(proposed, available, 5);
-    await relayAgentSchedulingMessage(env, connection, {
-      version: AGENT_SCHEDULING_PROTOCOL_VERSION,
-      kind: "schedule.options",
-      requestId: request.id,
-      sourceNodeId: schedulingConnectionOwnerNodeId(connection) || "",
-      sourceName: owner.name || "ME3 owner",
-      targetNodeId: policy.peerNodeId,
-      durationMinutes: policy.durationMinutes,
-      dateRange: { start: request.date_range_start, end: request.date_range_end },
-      reason: request.reason,
-      candidateSlots: mutual,
-      selectedSlot: null,
-      ...envelopeTimes,
-    });
-    await env.DB.prepare(
-      `UPDATE scheduling_requests
-       SET status = 'candidates_shared', candidate_slots_json = ?,
-           stream_payload_json = NULL, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND user_id = ? AND status = 'review_required'`,
-    )
-      .bind(JSON.stringify(mutual), request.id, ownerId)
-      .run();
-    await recordSchedulingAudit(
-      env,
-      request.id,
-      ownerId,
-      "candidates_shared",
-      "target",
-      `Approved sharing ${mutual.length} mutual candidate slots`,
-      { peerNodeId: policy.peerNodeId, durationMinutes: policy.durationMinutes },
-    );
-    return {
-      contactName: request.contact_name || request.requester_name || "your contact",
-      status: "availability_shared" as const,
-      selectedOption: null,
-    };
-  }
-  if (!selectedSlot) {
-    throw new AgentSchedulingError("The other owner has not selected a scheduling option yet.", 409);
-  }
-  const approved = await approveSchedulingRequest(env, ownerId, request.id, {
-    participantRole: "target",
-    startsAt: selectedSlot.startsAt,
-    endsAt: selectedSlot.endsAt,
-  });
-  if ("error" in approved) throw new AgentSchedulingError(approved.error, approved.status);
-  await relayAgentSchedulingMessage(env, connection, {
-    version: AGENT_SCHEDULING_PROTOCOL_VERSION,
-    kind: "schedule.approval",
+  const policy = requireOpenPeerPolicy(request);
+  const result = await performSchedulingOwnerAction(env, connection, request, {
     requestId: request.id,
-    sourceNodeId: schedulingConnectionOwnerNodeId(connection) || "",
-    sourceName: owner.name || "ME3 owner",
-    targetNodeId: policy.peerNodeId,
-    durationMinutes: policy.durationMinutes,
-    dateRange: { start: request.date_range_start, end: request.date_range_end },
-    reason: request.reason,
-    candidateSlots: [],
-    selectedSlot,
-    ...envelopeTimes,
+    action: policy.role === "requester" ? "select" : "offer",
+    option: input.option,
   });
-  const finalized = await finalizeSchedulingRequest(env, ownerId, request.id);
-  if ("error" in finalized) {
-    throw new AgentSchedulingError(finalized.error, finalized.status);
+  if (result.status === "declined") {
+    throw new AgentSchedulingError("This scheduling request was declined.", 409);
   }
-  return {
-    contactName: request.contact_name || request.requester_name || "your contact",
-    status: "booked" as const,
-    selectedOption: schedulingOptions([selectedSlot], owner.timezone)[0],
-  };
+  return result;
 }
 
 async function declineAgentScheduling(
@@ -616,30 +553,156 @@ async function declineAgentScheduling(
   _idempotencyKey: string,
 ) {
   const request = await findOpenPeerSchedulingRequest(env, ownerId, input.contact);
-  const policy = peerPolicy(request.policy_json);
-  if (!policy) throw new AgentSchedulingError("This scheduling request is not an agent relay.", 409);
   const connection = await getOwnerSchedulingConnection(env, ownerId);
   if (!connection) throw new AgentSchedulingError("Soulink is no longer connected.", 409);
+  const result = await performSchedulingOwnerAction(env, connection, request, {
+    requestId: request.id,
+    action: "decline",
+    reason: input.reason,
+  });
+  if (result.status !== "declined") {
+    throw new AgentSchedulingError("The scheduling request could not be declined.", 409);
+  }
+  return result;
+}
+
+export async function performAgentSchedulingOwnerAction(
+  env: Env,
+  connection: DbAgentChannelConnection,
+  input: AgentSchedulingOwnerAction,
+) {
+  const request = await getSchedulingRequest(env, connection.user_id, input.requestId);
+  if (!request) throw new AgentSchedulingError("Agent scheduling request was not found.", 404);
+  return performSchedulingOwnerAction(env, connection, request, input);
+}
+
+async function performSchedulingOwnerAction(
+  env: Env,
+  connection: DbAgentChannelConnection,
+  request: DbSchedulingRequest & { contact_name?: string | null },
+  input: AgentSchedulingOwnerAction,
+) {
+  const ownerId = connection.user_id;
+  const policy = requireOpenPeerPolicy(request);
+  if (Date.parse(policy.expiresAt) <= Date.now()) {
+    await cancelPeerSchedulingRequest(env, ownerId, request.id, "expired");
+    throw new AgentSchedulingError("This scheduling request expired.", 410);
+  }
   const owner = await getSchedulingOwner(env, ownerId);
-  const reason = shortText(input.reason, 500) || null;
-  await relayAgentSchedulingMessage(env, connection, {
-    version: AGENT_SCHEDULING_PROTOCOL_VERSION,
-    kind: "schedule.decline",
+  const peerName = request.contact_name || request.requester_name || request.target_name || "your contact";
+  const envelope = {
+    version: AGENT_SCHEDULING_PROTOCOL_VERSION as typeof AGENT_SCHEDULING_PROTOCOL_VERSION,
     requestId: request.id,
     sourceNodeId: schedulingConnectionOwnerNodeId(connection) || "",
     sourceName: owner.name || "ME3 owner",
     targetNodeId: policy.peerNodeId,
     durationMinutes: policy.durationMinutes,
     dateRange: { start: request.date_range_start, end: request.date_range_end },
-    reason,
-    candidateSlots: [],
-    selectedSlot: null,
+    meetingUrl: policy.meetingUrl,
     ...schedulingEnvelopeTimes(policy.expiresAt),
+  };
+
+  if (input.action === "decline") {
+    const reason = shortText(input.reason, 500) || null;
+    await relayAgentSchedulingMessage(env, connection, {
+      ...envelope,
+      kind: "schedule.decline",
+      reason,
+      candidateSlots: [],
+      selectedSlot: null,
+    });
+    await cancelPeerSchedulingRequest(env, ownerId, request.id, "declined");
+    await notifySchedulingOwner(
+      env,
+      connection,
+      `I declined the scheduling request with ${peerName}. Nothing was added to either calendar.`,
+      `scheduling:${request.id}:declined-local`,
+      schedulingNotification(request, policy, owner.timezone, peerName, "declined", [], []),
+    );
+    return { contactName: peerName, status: "declined" as const };
+  }
+
+  if (input.action === "offer") {
+    if (policy.role !== "target" || request.status !== "review_required") {
+      throw new AgentSchedulingError("These scheduling options have already been handled.", 409);
+    }
+    const candidates = parseStoredSlots(request.candidate_slots_json);
+    const indexes = normalizeSelectedOptionIndexes(input.selectedOptions, candidates.length);
+    const offered = input.selectedOptions
+      ? indexes.map((index) => candidates[index - 1])
+      : candidates;
+    if (offered.length === 0) {
+      throw new AgentSchedulingError("Choose at least one suitable time to offer.", 400);
+    }
+    await relayAgentSchedulingMessage(env, connection, {
+      ...envelope,
+      kind: "schedule.options",
+      reason: request.reason,
+      candidateSlots: offered,
+      selectedSlot: null,
+    });
+    await env.DB.prepare(
+      `UPDATE scheduling_requests
+       SET status = 'candidates_shared', candidate_slots_json = ?,
+           stream_payload_json = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND user_id = ? AND status = 'review_required'`,
+    )
+      .bind(JSON.stringify(offered), request.id, ownerId)
+      .run();
+    await recordSchedulingAudit(
+      env,
+      request.id,
+      ownerId,
+      "candidates_shared",
+      "target",
+      `Authorized ${offered.length} exact candidate slots for the requester to choose`,
+      { peerNodeId: policy.peerNodeId, slots: offered },
+    );
+    await notifySchedulingOwner(
+      env,
+      connection,
+      `I sent ${peerName} ${offered.length === 1 ? "that time" : "those times"}. I’ll add their choice to your calendar automatically.`,
+      `scheduling:${request.id}:offered`,
+      schedulingNotification(request, policy, owner.timezone, peerName, "waiting", offered, []),
+    );
+    return { contactName: peerName, status: "availability_shared" as const, selectedOption: null };
+  }
+
+  if (policy.role !== "requester" || request.status !== "candidates_shared") {
+    throw new AgentSchedulingError("This scheduling request is not ready for a time selection.", 409);
+  }
+  const candidates = parseStoredSlots(request.candidate_slots_json);
+  const option = input.option ?? (candidates.length === 1 ? 1 : null);
+  if (!option || option < 1 || option > candidates.length) {
+    throw new AgentSchedulingError("Choose one of the offered scheduling options.", 400);
+  }
+  const selectedSlot = candidates[option - 1];
+  const approved = await approveSchedulingRequest(env, ownerId, request.id, {
+    participantRole: "requester",
+    startsAt: selectedSlot.startsAt,
+    endsAt: selectedSlot.endsAt,
   });
-  await cancelPeerSchedulingRequest(env, ownerId, request.id, "declined");
+  if ("error" in approved) throw new AgentSchedulingError(approved.error, approved.status);
+  const relayed = await relayAgentSchedulingMessage(env, connection, {
+    ...envelope,
+    kind: "schedule.selection",
+    reason: request.reason,
+    candidateSlots: [],
+    selectedSlot,
+  });
+  if (relayed.status !== "booked") {
+    await notifySchedulingOwner(
+      env,
+      connection,
+      `I sent ${peerName} your choice. I’ll confirm it here as soon as the durable relay completes.`,
+      `scheduling:${request.id}:selection-pending`,
+      schedulingNotification(request, policy, owner.timezone, peerName, "waiting", [selectedSlot], []),
+    );
+  }
   return {
-    contactName: request.contact_name || request.requester_name || request.target_name || "your contact",
-    status: "declined" as const,
+    contactName: peerName,
+    status: relayed.status === "booked" ? "booked" as const : "waiting_for_other_owner" as const,
+    selectedOption: schedulingOptions([selectedSlot], owner.timezone)[0],
   };
 }
 
@@ -693,6 +756,16 @@ async function receiveAgentSchedulingRequest(
   if (!policy.allowed) {
     throw new AgentSchedulingError(policy.reason, 403);
   }
+  const available = await generateSchedulingCandidateSlots(env, connection.user_id, {
+    timeType,
+    dateRange: message.dateRange,
+    limit: MAX_RELAY_CANDIDATES,
+  });
+  const mutual = intersectAgentSchedulingSlots(
+    message.candidateSlots,
+    available,
+    MAX_PRESENTED_OPTIONS,
+  );
   if (policy.ownerReviewRequired || !policy.candidateSharingAllowed) {
     await upsertPeerSchedulingRequest(env, {
       requestId: message.requestId,
@@ -705,26 +778,46 @@ async function receiveAgentSchedulingRequest(
       targetName: owner.name || "ME3 owner",
       reason: message.reason,
       dateRange: message.dateRange,
-      candidateSlots: [],
-      proposedSlots: message.candidateSlots,
+      candidateSlots: mutual,
+      proposedSlots: [],
       selectedSlot: null,
       status: "review_required",
       expiresAt: message.expiresAt,
+      meetingUrl: message.meetingUrl,
     });
+    const options = schedulingOptions(mutual, owner.timezone);
+    const storedRequest = await getSchedulingRequest(
+      env,
+      connection.user_id,
+      message.requestId,
+    );
+    if (!storedRequest) throw new AgentSchedulingError("Scheduling request was not stored.", 500);
     await notifySchedulingOwner(
       env,
       connection,
-      `${message.sourceName}'s ME3 assistant asked to compare ${message.durationMinutes}-minute availability. Reply “approve availability” to share only mutual free slots, or “decline” to refuse. No calendar titles or busy details will be shared.`,
+      options.length > 0
+        ? `${message.sourceName} wants to book ${message.durationMinutes} minutes with you. These times work for both calendars. Offer any suitable options, or decline.`
+        : `${message.sourceName} wants to book ${message.durationMinutes} minutes with you, but I couldn’t find a mutual free time in the requested window.`,
       `scheduling:${message.requestId}:review`,
+      schedulingNotification(
+        storedRequest,
+        {
+          protocolVersion: AGENT_SCHEDULING_PROTOCOL_VERSION,
+          role: "target",
+          peerNodeId: message.sourceNodeId,
+          durationMinutes: message.durationMinutes,
+          expiresAt: message.expiresAt,
+          meetingUrl: message.meetingUrl,
+        },
+        owner.timezone,
+        message.sourceName,
+        "offer",
+        mutual,
+        options.length > 0 ? ["offer", "decline"] : ["decline"],
+      ),
     );
     return { status: "waiting_for_target_review" as const };
   }
-  const available = await generateSchedulingCandidateSlots(env, connection.user_id, {
-    timeType,
-    dateRange: message.dateRange,
-    limit: MAX_RELAY_CANDIDATES,
-  });
-  const mutual = intersectAgentSchedulingSlots(message.candidateSlots, available, 5);
   await upsertPeerSchedulingRequest(env, {
     requestId: message.requestId,
     ownerId: connection.user_id,
@@ -741,6 +834,7 @@ async function receiveAgentSchedulingRequest(
     selectedSlot: null,
     status: "candidates_shared",
     expiresAt: message.expiresAt,
+    meetingUrl: message.meetingUrl,
   });
   await recordSchedulingAudit(env, message.requestId, connection.user_id, "candidates_shared", "assistant",
     `Returned ${mutual.length} mutual candidate slots to ${message.sourceName}'s ME3 assistant`,
@@ -765,6 +859,7 @@ async function receiveAgentSchedulingOptions(
     "requester",
     message.sourceNodeId,
   );
+  await updatePeerSchedulingMeetingUrl(env, connection.user_id, request, message.meetingUrl);
   await env.DB.prepare(
     `UPDATE scheduling_requests
      SET status = 'candidates_shared', candidate_slots_json = ?,
@@ -788,9 +883,18 @@ async function receiveAgentSchedulingOptions(
     env,
     connection,
     options.length > 0
-      ? `${message.sourceName} approved sharing availability. Mutual options:\n${options.map((option) => `${option.option}. ${option.label}`).join("\n")}\nReply with the option you want to book.`
-      : `${message.sourceName} approved sharing availability, but there are no mutual free slots in the requested window.`,
+      ? `${message.sourceName} is available at these times. Choose one and I’ll add it to both calendars.`
+      : `${message.sourceName} couldn’t offer a mutual free time in the requested window.`,
     `scheduling:${message.requestId}:options`,
+    schedulingNotification(
+      request,
+      { ...requireOpenPeerPolicy(request), meetingUrl: message.meetingUrl || requireOpenPeerPolicy(request).meetingUrl },
+      owner.timezone,
+      message.sourceName,
+      "choose",
+      message.candidateSlots,
+      options.length > 0 ? ["select", "decline"] : ["decline"],
+    ),
   );
   return {
     status: options.length > 0
@@ -818,6 +922,15 @@ async function receiveAgentSchedulingDecline(
     connection,
     `${message.sourceName} declined the scheduling request${message.reason ? `: ${message.reason}.` : "."} Nothing was added to either calendar.`,
     `scheduling:${message.requestId}:declined`,
+    schedulingNotification(
+      request,
+      policy,
+      (await getSchedulingOwner(env, connection.user_id)).timezone,
+      message.sourceName,
+      "declined",
+      [],
+      [],
+    ),
   );
   return { status: "declined" as const };
 }
@@ -835,21 +948,57 @@ async function receiveAgentSchedulingSelection(
     message.sourceNodeId,
   );
   const selectedSlot = message.selectedSlot!;
-  const approved = await approveSchedulingRequest(env, connection.user_id, request.id, {
+  const policy = requireOpenPeerPolicy(request);
+  const authorized = isAgentSchedulingSlotAuthorized(
+    selectedSlot,
+    parseStoredSlots(request.candidate_slots_json),
+  );
+  if (request.status !== "candidates_shared" || !authorized) {
+    throw new AgentSchedulingError("The selected time was not in the recipient’s authorized options.", 409);
+  }
+  const requesterApproval = await approveSchedulingRequest(env, connection.user_id, request.id, {
     participantRole: "requester",
     startsAt: selectedSlot.startsAt,
     endsAt: selectedSlot.endsAt,
   });
-  if ("error" in approved) throw new AgentSchedulingError(approved.error, approved.status);
+  if ("error" in requesterApproval) {
+    throw new AgentSchedulingError(requesterApproval.error, requesterApproval.status);
+  }
+  const targetApproval = await approveSchedulingRequest(env, connection.user_id, request.id, {
+    participantRole: "target",
+    startsAt: selectedSlot.startsAt,
+    endsAt: selectedSlot.endsAt,
+  });
+  if ("error" in targetApproval) {
+    throw new AgentSchedulingError(targetApproval.error, targetApproval.status);
+  }
+  const finalized = await finalizeSchedulingRequest(env, connection.user_id, request.id);
+  if ("error" in finalized) throw new AgentSchedulingError(finalized.error, finalized.status);
   const owner = await getSchedulingOwner(env, connection.user_id);
   const label = schedulingOptions([selectedSlot], owner.timezone)[0].label;
+  await relayAgentSchedulingMessage(env, connection, {
+    version: AGENT_SCHEDULING_PROTOCOL_VERSION,
+    kind: "schedule.approval",
+    requestId: request.id,
+    sourceNodeId: schedulingConnectionOwnerNodeId(connection) || "",
+    sourceName: owner.name || "ME3 owner",
+    targetNodeId: policy.peerNodeId,
+    durationMinutes: policy.durationMinutes,
+    dateRange: { start: request.date_range_start, end: request.date_range_end },
+    reason: request.reason,
+    candidateSlots: [],
+    selectedSlot,
+    meetingUrl: policy.meetingUrl,
+    ...schedulingEnvelopeTimes(policy.expiresAt),
+  });
   await notifySchedulingOwner(
     env,
     connection,
-    `Scheduling request from ${message.sourceName}: they selected ${label}. Reply “approve” to add it to both calendars, or tell me not to book it.`,
-    `scheduling:${message.requestId}:selection`,
+    `${message.sourceName} chose ${label}. It’s confirmed and added to your calendar.`,
+    `scheduling:${message.requestId}:booked`,
+    schedulingNotification(request, policy, owner.timezone, message.sourceName, "confirmed", [selectedSlot], []),
   );
-  return { status: "waiting_for_owner" as const };
+  return { status: "booked" as const };
 }
 
 async function receiveAgentSchedulingApproval(
@@ -865,6 +1014,7 @@ async function receiveAgentSchedulingApproval(
     message.sourceNodeId,
   );
   const selectedSlot = message.selectedSlot!;
+  await updatePeerSchedulingMeetingUrl(env, connection.user_id, request, message.meetingUrl);
   const approved = await approveSchedulingRequest(env, connection.user_id, request.id, {
     participantRole: "target",
     startsAt: selectedSlot.startsAt,
@@ -880,8 +1030,17 @@ async function receiveAgentSchedulingApproval(
   await notifySchedulingOwner(
     env,
     connection,
-    `${message.sourceName} approved ${label}. I added it to both calendars.`,
+    `Great, ${label} is confirmed and added to your calendar.`,
     `scheduling:${message.requestId}:booked`,
+    schedulingNotification(
+      request,
+      { ...requireOpenPeerPolicy(request), meetingUrl: message.meetingUrl || requireOpenPeerPolicy(request).meetingUrl },
+      owner.timezone,
+      message.sourceName,
+      "confirmed",
+      [selectedSlot],
+      [],
+    ),
   );
   return { status: "booked" as const };
 }
@@ -976,6 +1135,7 @@ async function upsertPeerSchedulingRequest(
     selectedSlot: SchedulingRequestSlot | null;
     status: "draft" | "review_required" | "candidates_shared";
     expiresAt: string;
+    meetingUrl: string | null;
   },
 ) {
   const policy: SchedulingPeerPolicy = {
@@ -984,6 +1144,7 @@ async function upsertPeerSchedulingRequest(
     peerNodeId: input.peerNodeId,
     durationMinutes: input.timeType.durationMinutes,
     expiresAt: input.expiresAt,
+    meetingUrl: input.meetingUrl,
   };
   const inserted = await env.DB.prepare(
     `INSERT OR IGNORE INTO scheduling_requests
@@ -1185,6 +1346,7 @@ async function notifySchedulingOwner(
   connection: DbAgentChannelConnection,
   messageText: string,
   messageId: string,
+  scheduling?: AgentSchedulingNotification,
 ) {
   const threadId = connection.provider_thread_id;
   if (!threadId) throw new AgentSchedulingError("Soulink assistant chat is not connected.", 409);
@@ -1226,6 +1388,7 @@ async function notifySchedulingOwner(
         messageId,
         messageText,
         createdAt: new Date().toISOString(),
+        scheduling,
       }),
     },
   );
@@ -1300,7 +1463,7 @@ function schedulingOptions(
   timezoneInput: string | null | undefined,
 ): CoreSchedulingOption[] {
   const timezone = resolveTimeZone(timezoneInput);
-  return slots.slice(0, 5).map((slot, index) => ({
+  return slots.slice(0, MAX_PRESENTED_OPTIONS).map((slot, index) => ({
     option: index + 1,
     label: formatSchedulingOption(slot, timezone),
     startsAt: slot.startsAt,
@@ -1365,6 +1528,64 @@ function parseStoredSlot(value: string | null) {
   }
 }
 
+function requireOpenPeerPolicy(request: DbSchedulingRequest): SchedulingPeerPolicy {
+  const policy = peerPolicy(request.policy_json);
+  if (!policy) throw new AgentSchedulingError("This scheduling request is not an agent relay.", 409);
+  if (request.status === "cancelled") {
+    throw new AgentSchedulingError("This scheduling request was declined or cancelled.", 409);
+  }
+  if (request.status === "finalized") {
+    throw new AgentSchedulingError("This scheduling request is already booked.", 409);
+  }
+  return policy;
+}
+
+function normalizeSelectedOptionIndexes(value: number[] | undefined, optionCount: number) {
+  if (!value) return [];
+  return [...new Set(value)]
+    .filter((option) => Number.isInteger(option) && option >= 1 && option <= optionCount)
+    .sort((first, second) => first - second);
+}
+
+function schedulingNotification(
+  request: DbSchedulingRequest,
+  policy: SchedulingPeerPolicy,
+  timezoneInput: string | null | undefined,
+  peerName: string,
+  phase: AgentSchedulingNotification["phase"],
+  slots: readonly SchedulingRequestSlot[],
+  actions: AgentSchedulingNotification["actions"],
+): AgentSchedulingNotification {
+  return {
+    version: 1,
+    requestId: request.id,
+    phase,
+    peerName,
+    timezone: resolveTimeZone(timezoneInput),
+    options: schedulingOptions(slots, timezoneInput),
+    actions,
+    expiresAt: policy.expiresAt,
+  };
+}
+
+async function updatePeerSchedulingMeetingUrl(
+  env: Env,
+  ownerId: string,
+  request: DbSchedulingRequest,
+  meetingUrl: string | null,
+) {
+  if (!meetingUrl) return;
+  const policy = peerPolicy(request.policy_json);
+  if (!policy || policy.meetingUrl === meetingUrl) return;
+  await env.DB.prepare(
+    `UPDATE scheduling_requests
+     SET policy_json = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ? AND status NOT IN ('finalized', 'cancelled')`,
+  )
+    .bind(JSON.stringify({ ...policy, meetingUrl }), request.id, ownerId)
+    .run();
+}
+
 function parseRelaySlot(value: unknown): SchedulingRequestSlot | null {
   if (!isRecord(value)) return null;
   const startsAt = shortText(value.startsAt, 50);
@@ -1401,6 +1622,7 @@ function peerPolicy(value: string | null): SchedulingPeerPolicy | null {
       (protocolVersion === LEGACY_AGENT_SCHEDULING_PROTOCOL_VERSION
         ? new Date(0).toISOString()
         : null);
+    const meetingUrl = parseHttpsUrl(parsed.meetingUrl);
     if (
       (protocolVersion !== AGENT_SCHEDULING_PROTOCOL_VERSION &&
         protocolVersion !== LEGACY_AGENT_SCHEDULING_PROTOCOL_VERSION) ||
@@ -1417,6 +1639,7 @@ function peerPolicy(value: string | null): SchedulingPeerPolicy | null {
       peerNodeId,
       durationMinutes,
       expiresAt,
+      meetingUrl,
     };
   } catch {
     return null;
@@ -1437,6 +1660,16 @@ function parseIsoInstant(value: unknown) {
   if (typeof value !== "string") return null;
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+function parseHttpsUrl(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function soulinkPeerNodeId(contact: DbContact): string | null {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   intersectAgentSchedulingSlots,
+  isAgentSchedulingSlotAuthorized,
   parseAgentSchedulingRelayMessage,
   resolveAgentSchedulingDefaults,
 } from "./agent-scheduling";
@@ -46,6 +47,13 @@ describe("ME3 agent scheduling", () => {
     const first = slot("2026-08-20T09:00:00.000Z", "2026-08-20T09:30:00.000Z");
     const second = slot("2026-08-20T10:00:00.000Z", "2026-08-20T10:30:00.000Z");
     expect(intersectAgentSchedulingSlots([first, second], [second])).toEqual([second]);
+  });
+
+  it("books only an exact slot from the recipient-authorized set", () => {
+    const authorized = slot("2026-08-20T09:00:00.000Z", "2026-08-20T09:30:00.000Z");
+    const changed = slot("2026-08-20T09:15:00.000Z", "2026-08-20T09:45:00.000Z");
+    expect(isAgentSchedulingSlotAuthorized(authorized, [authorized])).toBe(true);
+    expect(isAgentSchedulingSlotAuthorized(changed, [authorized])).toBe(false);
   });
 
   it("rejects scheduling envelopes without a verified shape", () => {
@@ -107,12 +115,14 @@ describe("ME3 agent scheduling", () => {
       reason: "Not this week",
       candidateSlots: [],
       selectedSlot: null,
+      meetingUrl: "https://soulinkfoundation.org/calls/@source",
       issuedAt: "2026-08-24T12:00:00.000Z",
       expiresAt: "2026-08-26T12:00:00.000Z",
     })).toMatchObject({
       kind: "schedule.decline",
       candidateSlots: [],
       selectedSlot: null,
+      meetingUrl: "https://soulinkfoundation.org/calls/@source",
     });
   });
 

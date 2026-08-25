@@ -1832,7 +1832,7 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("INSERT INTO user_calendar_events")) {
-                const locationIsInlineNull = sql.includes("NULL");
+                const locationIsInlineNull = sql.includes("VALUES (?, ?, ?, ?, NULL,");
                 state.userCalendarEvents.push({
                   id: values[0] as string,
                   user_id: values[1] as string,
@@ -13791,15 +13791,17 @@ describe("ME3 Worker auth", () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
 
-    const provisionMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      Response.json({
-        ok: true,
-        ownerNodeId: "node-owner",
-        assistantNodeId: "assistant-owner",
-        streamChannelType: "messaging",
-        streamChannelId: "assistant-channel",
-        soulinkChatUrl: "https://soulink.test/chats/assistant-channel",
-      }),
+    const provisionMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
+      String(input).includes("/api/me3/links")
+        ? Response.json({ ok: true, ownerNodeId: "node-owner", links: [] })
+        : Response.json({
+          ok: true,
+          ownerNodeId: "node-owner",
+          assistantNodeId: "assistant-owner",
+          streamChannelType: "messaging",
+          streamChannelId: "assistant-channel",
+          soulinkChatUrl: "https://soulink.test/chats/assistant-channel",
+        }),
     );
     vi.stubGlobal("fetch", provisionMock);
 
@@ -13833,7 +13835,7 @@ describe("ME3 Worker auth", () => {
         provider_user_id: "node-owner",
         provider_username: "assistant-owner",
       });
-      expect(provisionMock).toHaveBeenCalledOnce();
+      expect(provisionMock).toHaveBeenCalledTimes(2);
       const init = provisionMock.mock.calls[0]?.[1] as RequestInit;
       expect(JSON.parse(String(init.body))).toMatchObject({
         runtime: {
@@ -13851,15 +13853,17 @@ describe("ME3 Worker auth", () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
 
-    const provisionMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      Response.json({
-        ok: true,
-        ownerNodeId: "node-owner",
-        assistantNodeId: "assistant-owner",
-        streamChannelType: "messaging",
-        streamChannelId: "assistant-channel",
-        soulinkChatUrl: "https://soulink.test/chats/assistant-channel",
-      }),
+    const provisionMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
+      String(input).includes("/api/me3/links")
+        ? Response.json({ ok: true, ownerNodeId: "node-owner", links: [] })
+        : Response.json({
+          ok: true,
+          ownerNodeId: "node-owner",
+          assistantNodeId: "assistant-owner",
+          streamChannelType: "messaging",
+          streamChannelId: "assistant-channel",
+          soulinkChatUrl: "https://soulink.test/chats/assistant-channel",
+        }),
     );
     vi.stubGlobal("fetch", provisionMock);
 
@@ -13881,9 +13885,12 @@ describe("ME3 Worker auth", () => {
 
       expect(firstResponse.status).toBe(200);
       expect(secondResponse.status).toBe(200);
-      expect(provisionMock).toHaveBeenCalledTimes(2);
-      const firstInit = provisionMock.mock.calls[0]?.[1] as RequestInit;
-      const secondInit = provisionMock.mock.calls[1]?.[1] as RequestInit;
+      expect(provisionMock).toHaveBeenCalledTimes(4);
+      const provisionCalls = provisionMock.mock.calls.filter(([input]) =>
+        !String(input).includes("/api/me3/links")
+      );
+      const firstInit = provisionCalls[0]?.[1] as RequestInit;
+      const secondInit = provisionCalls[1]?.[1] as RequestInit;
       const firstProvision = JSON.parse(String(firstInit.body)) as {
         runtime: { dispatchToken: string };
       };

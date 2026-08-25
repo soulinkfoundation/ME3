@@ -27,6 +27,7 @@ import {
 } from "./core-runtime-migrations";
 import { Me3UserAgent } from "./user-agent";
 import { syncManagedAiUsage } from "./managed-ai-billing";
+import { syncDueSoulinkContacts } from "./routes/channels";
 import {
   beginManagedRuntimeWriteLease,
   getManagedInstallationId,
@@ -101,6 +102,7 @@ const worker = {
       await dispatchDueSocialPublications(env);
       await recoverStrandedQueuedSocialPublications(env);
       await dispatchDueCalendarSourceRefreshes(env);
+      await syncDueSoulinkContacts(env);
       await syncManagedAiUsage(env);
     } finally {
       await releaseManagedRuntimeWriteLease(env, lease);

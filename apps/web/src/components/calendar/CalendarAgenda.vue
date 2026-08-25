@@ -341,7 +341,12 @@ watch(
             class="calendar-detail-row"
           >
             <dt>{{ line.label }}</dt>
-            <dd>{{ line.value }}</dd>
+            <dd>
+              <a v-if="line.href" :href="line.href" target="_blank" rel="noopener noreferrer">
+                {{ line.value }}
+              </a>
+              <template v-else>{{ line.value }}</template>
+            </dd>
           </div>
         </dl>
 
@@ -488,7 +493,12 @@ watch(
               class="calendar-detail-row"
             >
               <dt>{{ line.label }}</dt>
-              <dd>{{ line.value }}</dd>
+              <dd>
+                <a v-if="line.href" :href="line.href" target="_blank" rel="noopener noreferrer">
+                  {{ line.value }}
+                </a>
+                <template v-else>{{ line.value }}</template>
+              </dd>
             </div>
           </dl>
 

@@ -1,6 +1,7 @@
 export interface CalendarAgendaDetailLine {
   label: string;
   value: string;
+  href?: string | null;
 }
 
 export interface CalendarAgendaEvent {

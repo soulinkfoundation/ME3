@@ -110,7 +110,12 @@ watch(
       <dl v-if="event.detailLines.length" class="event-popover-details">
         <div v-for="line in event.detailLines" :key="line.label">
           <dt>{{ line.label }}</dt>
-          <dd>{{ line.value }}</dd>
+          <dd>
+            <a v-if="line.href" :href="line.href" target="_blank" rel="noopener noreferrer">
+              {{ line.value }}
+            </a>
+            <template v-else>{{ line.value }}</template>
+          </dd>
         </div>
       </dl>
 

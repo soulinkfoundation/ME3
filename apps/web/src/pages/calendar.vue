@@ -1067,7 +1067,9 @@ function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
       (isBirthday ? "Birthday" : event.allDay ? "All day" : "Personal event"),
     detailLines: [
       ...(event.allDay ? [{ label: "When", value: "All day" }] : []),
-      ...(event.location ? [{ label: "Location", value: event.location }] : []),
+      ...(event.location
+        ? [{ label: "Location", value: event.location, href: calendarLocationHref(event.location) }]
+        : []),
       ...(event.timezone ? [{ label: "Timezone", value: event.timezone }] : []),
       ...(event.recurrenceRule
         ? [
@@ -1100,6 +1102,15 @@ function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
         : "Remove imported event"
       : "Delete event",
   };
+}
+
+function calendarLocationHref(location: string) {
+  try {
+    const url = new URL(location);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function isImportedBirthdayCandidate(event: CalendarEventRow): boolean {
@@ -3551,7 +3562,12 @@ onBeforeUnmount(() => {
             class="event-detail-row"
           >
             <dt>{{ line.label }}</dt>
-            <dd>{{ line.value }}</dd>
+            <dd>
+              <a v-if="line.href" :href="line.href" target="_blank" rel="noopener noreferrer">
+                {{ line.value }}
+              </a>
+              <template v-else>{{ line.value }}</template>
+            </dd>
           </div>
         </dl>
 

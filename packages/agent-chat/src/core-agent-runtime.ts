@@ -712,11 +712,11 @@ async function executeSchedulingToolCall(input: {
       capabilityId: "core.scheduling.request",
       result: { ok: true, ...result },
       fallbackReply: result.status === "options_ready"
-        ? `I checked with ${result.contactName}'s ME3 assistant and found these mutual options:${defaultNote}\n${optionLines.join("\n")}\nTell me which option to book. Nothing has been added to either calendar yet.`
+        ? `${result.contactName} is available at these times:${defaultNote}\n${optionLines.join("\n")}\nChoose one to book it. Nothing has been added to either calendar yet.`
         : result.status === "waiting_for_target_review"
-          ? `${result.contactName}'s ME3 assistant is waiting for them to approve sharing availability.${defaultNote} Nothing has been booked; I’ll post the mutual options here after they approve.`
+          ? `I asked ${result.contactName} to choose which suitable times to offer.${defaultNote} I’ll post their options here when they respond.`
           : result.status === "pending_target"
-            ? `${result.contactName}'s ME3 assistant is temporarily unavailable.${defaultNote} The request is queued safely and nothing has been booked.`
+            ? `I sent the request to ${result.contactName}'s ME3 assistant.${defaultNote} It is queued safely and nothing has been booked.`
             : result.status === "no_owner_availability"
               ? `I couldn't find an open ${result.durationMinutes}-minute slot on your calendar from ${result.dateRange.start} to ${result.dateRange.end}.${defaultNote} Try a wider date window; I did not contact ${result.contactName}'s assistant or book anything.`
               : `I checked with ${result.contactName}'s ME3 assistant but found no mutual availability from ${result.dateRange.start} to ${result.dateRange.end}.${defaultNote} Try a wider date window; nothing was booked.`,
@@ -753,11 +753,11 @@ async function executeSchedulingToolCall(input: {
     capabilityId: "core.scheduling.approve",
     result: { ok: true, ...result },
     fallbackReply: result.status === "availability_shared"
-      ? `I approved sharing availability with ${result.contactName}. I sent the mutual options to their ME3 assistant; nothing has been booked.`
+      ? `I offered ${result.contactName} the times you approved. Their choice will be added to your calendar automatically.`
       : result.status === "booked" && result.selectedOption
-        ? `${result.contactName} approved ${result.selectedOption.label}. It is now on both calendars.`
+        ? `Great, ${result.selectedOption.label} is confirmed and added to both calendars.`
         : result.selectedOption
-          ? `I sent ${result.selectedOption.label} to ${result.contactName}'s ME3 assistant for final approval. It will only be added after they approve.`
+          ? `I sent your choice of ${result.selectedOption.label}. I’ll confirm it here when the durable relay completes.`
           : "The scheduling request is waiting for the other owner.",
     reminderAction: null,
     actionCards: [],
@@ -2142,14 +2142,14 @@ function requiredSchedulingActionTool(
     .trim();
   const schedulingContext = Boolean(
     recentAssistantMessage &&
-      /(?:scheduling request|mutual (?:free )?(?:slots|options|availability)|approve availability|selected .+ reply [“\"]?approve|nothing has been booked)/.test(
+      /(?:scheduling request|mutual (?:free )?(?:slots|options|availability)|these times work for both calendars|available at these times|offer any suitable options|approve availability|selected .+ reply [“\"]?approve|nothing has been booked)/.test(
         recentAssistantMessage,
       ),
   );
   if (!schedulingContext) return null;
 
   if (
-    /^(?:approve availability|share (?:my )?availability)\b/.test(
+    /^(?:approve availability|share (?:my )?availability|offer (?:these|the) times)\b/.test(
       latestUserMessage,
     ) ||
     /^(?:book|choose|select)\s+(?:the\s+)?option\s+\d+\b/.test(
@@ -2200,9 +2200,9 @@ function withCoreToolInstructions(
     "- The request tool exchanges only structured availability with the other ME3 assistant. It does not open, read, or write either owner's private assistant chat.",
     "- If the other owner's policy requires review before sharing availability, explain that their approval is pending. Do not ask the requester to choose a time until mutual options arrive.",
     "- The request tool never books immediately. Show the returned numbered mutual options and wait for the owner to choose one.",
-    "- Use core_scheduling_approve after the owner explicitly approves sharing availability for an incoming request, chooses a shown option, or approves an incoming option selected by the other owner. Set confirmed=true only for that explicit approval.",
+    "- Use core_scheduling_approve after the recipient explicitly authorizes an exact set of incoming options, or after the requester chooses one shown option. Set confirmed=true only for that explicit action.",
     "- Use core_scheduling_decline when the owner explicitly declines or cancels an open scheduling request. Declining never writes a calendar event.",
-    "- Both owners must approve the exact selected time before either calendar is changed. Never claim a meeting is booked while the result says waiting_for_other_owner.",
+    "- Recipient authorization applies only to the exact offered slots. The requester’s selection of one of those slots completes both-owner approval; do not ask the recipient to approve it again. Never claim a meeting is booked while the result says waiting_for_other_owner.",
     "- Never mention scheduling request IDs or internal Soulink identifiers in the user-facing reply.",
     "ME3 Network directory rules:",
     "- Use core_network_directory_search when the owner asks to find a person, service, product, provider, skill, or collaborator among opt-in ME3 Network profiles.",

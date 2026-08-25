@@ -352,8 +352,13 @@ export function registerChannelRoutes(app: AppHono, deps: ChannelRouteDeps) {
       errorMessage: null,
     });
 
+    const contactSync = await syncSoulinkContacts(c.env, ownerId);
+
     return c.json({
       ok: true,
+      contactSync: contactSync.ok
+        ? { synced: contactSync.synced, created: contactSync.created, updated: contactSync.updated }
+        : { error: contactSync.error },
       ...(await buildSoulinkStatusPayload(c.env, ownerId, c.req.url, connection)),
     });
   });
@@ -499,7 +504,7 @@ async function buildSoulinkStatusPayload(
   };
 }
 
-async function syncSoulinkContacts(env: Env, ownerId: string) {
+export async function syncSoulinkContacts(env: Env, ownerId: string) {
   const config = getSoulinkConnectorConfig(env);
   if (!config.configured) {
     return { ok: false, status: 503, error: "Soulink connector is not configured" };
@@ -510,8 +515,20 @@ async function syncSoulinkContacts(env: Env, ownerId: string) {
     return { ok: false, status: 409, error: "Connect Soulink before syncing contacts" };
   }
 
-  const linksResult = await fetchSoulinkLinks(config.apiOrigin, connection);
+  await updateSoulinkContactSyncMetadata(env, connection, {
+    soulinkContactsLastAttemptedAt: new Date().toISOString(),
+    soulinkContactsLastError: null,
+  });
+
+  const linksResult = await fetchSoulinkLinks(config.apiOrigin, connection).catch((error) => ({
+    ok: false as const,
+    status: 502,
+    error: error instanceof Error ? error.message : "Soulink contacts could not be reached",
+  }));
   if (!linksResult.ok) {
+    await updateSoulinkContactSyncMetadata(env, connection, {
+      soulinkContactsLastError: linksResult.error,
+    });
     return {
       ok: false,
       status: linksResult.status,
@@ -542,6 +559,10 @@ async function syncSoulinkContacts(env: Env, ownerId: string) {
   }
 
   const contacts = await listAgentContacts(env, ownerId);
+  await updateSoulinkContactSyncMetadata(env, connection, {
+    soulinkContactsLastSyncedAt: new Date().toISOString(),
+    soulinkContactsLastError: null,
+  });
   return {
     ok: true,
     synced: created + updated,
@@ -551,6 +572,58 @@ async function syncSoulinkContacts(env: Env, ownerId: string) {
     contacts: contacts.contacts,
     summary: contacts.summary,
   };
+}
+
+export async function ensureSoulinkContactsFresh(
+  env: Env,
+  ownerId: string,
+  staleAfterMs = 24 * 60 * 60 * 1000,
+) {
+  const connection = await getSoulinkConnection(env, ownerId);
+  if (!connection || connection.status !== "active") return null;
+  const metadata = parseJsonRecord(connection.provider_metadata_json);
+  const lastSyncedAt = Date.parse(stringValue(metadata.soulinkContactsLastSyncedAt) || "");
+  if (Number.isFinite(lastSyncedAt) && Date.now() - lastSyncedAt < staleAfterMs) {
+    return { ok: true as const, fresh: true as const };
+  }
+  return syncSoulinkContacts(env, ownerId);
+}
+
+export async function syncDueSoulinkContacts(env: Env) {
+  const rows = await env.DB.prepare(
+    `SELECT id, user_id, channel, status, setup_token,
+            provider_connection_id, provider_user_id, provider_thread_id,
+            provider_username, provider_metadata_json,
+            telegram_user_id, telegram_chat_id, telegram_username,
+            telegram_first_name, telegram_last_name, connected_at,
+            disconnected_at, last_inbound_at, last_outbound_at, created_at,
+            updated_at
+     FROM agent_channel_connections
+     WHERE channel = 'soulink' AND status = 'active'`,
+  ).all<DbAgentChannelConnection>();
+  const results = await Promise.all((rows.results || []).map((connection) =>
+    ensureSoulinkContactsFresh(env, connection.user_id).catch(() => null)
+  ));
+  return {
+    scanned: rows.results?.length || 0,
+    synced: results.filter((result) => result && "synced" in result).length,
+  };
+}
+
+async function updateSoulinkContactSyncMetadata(
+  env: Env,
+  connection: DbAgentChannelConnection,
+  patch: Record<string, unknown>,
+) {
+  const current = await getSoulinkConnection(env, connection.user_id);
+  const metadata = parseJsonRecord(current?.provider_metadata_json || connection.provider_metadata_json);
+  await env.DB.prepare(
+    `UPDATE agent_channel_connections
+     SET provider_metadata_json = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  )
+    .bind(JSON.stringify({ ...metadata, ...patch }), connection.id)
+    .run();
 }
 
 async function listSoulinkLinksForConnectedCore(

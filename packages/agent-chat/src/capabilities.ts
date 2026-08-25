@@ -432,9 +432,9 @@ export const CORE_CHAT_CAPABILITIES = [
     id: "core.scheduling.approve",
     owner: "core",
     pluginId: null,
-    ownerFacingLabel: "Approve a scheduling option",
+    ownerFacingLabel: "Offer or choose scheduling times",
     summary:
-      "Approve a mutual scheduling option after the owner explicitly chooses it, or approve an incoming option selected by the other owner.",
+      "Authorize the exact mutual times an incoming requester may choose, or choose one exact time offered by the recipient.",
     category: "calendar",
     handler: {
       surface: "chat",
@@ -464,7 +464,7 @@ export const CORE_CHAT_CAPABILITIES = [
     },
     auditEventKind: "core_scheduling_approved",
     examples: {
-      positive: ["Book option 2 with Sarah.", "Approve the time Chris chose."],
+      positive: ["Offer these times to Sarah.", "Book option 2 with Sarah."],
       negative: ["What times could work with Sarah?"],
     },
     chat: {

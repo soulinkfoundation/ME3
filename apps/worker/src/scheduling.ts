@@ -1521,17 +1521,21 @@ async function finalizeSchedulingRequestAsCalendarEvent(
   slot: SchedulingRequestSlot,
 ): Promise<DbUserCalendarEvent> {
   const eventId = crypto.randomUUID();
-  const title = [timeType.title, request.target_name].filter(Boolean).join(" with ");
+  const title = [timeType.title, schedulingRequestCounterpartyName(request)]
+    .filter(Boolean)
+    .join(" with ");
+  const meetingUrl = schedulingRequestMeetingUrl(request.policy_json);
   const notes = [
     request.reason,
+    meetingUrl ? `Join: ${meetingUrl}` : null,
     "Created by ME3 agent-assisted scheduling after both owners approved.",
   ].filter(Boolean).join("\n\n");
   await env.DB.prepare(
     `INSERT INTO user_calendar_events
        (id, user_id, title, notes, location, starts_at, ends_at, timezone, all_day, kind, recurrence_rule)
-     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0, 'event', NULL)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'event', NULL)`,
   )
-    .bind(eventId, ownerId, title, notes, slot.startsAt, slot.endsAt, slot.timezone)
+    .bind(eventId, ownerId, title, notes, meetingUrl, slot.startsAt, slot.endsAt, slot.timezone)
     .run();
 
   return (
@@ -1547,7 +1551,7 @@ async function finalizeSchedulingRequestAsCalendarEvent(
       user_id: ownerId,
       title,
       notes,
-      location: null,
+      location: meetingUrl,
       starts_at: slot.startsAt,
       ends_at: slot.endsAt,
       timezone: slot.timezone,
@@ -1557,6 +1561,28 @@ async function finalizeSchedulingRequestAsCalendarEvent(
       created_at: new Date().toISOString(),
     }
   );
+}
+
+function schedulingRequestMeetingUrl(policyJson: string | null) {
+  if (!policyJson) return null;
+  try {
+    const policy = JSON.parse(policyJson) as { meetingUrl?: unknown };
+    if (typeof policy.meetingUrl !== "string") return null;
+    const url = new URL(policy.meetingUrl);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function schedulingRequestCounterpartyName(request: DbSchedulingRequest) {
+  if (!request.policy_json) return request.target_name;
+  try {
+    const policy = JSON.parse(request.policy_json) as { role?: unknown };
+    return policy.role === "target" ? request.requester_name : request.target_name;
+  } catch {
+    return request.target_name;
+  }
 }
 
 async function finalizeSchedulingRequestAsBooking(
