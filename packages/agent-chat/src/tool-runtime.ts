@@ -267,11 +267,13 @@ export function toAnthropicToolRequest(
       .map((message) => message.content)
       .join("\n\n"),
     messages: turns,
+    // Anthropic rejects requests with more than 20 tools marked strict. ME3
+    // validates tool arguments in its own policy/runtime layer, so leave native
+    // strict mode unset and keep the complete capability set available.
     tools: tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
       input_schema: tool.parameters,
-      strict: true,
     })),
     ...(toolChoice
       ? { tool_choice: { type: "tool", name: toolChoice.name } }

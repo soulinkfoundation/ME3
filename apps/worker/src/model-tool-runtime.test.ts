@@ -212,8 +212,9 @@ describe("live agent tool model adapters", () => {
 
     expect(body).toMatchObject({
       model: "test-model",
-      tools: [{ name: "core_reminders_list", strict: true }],
+      tools: [{ name: "core_reminders_list" }],
     });
+    expect(body.tools[0]).not.toHaveProperty("strict");
     expect(result.toolCalls[0]).toMatchObject({ id: "anthropic-1" });
   });
 });

@@ -1223,6 +1223,17 @@ describe("Core chat native context", () => {
     expect(aiRun).toHaveBeenCalledWith(
       "openai/gpt-5.4-mini",
       expect.objectContaining({ reasoning_effort: "none" }),
+      {
+        gateway: {
+          id: "default",
+          metadata: {
+            me3_request_id: expect.any(String),
+            me3_turn_id: expect.any(String),
+          },
+          requestTimeoutMs: 12_000,
+          retries: { maxAttempts: 1 },
+        },
+      },
     );
   });
 
@@ -1252,6 +1263,17 @@ describe("Core chat native context", () => {
     expect(aiRun).toHaveBeenCalledWith(
       "anthropic/claude-sonnet-4.6",
       expect.objectContaining({ max_tokens: 800 }),
+      {
+        gateway: {
+          id: "default",
+          metadata: {
+            me3_request_id: expect.any(String),
+            me3_turn_id: expect.any(String),
+          },
+          requestTimeoutMs: 12_000,
+          retries: { maxAttempts: 1 },
+        },
+      },
     );
   });
 
@@ -1322,6 +1344,17 @@ describe("Core chat native context", () => {
     expect(aiRun).toHaveBeenCalledWith(
       "@cf/zai-org/glm-4.7-flash",
       expect.any(Object),
+      {
+        gateway: {
+          id: "default",
+          metadata: {
+            me3_request_id: expect.any(String),
+            me3_turn_id: expect.any(String),
+          },
+          requestTimeoutMs: 12_000,
+          retries: { maxAttempts: 1 },
+        },
+      },
     );
   });
 

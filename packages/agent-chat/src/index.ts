@@ -4449,7 +4449,26 @@ async function resolveAiRoute(
             ? await getStoredApiKey(env, ownerId, providerId)
             : null)
         : null;
-  const aiGateway = await getAiGatewayRuntimeConfig(env, ownerId).catch(() => null);
+  const configuredAiGateway = await getAiGatewayRuntimeConfig(env, ownerId).catch(
+    () => null,
+  );
+  // Workers AI bindings are already authenticated to the Worker's Cloudflare
+  // account. Managed Everyday therefore does not need a separately stored
+  // account ID or API token to use that account's default gateway. Keeping the
+  // gateway explicit is important because per-request timeout/retry policy is
+  // ignored when the third argument to env.AI.run() is omitted.
+  const aiGateway =
+    managedEveryday && env.AI
+      ? {
+          accountId: configuredAiGateway?.accountId ?? null,
+          gatewayId:
+            configuredAiGateway?.gatewayId || DEFAULT_AI_GATEWAY_ID,
+          apiToken: configuredAiGateway?.apiToken ?? null,
+          routeWorkersAi: true,
+          routeExternalProviders:
+            configuredAiGateway?.routeExternalProviders ?? false,
+        }
+      : configuredAiGateway;
   const managedBudgetExceeded = await isManagedEverydayBudgetExceeded(
     env,
     ownerId,
@@ -5223,12 +5242,31 @@ function attachAgentTurnTrace(
     context: CoreChatAgentContextResult | null;
   },
 ): AgentSandboxDispatchResponse {
+  logAgentModelAttempts(response, input.input);
   if (!isAgentChatTraceEnabled(env)) return removeAgentTurnTrace(response);
   const { modelAttempts: _modelAttempts, ...publicResponse } = response;
   return {
     ...publicResponse,
     trace: buildAgentTurnTrace(response, input),
   };
+}
+
+function logAgentModelAttempts(
+  response: AgentSandboxDispatchResponse,
+  input: AgentSandboxDispatchInput,
+): void {
+  if (!response.modelAttempts?.length) return;
+  console.info(
+    "ME3_MODEL_ATTEMPTS",
+    JSON.stringify({
+      requestId: input.requestId,
+      turnId: input.turnId,
+      threadId: input.threadId ?? null,
+      mode: normalizeAgentChatMode(input.mode),
+      finalModel: response.model,
+      attempts: response.modelAttempts,
+    }),
+  );
 }
 
 function applyAgentTurnTracePolicy(

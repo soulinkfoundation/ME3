@@ -225,7 +225,7 @@ describe("agent tool provider adapters", () => {
     const request = toAnthropicToolRequest(transcript, TOOLS) as {
       system: string;
       messages: Array<{ role: string; content: unknown }>;
-      tools: Array<{ strict: boolean; input_schema: unknown }>;
+      tools: Array<{ strict?: boolean; input_schema: unknown }>;
     };
 
     expect(request.system).toBe("Be useful.");
@@ -238,9 +238,9 @@ describe("agent tool provider adapters", () => {
       content: [{ type: "tool_result", tool_use_id: "call-1" }],
     });
     expect(request.tools[0]).toMatchObject({
-      strict: true,
       input_schema: TOOLS[0].parameters,
     });
+    expect(request.tools[0]).not.toHaveProperty("strict");
 
     expect(
       fromAnthropicToolResponse({
