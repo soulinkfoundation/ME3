@@ -45,7 +45,14 @@ export async function runAgentToolModelStreamStep(
           stream: true,
         };
     const options = route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
-      ? { gateway: { id: route.aiGateway.gatewayId } }
+      ? {
+          gateway: {
+            id: route.aiGateway.gatewayId,
+            ...(route.aiGatewayMetadata
+              ? { metadata: route.aiGatewayMetadata }
+              : {}),
+          },
+        }
       : undefined;
     const result = options
       ? await route.ai.run(route.model, request, options)

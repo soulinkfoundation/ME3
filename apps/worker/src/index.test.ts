@@ -7279,6 +7279,24 @@ describe("ME3 Worker auth", () => {
         reminderAction: null,
         contentAction: null,
         contactsChanged: false,
+        performance: {
+          version: 1,
+          resultSource: "fresh",
+          executionMs: 12,
+          durableObjectTotalMs: 20,
+        },
+        streamMetrics: {
+          timeToFirstTokenMs: 8,
+          totalDurationMs: 12,
+          deltaCount: 2,
+          modelRequestCount: 1,
+          modelRequestDurationMs: 11,
+          toolCallCount: 0,
+          toolExecutionDurationMs: 0,
+          inputCharacterCount: 100,
+          availableToolCount: 3,
+          toolSchemaCharacterCount: 500,
+        },
       };
       return new Response([
         'event: status\ndata: {"state":"model_started"}\n\n',
@@ -7357,6 +7375,21 @@ describe("ME3 Worker auth", () => {
           kind: "text",
         },
       ],
+      performance: {
+        route: {
+          version: 1,
+          durableObjectStreamMs: expect.any(Number),
+          routeToRuntimeDoneMs: expect.any(Number),
+        },
+        runtime: {
+          executionMs: 12,
+          durableObjectTotalMs: 20,
+        },
+        stream: {
+          timeToFirstTokenMs: 8,
+          totalDurationMs: 12,
+        },
+      },
     });
   });
 

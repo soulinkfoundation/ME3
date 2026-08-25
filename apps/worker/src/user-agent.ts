@@ -96,6 +96,8 @@ export class Me3UserAgent {
       const encoder = new TextEncoder();
       const stream = new ReadableStream<Uint8Array>({
         start: async (controller) => {
+          const runtimeStartedAt = performance.now();
+          let firstRuntimeEventAt: number | null = null;
           let visibleText = "";
           const send = (event: string, data: Record<string, unknown>) => {
             controller.enqueue(
@@ -103,6 +105,7 @@ export class Me3UserAgent {
             );
           };
           const forward = async (event: AgentChatRuntimeStreamEvent) => {
+            firstRuntimeEventAt ??= performance.now();
             if (event.event === "delta" && typeof event.data.text === "string") {
               visibleText += event.data.text;
             }
@@ -123,12 +126,24 @@ export class Me3UserAgent {
               createAgentSchedulingToolServices(this.env, input.userId),
               createMe3NetworkDirectoryToolServices(this.env),
             );
+            const completedResponse = response.performance
+              ? {
+                  ...response,
+                  performance: {
+                    ...response.performance,
+                    durableObjectFirstEventMs: firstRuntimeEventAt === null
+                      ? null
+                      : userAgentDurationMs(runtimeStartedAt, firstRuntimeEventAt),
+                    durableObjectTotalMs: userAgentDurationMs(runtimeStartedAt),
+                  },
+                }
+              : response;
             const finalText = response.replyText || "";
             if (visibleText !== finalText) {
               send("status", { state: "finalizing", replaceText: true });
               if (finalText) send("delta", { text: finalText });
             }
-            send("done", response as unknown as Record<string, unknown>);
+            send("done", completedResponse as unknown as Record<string, unknown>);
           } catch (error) {
             if (request.signal.aborted || isAbortError(error)) {
               send("status", { state: "cancelled" });
@@ -196,4 +211,8 @@ function createReconstructableStorage(storage: DurableObjectStorage) {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function userAgentDurationMs(startedAt: number, finishedAt = performance.now()): number {
+  return Number((finishedAt - startedAt).toFixed(2));
 }

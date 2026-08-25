@@ -36,6 +36,7 @@ export type AgentChatAiRoute = {
     run(model: string, input: unknown, options?: unknown): Promise<unknown>;
   } | null;
   aiGateway: AgentChatAiGatewayRuntimeConfig | null;
+  aiGatewayMetadata?: Record<string, string | number | boolean>;
   recordUsage?: (input: {
     model: string;
     usage: AgentModelUsage;
@@ -332,6 +333,9 @@ async function runWorkersAi(
       ? {
           gateway: {
             id: route.aiGateway.gatewayId,
+            ...(route.aiGatewayMetadata
+              ? { metadata: route.aiGatewayMetadata }
+              : {}),
           },
         }
       : undefined;

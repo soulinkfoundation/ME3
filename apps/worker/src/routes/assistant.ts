@@ -124,6 +124,19 @@ type AssistantChatTurnStreamSend = (
   event: AssistantChatTurnStreamEvent,
   data: Record<string, unknown>,
 ) => void;
+type AssistantChatRoutePerformance = {
+  version: 1;
+  handlerPreStreamMs: number;
+  replayLookupMs: number | null;
+  threadResolutionMs: number | null;
+  jobBuilderCheckMs: number | null;
+  siteScopeCheckMs: number | null;
+  attachmentContextMs: number | null;
+  turnRecordMs: number | null;
+  durableObjectHeadersMs: number | null;
+  durableObjectStreamMs: number | null;
+  routeToRuntimeDoneMs: number | null;
+};
 type AssistantThreadRow = {
   id: string;
   owner_id: string;
@@ -3360,6 +3373,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   }
 
   async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
+    const handlerStartedAt = performance.now();
     const ownerId = await requireOwner(c);
     if (!ownerId) return unauthorized(c);
 
@@ -3415,6 +3429,20 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       attachmentManifest,
       scopeParse || undefined,
     );
+    const streamStartedAt = performance.now();
+    const routePerformance: AssistantChatRoutePerformance = {
+      version: 1,
+      handlerPreStreamMs: assistantRouteDurationMs(handlerStartedAt),
+      replayLookupMs: null,
+      threadResolutionMs: null,
+      jobBuilderCheckMs: null,
+      siteScopeCheckMs: null,
+      attachmentContextMs: null,
+      turnRecordMs: null,
+      durableObjectHeadersMs: null,
+      durableObjectStreamMs: null,
+      routeToRuntimeDoneMs: null,
+    };
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream<Uint8Array>({
@@ -3434,11 +3462,18 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           | null = null;
 
         try {
-          send("status", { state: "started" });
+          send("status", {
+            state: "started",
+            serverElapsedMs: assistantRouteDurationMs(handlerStartedAt),
+          });
+          const replayLookupStartedAt = performance.now();
           const replay = await getAgentSandboxTurnResult(
             c.env,
             ownerId,
             requestId,
+          );
+          routePerformance.replayLookupMs = assistantRouteDurationMs(
+            replayLookupStartedAt,
           );
           if (replay) {
             if (replay.threadId) send("thread", { threadId: replay.threadId });
@@ -3446,12 +3481,16 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
             send("done", { mode, ...replay } as unknown as Record<string, unknown>);
             return;
           }
+          const threadResolutionStartedAt = performance.now();
           const thread = await resolveAssistantThreadForTurn(
             c.env,
             ownerId,
             requestedThreadId,
             messageText,
             requestedProjectId,
+          );
+          routePerformance.threadResolutionMs = assistantRouteDurationMs(
+            threadResolutionStartedAt,
           );
           if (!thread) {
             send("error", { ok: false, error: "Assistant thread is required" });
@@ -3464,7 +3503,11 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
           send("thread", { threadId: thread.id });
 
+          const jobBuilderCheckStartedAt = performance.now();
           const builderAction = await createAssistantJobBuilderAction(c.env, ownerId, messageText);
+          routePerformance.jobBuilderCheckMs = assistantRouteDurationMs(
+            jobBuilderCheckStartedAt,
+          );
           if (builderAction) {
             const replyText = assistantJobBuilderReplyText(builderAction);
             await persistAssistantTurnMessages(
@@ -3498,6 +3541,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           }
 
           if (siteToolsEnabled) {
+            const siteScopeCheckStartedAt = performance.now();
             const scopeRequiredReply = siteScopeAllowed
               ? null
               : await assistantSiteScopeRequiredReply(c.env, ownerId, thread.id, messageText);
@@ -3541,6 +3585,9 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
                   selectedModel,
                 )
               : null;
+            routePerformance.siteScopeCheckMs = assistantRouteDurationMs(
+              siteScopeCheckStartedAt,
+            );
             if (siteAction) {
               await persistAssistantTurnMessages(
                 c.env,
@@ -3567,12 +3614,17 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
             return;
           }
 
+          const attachmentContextStartedAt = performance.now();
           const attachmentTextContext = await loadAssistantAttachmentTextContext(
             c.env,
             ownerId,
             attachmentManifest,
           );
+          routePerformance.attachmentContextMs = assistantRouteDurationMs(
+            attachmentContextStartedAt,
+          );
 
+          const turnRecordStartedAt = performance.now();
           const turn = await createAgentSandboxTurnRecord(c.env, {
             userId: ownerId,
             requestId,
@@ -3598,6 +3650,9 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               attachmentManifest,
             },
           });
+          routePerformance.turnRecordMs = assistantRouteDurationMs(
+            turnRecordStartedAt,
+          );
           auditContext = {
             connectionId: turn.connection.id,
             sourceEventId: turn.sourceEvent.id,
@@ -3607,6 +3662,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
           const id = runtime.idFromName(ownerId);
           const stub = runtime.get(id);
+          const durableObjectHeadersStartedAt = performance.now();
           const response = await stub.fetch(
             "https://me3-core-user-agent.internal/dispatch/sandbox/stream",
             {
@@ -3629,16 +3685,45 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               }),
             },
           );
+          routePerformance.durableObjectHeadersMs = assistantRouteDurationMs(
+            durableObjectHeadersStartedAt,
+          );
 
           if (
             response.ok &&
             response.body &&
             response.headers.get("content-type")?.includes("text/event-stream")
           ) {
+            const durableObjectStreamStartedAt = performance.now();
             const runtimeStream = await forwardAssistantRuntimeStream(
               response.body,
               controller,
               c.req.raw.signal,
+            );
+            routePerformance.durableObjectStreamMs = assistantRouteDurationMs(
+              durableObjectStreamStartedAt,
+            );
+            routePerformance.routeToRuntimeDoneMs = assistantRouteDurationMs(
+              streamStartedAt,
+            );
+            const latency = {
+              route: routePerformance,
+              runtime: runtimeStream.doneData?.performance ?? null,
+              stream: runtimeStream.doneData?.streamMetrics ?? null,
+            };
+            console.info(
+              "ME3_ASSISTANT_LATENCY",
+              JSON.stringify({
+                requestId,
+                turnId: turn.turnId,
+                threadId: thread.id,
+                mode,
+                model:
+                  typeof runtimeStream.doneData?.model === "string"
+                    ? runtimeStream.doneData.model
+                    : selectedModel?.model ?? null,
+                latency,
+              }),
             );
             await touchAssistantThread(c.env, ownerId, thread.id);
             await insertAssistantChatStreamAuditEvent(c.env, {
@@ -3653,6 +3738,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               selectedModel: selectedModel || null,
               attachmentCount,
               attachmentManifest,
+              performance: latency,
               error: runtimeStream.completed
                 ? null
                 : "Agent runtime stream ended without a successful done event.",
@@ -3935,6 +4021,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       selectedModel: ReturnType<typeof parseAssistantChatTurnModelSelection> | null;
       attachmentCount: number;
       attachmentManifest: AssistantAttachmentAuditManifestItem[];
+      performance?: Record<string, unknown> | null;
       error: string | null;
     },
   ) {
@@ -3968,6 +4055,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           selectedModel: input.selectedModel,
           attachmentCount: input.attachmentCount,
           attachmentManifest: input.attachmentManifest,
+          performance: input.performance ?? null,
         },
         errorMessage: input.error,
       });
@@ -3980,7 +4068,10 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     stream: ReadableStream<Uint8Array>,
     controller: ReadableStreamDefaultController<Uint8Array>,
     signal: AbortSignal,
-  ): Promise<{ completed: boolean }> {
+  ): Promise<{
+    completed: boolean;
+    doneData: Record<string, unknown> | null;
+  }> {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
     const abort = () => void reader.cancel("aborted");
@@ -3988,6 +4079,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     let buffer = "";
     let sawDone = false;
     let sawError = false;
+    let doneData: Record<string, unknown> | null = null;
     try {
       while (true) {
         if (signal.aborted) {
@@ -4001,18 +4093,45 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         while (boundary >= 0) {
           const event = buffer.slice(0, boundary);
           buffer = buffer.slice(boundary + 2);
-          sawDone ||= /(?:^|\n)event:\s*done\s*$/m.test(event);
+          const eventIsDone = /(?:^|\n)event:\s*done\s*$/m.test(event);
+          sawDone ||= eventIsDone;
           sawError ||= /(?:^|\n)event:\s*error\s*$/m.test(event);
+          if (eventIsDone) {
+            doneData = parseAssistantStreamEventData(event);
+          }
           boundary = buffer.indexOf("\n\n");
         }
       }
       buffer += decoder.decode();
-      sawDone ||= /(?:^|\n)event:\s*done\s*$/m.test(buffer);
+      const finalEventIsDone = /(?:^|\n)event:\s*done\s*$/m.test(buffer);
+      sawDone ||= finalEventIsDone;
       sawError ||= /(?:^|\n)event:\s*error\s*$/m.test(buffer);
-      return { completed: sawDone && !sawError };
+      if (finalEventIsDone) {
+        doneData = parseAssistantStreamEventData(buffer);
+      }
+      return { completed: sawDone && !sawError, doneData };
     } finally {
       signal.removeEventListener("abort", abort);
       reader.releaseLock();
+    }
+  }
+
+  function parseAssistantStreamEventData(
+    rawEvent: string,
+  ): Record<string, unknown> | null {
+    const data = rawEvent
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!data) return null;
+    try {
+      const parsed = JSON.parse(data);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
     }
   }
 
@@ -4021,6 +4140,10 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     text: string,
   ) {
     send("delta", { text: text || "" });
+  }
+
+  function assistantRouteDurationMs(startedAt: number): number {
+    return Number((performance.now() - startedAt).toFixed(2));
   }
 
   app.post("/api/assistant/chat/turn", handleAssistantChatTurn);

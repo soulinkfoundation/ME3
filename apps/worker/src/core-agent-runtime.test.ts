@@ -285,6 +285,13 @@ describe("Core Agent Runtime v2 reminders", () => {
       timeToFirstTokenMs: expect.any(Number),
       totalDurationMs: expect.any(Number),
       deltaCount: 2,
+      modelRequestCount: 2,
+      modelRequestDurationMs: expect.any(Number),
+      toolCallCount: 1,
+      toolExecutionDurationMs: expect.any(Number),
+      inputCharacterCount: expect.any(Number),
+      availableToolCount: expect.any(Number),
+      toolSchemaCharacterCount: expect.any(Number),
     });
     expect(events.map((event) => `${event.event}:${String(event.data.state || "delta")}`))
       .toEqual([
@@ -298,7 +305,13 @@ describe("Core Agent Runtime v2 reminders", () => {
     expect(events.find((event) => event.event === "tool")?.data).toMatchObject({
       clearText: true,
       capabilityId: "core.reminders.create",
+      elapsedMs: expect.any(Number),
     });
+    expect(
+      events.find(
+        (event) => event.event === "tool" && event.data.state === "completed",
+      )?.data,
+    ).toMatchObject({ durationMs: expect.any(Number) });
     expect(database.reminders).toHaveLength(1);
   });
 

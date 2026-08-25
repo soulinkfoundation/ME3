@@ -68,6 +68,10 @@ export type ApiStreamEvent = {
   data: unknown
 }
 
+type ApiStreamRequestOptions = RequestInit & {
+  onResponse?: (response: Response) => void
+}
+
 async function request<T>(
   endpoint: string,
   options: RequestInit = {}
@@ -115,25 +119,27 @@ async function streamEvents(
   endpoint: string,
   body: unknown,
   onEvent: (event: ApiStreamEvent) => void,
-  options: RequestInit = {}
+  options: ApiStreamRequestOptions = {}
 ): Promise<void> {
+  const { onResponse, ...requestOptions } = options
   const headers: Record<string, string> = {
     Accept: 'text/event-stream',
   }
 
-  if (options.headers) {
-    Object.assign(headers, options.headers as Record<string, string>)
+  if (requestOptions.headers) {
+    Object.assign(headers, requestOptions.headers as Record<string, string>)
   }
 
   headers['Content-Type'] = 'application/json'
 
   const response = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
+    ...requestOptions,
     method: 'POST',
     headers,
     body: JSON.stringify(body),
     credentials: 'include',
   })
+  onResponse?.(response)
 
   if (!response.ok) {
     const text = await response.text()

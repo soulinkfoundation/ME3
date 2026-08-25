@@ -2635,6 +2635,11 @@ async function submitAssistantText(
   assistantSending.value = true;
   assistantAwaitingResponse.value = true;
   await scrollAssistantToBottom();
+  const requestId = crypto.randomUUID();
+  const clientTurnStartedAt = performance.now();
+  let clientResponseAt: number | null = null;
+  let clientFirstEventAt: number | null = null;
+  let clientFirstTextAt: number | null = null;
   const assistantMessageId = newAssistantMessageId("assistant");
   let assistantMessageStarted = false;
 
@@ -2656,7 +2661,7 @@ async function submitAssistantText(
     await api.streamEvents(
       "/assistant/chat/turn/stream",
       {
-        requestId: crypto.randomUUID(),
+        requestId,
         messageText: normalized,
         threadId: assistantThreadId.value,
         projectId: assistantThreadId.value ? undefined : routeProjectId(),
@@ -2670,6 +2675,7 @@ async function submitAssistantText(
           : null,
       },
       (event) => {
+        clientFirstEventAt ??= performance.now();
         const data = streamEventRecord(event);
 
         if (event.event === "thread") {
@@ -2721,7 +2727,10 @@ async function submitAssistantText(
           );
           if (message && typeof data.text === "string") {
             message.text += data.text;
-            if (data.text) assistantAwaitingResponse.value = false;
+            if (data.text) {
+              clientFirstTextAt ??= performance.now();
+              assistantAwaitingResponse.value = false;
+            }
           }
           return;
         }
@@ -2729,6 +2738,32 @@ async function submitAssistantText(
         if (event.event === "done") {
           ensureAssistantMessage();
           assistantAwaitingResponse.value = false;
+          const clientDoneAt = performance.now();
+          console.info("ME3_ASSISTANT_LATENCY", {
+            requestId,
+            client: {
+              responseHeadersMs: assistantClientDurationMs(
+                clientTurnStartedAt,
+                clientResponseAt,
+              ),
+              firstEventMs: assistantClientDurationMs(
+                clientTurnStartedAt,
+                clientFirstEventAt,
+              ),
+              firstTextMs: assistantClientDurationMs(
+                clientTurnStartedAt,
+                clientFirstTextAt,
+              ),
+              doneMs: assistantClientDurationMs(
+                clientTurnStartedAt,
+                clientDoneAt,
+              ),
+            },
+            server: {
+              performance: data.performance ?? null,
+              stream: data.streamMetrics ?? null,
+            },
+          });
           result = data as unknown as AgentSandboxResponse;
           applyAssistantResultToMessage(assistantMessageId, result);
           return;
@@ -2744,6 +2779,9 @@ async function submitAssistantText(
       },
       {
         signal: abortController.signal,
+        onResponse: () => {
+          clientResponseAt ??= performance.now();
+        },
       },
     );
 
@@ -2791,6 +2829,15 @@ async function submitAssistantText(
     autosizeAssistantComposer();
     assistantComposerRef.value?.focus();
   }
+}
+
+function assistantClientDurationMs(
+  startedAt: number,
+  finishedAt: number | null,
+): number | null {
+  return finishedAt === null
+    ? null
+    : Number((finishedAt - startedAt).toFixed(2));
 }
 
 async function sendAssistantMessage() {
@@ -5499,7 +5546,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </a>
               </div>
             </div>
-            <div class="assistant-message__tools" aria-label="Message actions">
+            <div
+              v-if="
+                message.role !== 'assistant' ||
+                !assistantSending ||
+                index !== assistantConsoleMessages.length - 1
+              "
+              class="assistant-message__tools"
+              aria-label="Message actions"
+            >
               <span
                 v-if="formatAssistantMessageTime(message.createdAt)"
                 class="assistant-message__time"

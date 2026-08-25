@@ -26,7 +26,14 @@ export async function runAgentToolModelStep(
     if (!route.ai) throw new Error("Workers AI binding is not configured");
     const options =
       route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
-        ? { gateway: { id: route.aiGateway.gatewayId } }
+        ? {
+            gateway: {
+              id: route.aiGateway.gatewayId,
+              ...(route.aiGatewayMetadata
+                ? { metadata: route.aiGatewayMetadata }
+                : {}),
+            },
+          }
         : undefined;
     const anthropicModel = isAnthropicUnifiedModel(route.model);
     const reasoningEffort = openAiCompatibleReasoningEffort(route.model);

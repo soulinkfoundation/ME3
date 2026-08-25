@@ -73,6 +73,7 @@ export {
   type AgentChatImageAction,
   type AgentChatRuntimeStreamEvent,
   type AgentChatRuntimeStreamOptions,
+  type AgentChatPerformanceMetrics,
   type AgentChatStreamMetrics,
   type CoreSchedulingContact,
   type CoreSchedulingOption,

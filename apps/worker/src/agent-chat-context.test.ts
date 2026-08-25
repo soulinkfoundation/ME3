@@ -1920,6 +1920,10 @@ describe("Core chat native context", () => {
       {
         gateway: {
           id: "friend-one",
+          metadata: {
+            me3_request_id: expect.any(String),
+            me3_turn_id: expect.any(String),
+          },
         },
       },
     );
@@ -2988,7 +2992,44 @@ describe("Core chat native context", () => {
       fallbackReason: "AI provider setup required",
     });
     expect(response.trace).toBeUndefined();
+    expect(response.performance).toMatchObject({
+      version: 1,
+      resultSource: "fresh",
+      ownerProfileMs: expect.any(Number),
+      toolPlanMs: expect.any(Number),
+      routeResolutionMs: expect.any(Number),
+      setupAndContextMs: expect.any(Number),
+      beforeResultPersistenceMs: expect.any(Number),
+    });
     expect(env.state.persistedMessages.map((message) => message.role)).toEqual(["user"]);
+  });
+
+  it("keeps content-free stream metrics when development traces are disabled", async () => {
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "A short reply.",
+    }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      dispatchInput("Give me a short reply."),
+      { onEvent: vi.fn() },
+    );
+
+    expect(response.trace).toBeUndefined();
+    expect(response.streamMetrics).toMatchObject({
+      totalDurationMs: expect.any(Number),
+      modelRequestCount: 1,
+      modelRequestDurationMs: expect.any(Number),
+      toolCallCount: 0,
+      toolExecutionDurationMs: 0,
+    });
+    expect(response.performance).toMatchObject({
+      version: 1,
+      executionMs: expect.any(Number),
+      contextLoadMs: expect.any(Number),
+    });
   });
 
   it("trims an oversized owner snapshot before model calls", async () => {

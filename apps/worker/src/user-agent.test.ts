@@ -36,6 +36,8 @@ describe("ME3 user agent streaming", () => {
     expect(text.match(/event: delta/g)).toHaveLength(2);
     expect(text).not.toContain('"state":"finalizing"');
     expect(text).toContain('"replyText":"Final reply."');
+    expect(text).toContain('"durableObjectFirstEventMs"');
+    expect(text).toContain('"durableObjectTotalMs"');
     expect(text).toContain("event: done");
   });
 
@@ -158,5 +160,21 @@ function response(replyText: string) {
     replyText,
     model: "test-model",
     source: "workers-ai",
+    performance: {
+      version: 1,
+      resultSource: "fresh",
+      memoryCacheLookupMs: 1,
+      databaseReplayLookupMs: 1,
+      statePreparationMs: 1,
+      ownerProfileMs: 1,
+      toolPlanMs: 1,
+      routeResolutionMs: 1,
+      setupAndContextMs: 1,
+      contextLoadMs: 1,
+      imageInputMs: 1,
+      executionMs: 1,
+      messagePersistenceMs: 1,
+      beforeResultPersistenceMs: 10,
+    },
   };
 }

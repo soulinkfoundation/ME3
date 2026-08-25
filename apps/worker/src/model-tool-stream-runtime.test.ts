@@ -105,6 +105,43 @@ describe("streaming agent tool model adapters", () => {
       usage: result.usage,
     });
   });
+
+  it("attaches safe turn correlation metadata to streaming gateway calls", async () => {
+    const run = vi.fn(async () => sseStream(textEvents("workers-ai", ["Done"])));
+    const aiRoute = route("workers-ai", [], run);
+    aiRoute.aiGateway = {
+      accountId: "account-id",
+      gatewayId: "me3",
+      apiToken: null,
+      routeWorkersAi: true,
+      routeExternalProviders: false,
+    };
+    aiRoute.aiGatewayMetadata = {
+      me3_request_id: "request-1",
+      me3_turn_id: "turn-1",
+    };
+
+    await runAgentToolModelStreamStep(
+      aiRoute,
+      [{ role: "user", content: "Say done" }],
+      TOOLS,
+      () => undefined,
+    );
+
+    expect(run).toHaveBeenCalledWith(
+      "workers-stream-model",
+      expect.any(Object),
+      {
+        gateway: {
+          id: "me3",
+          metadata: {
+            me3_request_id: "request-1",
+            me3_turn_id: "turn-1",
+          },
+        },
+      },
+    );
+  });
 });
 
 function route(

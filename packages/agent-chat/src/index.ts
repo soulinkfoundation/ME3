@@ -328,6 +328,32 @@ export type AgentChatStreamMetrics = {
   timeToFirstTokenMs: number | null;
   totalDurationMs: number;
   deltaCount: number;
+  modelRequestCount: number;
+  modelRequestDurationMs: number;
+  toolCallCount: number;
+  toolExecutionDurationMs: number;
+  inputCharacterCount: number;
+  availableToolCount: number;
+  toolSchemaCharacterCount: number;
+};
+
+export type AgentChatPerformanceMetrics = {
+  version: 1;
+  resultSource: "fresh" | "memory_cache" | "database_replay";
+  memoryCacheLookupMs: number;
+  databaseReplayLookupMs: number;
+  statePreparationMs: number;
+  ownerProfileMs: number | null;
+  toolPlanMs: number | null;
+  routeResolutionMs: number | null;
+  setupAndContextMs: number | null;
+  contextLoadMs: number | null;
+  imageInputMs: number | null;
+  executionMs: number | null;
+  messagePersistenceMs: number | null;
+  beforeResultPersistenceMs: number;
+  durableObjectFirstEventMs?: number | null;
+  durableObjectTotalMs?: number;
 };
 
 export type AgentChatRuntimeStreamEvent = {
@@ -380,6 +406,7 @@ export type AgentSandboxDispatchResponse = {
   contactsChanged?: boolean;
   modelAttempts?: AgentChatModelAttemptTrace[] | null;
   streamMetrics?: AgentChatStreamMetrics | null;
+  performance?: AgentChatPerformanceMetrics | null;
   trace?: AgentChatTurnTrace | null;
   sourceReference?: AgentOwnerContentSourceReference | null;
   error?: string;
@@ -2061,44 +2088,83 @@ export async function dispatchAgentSandboxTurn(
   schedulingServices?: CoreSchedulingToolServices,
   networkDirectoryServices?: CoreNetworkDirectoryToolServices,
 ): Promise<AgentSandboxDispatchResponse> {
+  const dispatchStartedAt = performance.now();
+  const turnPerformance = createAgentChatPerformanceMetrics();
   const mode = normalizeAgentChatMode(input.mode);
   const resultKey = agentTurnResultStorageKey(input.requestId);
+  const memoryCacheLookupStartedAt = performance.now();
   const existing = await storage.get<AgentSandboxDispatchResponse>(resultKey);
+  turnPerformance.memoryCacheLookupMs = elapsedMs(memoryCacheLookupStartedAt);
   if (existing) {
-    return applyAgentTurnTracePolicy(env, {
-      ...existing,
-      ok: true,
-      mode: existing.mode || mode,
-    });
+    return applyAgentTurnTracePolicy(
+      env,
+      attachAgentChatPerformance(
+        {
+          ...existing,
+          ok: true,
+          mode: existing.mode || mode,
+        },
+        turnPerformance,
+        dispatchStartedAt,
+        "memory_cache",
+      ),
+    );
   }
+  const databaseReplayLookupStartedAt = performance.now();
   const persisted = await getPersistedAgentTurnResult<AgentSandboxDispatchResponse>(
     env.DB,
     input.userId,
     input.requestId,
     input.turnId,
   );
+  turnPerformance.databaseReplayLookupMs = elapsedMs(
+    databaseReplayLookupStartedAt,
+  );
   if (persisted) {
     await cacheAgentTurnResult(storage, resultKey, persisted);
-    return applyAgentTurnTracePolicy(env, {
-      ...persisted,
-      ok: true,
-      mode: persisted.mode || mode,
-    });
+    return applyAgentTurnTracePolicy(
+      env,
+      attachAgentChatPerformance(
+        {
+          ...persisted,
+          ok: true,
+          mode: persisted.mode || mode,
+        },
+        turnPerformance,
+        dispatchStartedAt,
+        "database_replay",
+      ),
+    );
   }
 
+  const statePreparationStartedAt = performance.now();
   await storage.put("userId", input.userId);
   await storage.put("lastSandboxConnectionId", input.connectionId);
   await storage.put("lastSandboxTurnId", input.turnId);
   await storage.put("lastSandboxTurnAt", new Date().toISOString());
+  turnPerformance.statePreparationMs = elapsedMs(statePreparationStartedAt);
 
+  const ownerProfileStartedAt = performance.now();
   const owner = await getOwnerProfile(env, input.userId);
+  turnPerformance.ownerProfileMs = elapsedMs(ownerProfileStartedAt);
+  const toolPlanStartedAt = performance.now();
   const toolPlan = await loadCoreChatToolTurnPlan(env, input);
-  const route = await resolveAiRoute(
+  turnPerformance.toolPlanMs = elapsedMs(toolPlanStartedAt);
+  const routeResolutionStartedAt = performance.now();
+  const resolvedRoute = await resolveAiRoute(
     env,
     input.userId,
     mode,
     input.selectedModel,
   );
+  const route: AiRoute = {
+    ...resolvedRoute,
+    aiGatewayMetadata: {
+      me3_request_id: input.requestId,
+      me3_turn_id: input.turnId,
+    },
+  };
+  turnPerformance.routeResolutionMs = elapsedMs(routeResolutionStartedAt);
   const useCoreToolRuntime =
     route.configured &&
     !isCoreChatOrientationTurn(toolPlan.decision) &&
@@ -2106,8 +2172,11 @@ export async function dispatchAgentSandboxTurn(
       (attachment) =>
         attachment.kind === "image" || attachment.mimeType?.startsWith("image/"),
     );
+  const directExecutionStartedAt = performance.now();
   const toolResponse = maybeHandleCoreDirectTurn(input, route);
   if (toolResponse) {
+    turnPerformance.executionMs = elapsedMs(directExecutionStartedAt);
+    const messagePersistenceStartedAt = performance.now();
     await persistAssistantMessage(
       env,
       input.userId,
@@ -2126,6 +2195,9 @@ export async function dispatchAgentSandboxTurn(
         assistantMessageMetadataForResponse(toolResponse),
       );
     }
+    turnPerformance.messagePersistenceMs = elapsedMs(
+      messagePersistenceStartedAt,
+    );
     let response: AgentSandboxDispatchResponse = {
       ...toolResponse,
       mode,
@@ -2138,6 +2210,12 @@ export async function dispatchAgentSandboxTurn(
       route: null,
       context: null,
     });
+    response = attachAgentChatPerformance(
+      response,
+      turnPerformance,
+      dispatchStartedAt,
+      "fresh",
+    );
     await persistAgentTurnResult(env.DB, storage, input, resultKey, response);
     return response;
   }
@@ -2146,12 +2224,15 @@ export async function dispatchAgentSandboxTurn(
     input.messageText,
     input.attachments,
   );
+  const imageExecutionStartedAt = performance.now();
   const imageTurn = await maybeHandleAssistantImageTurn(
     env,
     input,
     imageIntent,
   );
   if (imageTurn) {
+    turnPerformance.executionMs = elapsedMs(imageExecutionStartedAt);
+    const messagePersistenceStartedAt = performance.now();
     await persistAssistantMessage(
       env,
       input.userId,
@@ -2178,6 +2259,9 @@ export async function dispatchAgentSandboxTurn(
         });
       }
     }
+    turnPerformance.messagePersistenceMs = elapsedMs(
+      messagePersistenceStartedAt,
+    );
     let response: AgentSandboxDispatchResponse = {
       ...imageTurn.response,
       mode,
@@ -2190,6 +2274,12 @@ export async function dispatchAgentSandboxTurn(
       route: imageTurn.route,
       context: null,
     });
+    response = attachAgentChatPerformance(
+      response,
+      turnPerformance,
+      dispatchStartedAt,
+      "fresh",
+    );
     await persistAgentTurnResult(env.DB, storage, input, resultKey, response);
     return response;
   }
@@ -2201,6 +2291,7 @@ export async function dispatchAgentSandboxTurn(
   );
   const recent = toolPlan.recent;
   const orientationTurn = isCoreChatOrientationTurn(toolPlan.decision);
+  const setupAndContextStartedAt = performance.now();
   const [setupReadiness, agentContext] = await Promise.all([
     orientationTurn
       ? loadCoreChatSetupReadiness(
@@ -2215,6 +2306,8 @@ export async function dispatchAgentSandboxTurn(
       owner,
     }),
   ]);
+  turnPerformance.setupAndContextMs = elapsedMs(setupAndContextStartedAt);
+  turnPerformance.contextLoadMs = agentContext.loadDurationMs;
   const knowledgeContext = orientationTurn && route.configured
     ? buildMe3KnowledgeRuntimeContext(
         route.configured,
@@ -2232,13 +2325,16 @@ export async function dispatchAgentSandboxTurn(
   );
   let imageInputs: AgentChatImageInput[] = [];
   let imageInputError: string | null = null;
+  const imageInputStartedAt = performance.now();
   try {
     imageInputs = await loadAgentImageInputs(env, input.attachments);
   } catch (error) {
     imageInputError = modelErrorMessage(error) || "Could not load image attachment.";
   }
+  turnPerformance.imageInputMs = elapsedMs(imageInputStartedAt);
 
   let response: AgentSandboxDispatchResponse;
+  const executionStartedAt = performance.now();
   if (!route.configured) {
     response = {
       ok: true,
@@ -2299,7 +2395,9 @@ export async function dispatchAgentSandboxTurn(
         })
       : await runModelTurn(route, messages, input.turnId, imageInputs);
   }
+  turnPerformance.executionMs = elapsedMs(executionStartedAt);
   response = attachAgentContextToResponse(response, agentContext);
+  const messagePersistenceStartedAt = performance.now();
   await persistAssistantMessage(
     env,
     input.userId,
@@ -2318,6 +2416,9 @@ export async function dispatchAgentSandboxTurn(
       assistantMessageMetadataForResponse(response),
     );
   }
+  turnPerformance.messagePersistenceMs = elapsedMs(
+    messagePersistenceStartedAt,
+  );
   response.threadId = input.threadId ?? null;
   response.mode = mode;
   await touchAssistantThread(env, input.userId, input.threadId);
@@ -2328,6 +2429,12 @@ export async function dispatchAgentSandboxTurn(
     context: agentContext,
   });
   response = withoutPrivateAgentResponseContext(response);
+  response = attachAgentChatPerformance(
+    response,
+    turnPerformance,
+    dispatchStartedAt,
+    "fresh",
+  );
 
   await persistAgentTurnResult(env.DB, storage, input, resultKey, response);
   return response;
@@ -5055,6 +5162,45 @@ function attachAgentContextToResponse(
   };
 }
 
+function createAgentChatPerformanceMetrics(): AgentChatPerformanceMetrics {
+  return {
+    version: 1,
+    resultSource: "fresh",
+    memoryCacheLookupMs: 0,
+    databaseReplayLookupMs: 0,
+    statePreparationMs: 0,
+    ownerProfileMs: null,
+    toolPlanMs: null,
+    routeResolutionMs: null,
+    setupAndContextMs: null,
+    contextLoadMs: null,
+    imageInputMs: null,
+    executionMs: null,
+    messagePersistenceMs: null,
+    beforeResultPersistenceMs: 0,
+  };
+}
+
+function attachAgentChatPerformance(
+  response: AgentSandboxDispatchResponse,
+  metrics: AgentChatPerformanceMetrics,
+  dispatchStartedAt: number,
+  resultSource: AgentChatPerformanceMetrics["resultSource"],
+): AgentSandboxDispatchResponse {
+  return {
+    ...response,
+    performance: {
+      ...metrics,
+      resultSource,
+      beforeResultPersistenceMs: elapsedMs(dispatchStartedAt),
+    },
+  };
+}
+
+function elapsedMs(startedAt: number): number {
+  return Number((performance.now() - startedAt).toFixed(2));
+}
+
 function attachAgentTurnTrace(
   env: CoreAgentChatEnv,
   response: AgentSandboxDispatchResponse,
@@ -5086,7 +5232,6 @@ function removeAgentTurnTrace(
   const {
     trace: _trace,
     modelAttempts: _modelAttempts,
-    streamMetrics: _streamMetrics,
     ...withoutTrace
   } = response;
   return withoutTrace;

@@ -266,6 +266,10 @@ export async function runCoreAgentToolTurn(input: {
   let firstTokenAt: number | null = null;
   let deltaCount = 0;
   let modelStep = 0;
+  let modelRequestCount = 0;
+  let modelRequestDurationMs = 0;
+  let toolCallCount = 0;
+  let toolExecutionDurationMs = 0;
   const emit = async (event: Parameters<AgentChatRuntimeStreamOptions["onEvent"]>[0]) => {
     await input.streamOptions?.onEvent(event);
   };
@@ -301,6 +305,17 @@ export async function runCoreAgentToolTurn(input: {
     }
     return true;
   });
+  const inputCharacterCount = messages.reduce(
+    (total, message) => total + message.content.length,
+    0,
+  );
+  const toolSchemaCharacterCount = JSON.stringify(
+    tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    })),
+  ).length;
   const requiredTool =
     requiredSchedulingActionTool(input.messages, tools) ||
     requiredPrivateReadTool(input.messages, tools);
@@ -323,9 +338,16 @@ export async function runCoreAgentToolTurn(input: {
             ? requiredTool
             : null;
           const modelTools = forcedTool ? [forcedTool] : availableTools;
+          const modelRequestStartedAt = performance.now();
+          modelRequestCount += 1;
           await emit({
             event: "status",
-            data: { state: "model_started", modelStep, model },
+            data: {
+              state: "model_started",
+              modelStep,
+              model,
+              elapsedMs: durationMs(startedAt),
+            },
           });
           const response = input.streamOptions
             ? runAgentToolModelStreamStep(
@@ -342,7 +364,9 @@ export async function runCoreAgentToolTurn(input: {
                 modelTools,
                 forcedTool?.name,
               );
-          const resolved = await response;
+          const resolved = await response.finally(() => {
+            modelRequestDurationMs += durationMs(modelRequestStartedAt);
+          });
           if (
             forcedTool &&
             !resolved.toolCalls.some((call) => call.name === forcedTool.name)
@@ -355,6 +379,8 @@ export async function runCoreAgentToolTurn(input: {
         },
         executeTool: async (call, tool) => {
           throwIfStreamAborted(input.streamOptions?.signal);
+          const toolStartedAt = performance.now();
+          toolCallCount += 1;
           if (call.name === requiredTool?.name) {
             requiredToolAttempted = true;
           }
@@ -366,6 +392,7 @@ export async function runCoreAgentToolTurn(input: {
               toolName: call.name,
               capabilityId: (tool as CoreChatToolDefinition).capabilityId,
               clearText: true,
+              elapsedMs: durationMs(startedAt),
             },
           });
           const occurrence = (callCounts.get(call.id) || 0) + 1;
@@ -397,6 +424,8 @@ export async function runCoreAgentToolTurn(input: {
             );
             cacheSocialSourceOutcome(outcome, socialSources);
             outcomes.push(outcome);
+            const toolDurationMs = durationMs(toolStartedAt);
+            toolExecutionDurationMs += toolDurationMs;
             await emit({
               event: "tool",
               data: {
@@ -404,10 +433,13 @@ export async function runCoreAgentToolTurn(input: {
                 toolCallId: call.id,
                 toolName: call.name,
                 capabilityId: outcome.capabilityId,
+                durationMs: toolDurationMs,
               },
             });
             return outcome.result;
           } catch (error) {
+            const toolDurationMs = durationMs(toolStartedAt);
+            toolExecutionDurationMs += toolDurationMs;
             await emit({
               event: "tool",
               data: {
@@ -415,6 +447,7 @@ export async function runCoreAgentToolTurn(input: {
                 toolCallId: call.id,
                 toolName: call.name,
                 error: modelErrorMessage(error) || "Tool execution failed.",
+                durationMs: toolDurationMs,
               },
             });
             throw error;
@@ -440,6 +473,13 @@ export async function runCoreAgentToolTurn(input: {
         startedAt,
         firstTokenAt,
         deltaCount,
+        modelRequestCount,
+        modelRequestDurationMs,
+        toolCallCount,
+        toolExecutionDurationMs,
+        inputCharacterCount,
+        tools.length,
+        toolSchemaCharacterCount,
       );
     } catch (error) {
       lastError = error;
@@ -470,6 +510,13 @@ export async function runCoreAgentToolTurn(input: {
     startedAt,
     firstTokenAt,
     deltaCount,
+    modelRequestCount,
+    modelRequestDurationMs,
+    toolCallCount,
+    toolExecutionDurationMs,
+    inputCharacterCount,
+    tools.length,
+    toolSchemaCharacterCount,
   );
 }
 
@@ -479,6 +526,13 @@ function attachStreamMetrics(
   startedAt: number,
   firstTokenAt: number | null,
   deltaCount: number,
+  modelRequestCount: number,
+  modelRequestDurationMs: number,
+  toolCallCount: number,
+  toolExecutionDurationMs: number,
+  inputCharacterCount: number,
+  availableToolCount: number,
+  toolSchemaCharacterCount: number,
 ): AgentSandboxDispatchResponse {
   if (!streamOptions) return response;
   return {
@@ -489,8 +543,19 @@ function attachStreamMetrics(
         : Number((firstTokenAt - startedAt).toFixed(2)),
       totalDurationMs: Number((performance.now() - startedAt).toFixed(2)),
       deltaCount,
+      modelRequestCount,
+      modelRequestDurationMs: Number(modelRequestDurationMs.toFixed(2)),
+      toolCallCount,
+      toolExecutionDurationMs: Number(toolExecutionDurationMs.toFixed(2)),
+      inputCharacterCount,
+      availableToolCount,
+      toolSchemaCharacterCount,
     },
   };
+}
+
+function durationMs(startedAt: number): number {
+  return Number((performance.now() - startedAt).toFixed(2));
 }
 
 function throwIfStreamAborted(signal?: AbortSignal): void {

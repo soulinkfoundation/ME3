@@ -64,6 +64,43 @@ describe("live agent tool model adapters", () => {
     );
   });
 
+  it("attaches safe turn correlation metadata to Workers AI Gateway calls", async () => {
+    const run = vi.fn(async () => ({ text: "Done" }));
+
+    await runAgentToolModelStep(
+      route("workers-ai", {
+        ai: { run },
+        aiGateway: {
+          accountId: "account-id",
+          gatewayId: "me3",
+          apiToken: null,
+          routeWorkersAi: true,
+          routeExternalProviders: false,
+        },
+        aiGatewayMetadata: {
+          me3_request_id: "request-1",
+          me3_turn_id: "turn-1",
+        },
+      }),
+      [{ role: "user", content: "Say done" }],
+      TOOLS,
+    );
+
+    expect(run).toHaveBeenCalledWith(
+      "test-model",
+      expect.any(Object),
+      {
+        gateway: {
+          id: "me3",
+          metadata: {
+            me3_request_id: "request-1",
+            me3_turn_id: "turn-1",
+          },
+        },
+      },
+    );
+  });
+
   it("uses Anthropic's native schema for a unified Workers AI model", async () => {
     const run = vi.fn(async () => ({
       content: [{
