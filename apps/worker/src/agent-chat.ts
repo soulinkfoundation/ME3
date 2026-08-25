@@ -33,6 +33,7 @@ export {
   getCoreChatCapability,
   getCoreChatToolByName,
   isCoreChatCapabilityApprovalRequired,
+  isContextFreeLiteralResponseRequest,
   isAgentSandboxDispatchInput,
   listAgentMailboxMessages,
   listAgentMailboxThreadMessages,

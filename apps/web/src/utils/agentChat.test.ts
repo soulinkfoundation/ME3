@@ -8,9 +8,16 @@ import {
   resolveAgentMessageActionLink,
   resolveAgentReplyText,
   resolveAgentSiteActionLink,
+  shouldSendAssistantModelOverride,
 } from "./agentChat";
 
 describe("agent chat utils", () => {
+  it("sends raw model overrides only after self-hosted policy is known", () => {
+    expect(shouldSendAssistantModelOverride(null)).toBe(false);
+    expect(shouldSendAssistantModelOverride("managed")).toBe(false);
+    expect(shouldSendAssistantModelOverride("self_hosted")).toBe(true);
+  });
+
   it("hides runtime metadata by default", () => {
     expect(
       formatAgentRuntimeMetadata({

@@ -752,6 +752,7 @@ function siteFileText(files: Array<Record<string, unknown>>, path: string): stri
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function dispatchInput(messageText: string) {
@@ -1226,10 +1227,13 @@ describe("Core chat native context", () => {
       {
         gateway: {
           id: "default",
-          metadata: {
+          metadata: expect.objectContaining({
             me3_request_id: expect.any(String),
             me3_turn_id: expect.any(String),
-          },
+            me3_mode: "everyday",
+            me3_tool_count: expect.any(Number),
+            me3_input_chars: expect.any(Number),
+          }),
           requestTimeoutMs: 12_000,
           retries: { maxAttempts: 1 },
         },
@@ -1266,10 +1270,13 @@ describe("Core chat native context", () => {
       {
         gateway: {
           id: "default",
-          metadata: {
+          metadata: expect.objectContaining({
             me3_request_id: expect.any(String),
             me3_turn_id: expect.any(String),
-          },
+            me3_mode: "everyday",
+            me3_tool_count: expect.any(Number),
+            me3_input_chars: expect.any(Number),
+          }),
           requestTimeoutMs: 12_000,
           retries: { maxAttempts: 1 },
         },
@@ -1307,10 +1314,13 @@ describe("Core chat native context", () => {
       {
         gateway: {
           id: "managed-gateway",
-          metadata: {
+          metadata: expect.objectContaining({
             me3_request_id: expect.any(String),
             me3_turn_id: expect.any(String),
-          },
+            me3_mode: "everyday",
+            me3_tool_count: expect.any(Number),
+            me3_input_chars: expect.any(Number),
+          }),
           requestTimeoutMs: 12_000,
           retries: { maxAttempts: 1 },
         },
@@ -1347,10 +1357,13 @@ describe("Core chat native context", () => {
       {
         gateway: {
           id: "default",
-          metadata: {
+          metadata: expect.objectContaining({
             me3_request_id: expect.any(String),
             me3_turn_id: expect.any(String),
-          },
+            me3_mode: "everyday",
+            me3_tool_count: expect.any(Number),
+            me3_input_chars: expect.any(Number),
+          }),
           requestTimeoutMs: 12_000,
           retries: { maxAttempts: 1 },
         },
@@ -1967,10 +1980,13 @@ describe("Core chat native context", () => {
       {
         gateway: {
           id: "friend-one",
-          metadata: {
+          metadata: expect.objectContaining({
             me3_request_id: expect.any(String),
             me3_turn_id: expect.any(String),
-          },
+            me3_mode: "everyday",
+            me3_tool_count: expect.any(Number),
+            me3_input_chars: expect.any(Number),
+          }),
         },
       },
     );
@@ -2283,6 +2299,7 @@ describe("Core chat native context", () => {
     const aiRun = vi.fn(async (_model: string) => {
       throw new Error("Workers AI unavailable");
     });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const env = createEnv();
 
     const response = await dispatchAgentSandboxTurn(
@@ -2318,6 +2335,14 @@ describe("Core chat native context", () => {
         },
       ],
     });
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ME3_MODEL_ATTEMPT_FAILURE",
+        providerId: "workers-ai",
+        status: "failed",
+        error: "Workers AI unavailable",
+      }),
+    );
     expect(env.state.persistedMessages.map((message) => message.role)).toEqual(["user"]);
   });
 
@@ -3077,6 +3102,46 @@ describe("Core chat native context", () => {
       executionMs: expect.any(Number),
       contextLoadMs: expect.any(Number),
     });
+  });
+
+  it("skips owner context and recent history for a bounded literal response", async () => {
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "PONG",
+    }));
+    const env = createEnv({
+      recentMessages: [{ role: "assistant", content: "Private previous context." }],
+      projects: [projectRow("project-private", "Private project", "private-project")],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
+      } as never,
+      createStorage(),
+      dispatchInput("Reply with exactly PONG"),
+      { onEvent: vi.fn() },
+    );
+
+    expect(response.replyText).toBe("PONG");
+    expect(response.contextManifest).toBeNull();
+    expect(response.contextSummary).toBeNull();
+    expect(response.performance?.contextLoadMs).toBe(0);
+    expect(response.trace?.context.status).toBe("not_attempted");
+    expect(response.streamMetrics).toMatchObject({
+      availableToolCount: 0,
+      toolSchemaCharacterCount: 0,
+    });
+    expect(response.streamMetrics?.inputCharacterCount).toBeLessThan(5_000);
+    const modelInput = aiRun.mock.calls[0]?.[1] as {
+      messages: Array<{ role: string; content: string }>;
+      tools: unknown[];
+    };
+    expect(modelInput.messages).toHaveLength(2);
+    expect(modelInput.messages[0]?.content).not.toContain("ME3 owner snapshot:");
+    expect(modelInput.messages[0]?.content).not.toContain("tool rules:");
+    expect(modelInput.tools).toEqual([]);
   });
 
   it("trims an oversized owner snapshot before model calls", async () => {

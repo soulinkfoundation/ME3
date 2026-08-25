@@ -28,6 +28,7 @@ import {
 } from "../../../shared/email-headers";
 import { classifyAssistantImageIntent } from "./image-intent";
 import { ME3_BASE_CHARACTER_PROMPT } from "./base-character";
+import { isContextFreeLiteralResponseRequest } from "./turn-policy";
 import {
   DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
   DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
@@ -169,6 +170,8 @@ export {
   classifyAssistantImageIntent,
   type AssistantImageTurnIntent,
 } from "./image-intent";
+
+export { isContextFreeLiteralResponseRequest } from "./turn-policy";
 
 export {
   DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
@@ -2167,6 +2170,7 @@ export async function dispatchAgentSandboxTurn(
     aiGatewayMetadata: {
       me3_request_id: input.requestId,
       me3_turn_id: input.turnId,
+      me3_mode: mode,
     },
   };
   turnPerformance.routeResolutionMs = elapsedMs(routeResolutionStartedAt);
@@ -2294,8 +2298,15 @@ export async function dispatchAgentSandboxTurn(
     input.attachments,
     input.attachmentTextContext,
   );
-  const recent = toolPlan.recent;
+  const contextFreeTurn =
+    !input.attachments?.length &&
+    isContextFreeLiteralResponseRequest(runtimeMessageText);
+  const recent = contextFreeTurn ? [] : toolPlan.recent;
   const orientationTurn = isCoreChatOrientationTurn(toolPlan.decision);
+  await streamOptions?.onEvent({
+    event: "status",
+    data: { state: "context_loading" },
+  });
   const setupAndContextStartedAt = performance.now();
   const [setupReadiness, agentContext] = await Promise.all([
     orientationTurn
@@ -2306,13 +2317,15 @@ export async function dispatchAgentSandboxTurn(
           owner,
         )
       : Promise.resolve({ prompt: "", pluginInstallations: [] }),
-    loadCoreChatAgentContext(env, {
-      ownerId: input.userId,
-      owner,
-    }),
+    contextFreeTurn
+      ? Promise.resolve(null)
+      : loadCoreChatAgentContext(env, {
+          ownerId: input.userId,
+          owner,
+        }),
   ]);
   turnPerformance.setupAndContextMs = elapsedMs(setupAndContextStartedAt);
-  turnPerformance.contextLoadMs = agentContext.loadDurationMs;
+  turnPerformance.contextLoadMs = agentContext?.loadDurationMs ?? 0;
   const knowledgeContext = orientationTurn && route.configured
     ? buildMe3KnowledgeRuntimeContext(
         route.configured,
@@ -2326,7 +2339,7 @@ export async function dispatchAgentSandboxTurn(
     knowledgeContext,
     agentContext?.prompt ?? null,
     buildCoreChatOrientationPrompt(toolPlan.decision, setupReadiness),
-    toolPlan.sourceReference,
+    contextFreeTurn ? null : toolPlan.sourceReference,
   );
   let imageInputs: AgentChatImageInput[] = [];
   let imageInputError: string | null = null;
@@ -5256,17 +5269,35 @@ function logAgentModelAttempts(
   input: AgentSandboxDispatchInput,
 ): void {
   if (!response.modelAttempts?.length) return;
+  const context = {
+    requestId: input.requestId,
+    turnId: input.turnId,
+    threadId: input.threadId ?? null,
+    mode: normalizeAgentChatMode(input.mode),
+    finalModel: response.model,
+  };
   console.info(
     "ME3_MODEL_ATTEMPTS",
     JSON.stringify({
-      requestId: input.requestId,
-      turnId: input.turnId,
-      threadId: input.threadId ?? null,
-      mode: normalizeAgentChatMode(input.mode),
-      finalModel: response.model,
+      ...context,
       attempts: response.modelAttempts,
     }),
   );
+  for (const attempt of response.modelAttempts) {
+    if (attempt.status === "succeeded") continue;
+    console.error({
+      event: "ME3_MODEL_ATTEMPT_FAILURE",
+      ...context,
+      providerId: attempt.providerId,
+      model: attempt.model,
+      status: attempt.status,
+      error: attempt.error,
+      durationMs: attempt.durationMs,
+      modelRequestDurationMs: attempt.modelRequestDurationMs,
+      modelRequestCount: attempt.modelRequestCount,
+      gatewayLogIds: attempt.gatewayLogIds || [],
+    });
+  }
 }
 
 function applyAgentTurnTracePolicy(

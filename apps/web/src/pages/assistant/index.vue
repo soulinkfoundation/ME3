@@ -31,6 +31,7 @@ import {
   normalizeAgentActionCards,
   resolveAgentMessageActionLink,
   resolveAgentReplyText,
+  shouldSendAssistantModelOverride,
   type AgentChatEmailDraftAction,
   type AgentChatActionCard,
   type AgentChatImageAction,
@@ -717,7 +718,7 @@ const selectedModelId = ref(initialAssistantModelId);
 const selectedModelTouched = ref(Boolean(storedAssistantModelId));
 const aiSettingsLoading = ref(true);
 const aiSettingsError = ref("");
-const managedDeployment = ref(false);
+const aiDeploymentMode = ref<AiSettingsResponse["deploymentMode"] | null>(null);
 const aiProviders = ref<AiProviderRecord[]>([]);
 const {
   canUse: canUseVoiceDictation,
@@ -1018,7 +1019,10 @@ const showConfigureStarterPrompt = computed(() => {
   }
   if (pageError.value || aiSettingsError.value || assistantSettingsError.value)
     return true;
-  if (!managedDeployment.value && !selectedModelSetup.value.configured) return true;
+  if (
+    aiDeploymentMode.value === "self_hosted" &&
+    !selectedModelSetup.value.configured
+  ) return true;
   if (jobs.value.some((job) => job.status === "needs_setup")) return true;
   return recipes.value.some((recipe) => recipe.state === "needs_setup");
 });
@@ -1087,7 +1091,7 @@ const assistantAttachmentIssue = computed(() => {
   );
   if (
     hasImage &&
-    !managedDeployment.value &&
+    aiDeploymentMode.value === "self_hosted" &&
     !resolveAssistantTurnModel(assistantAttachments.value)
   ) {
     return "No image-input-capable model is available for this attachment.";
@@ -2391,9 +2395,9 @@ async function loadAiSettings() {
 
   try {
     const response = await api.get<AiSettingsResponse>("/ai-settings");
-    managedDeployment.value = response.deploymentMode === "managed";
+    aiDeploymentMode.value = response.deploymentMode;
     aiProviders.value = response.providers || [];
-    if (!managedDeployment.value) {
+    if (response.deploymentMode === "self_hosted") {
       applyDefaultChatModel(response);
       syncVisibleAssistantModelSelection();
     }
@@ -2571,7 +2575,7 @@ function preferredImageInputModel() {
 function resolveAssistantTurnModel(
   attachments: ReadonlyArray<AgentChatMessageAttachment>,
 ) {
-  if (managedDeployment.value) return null;
+  if (!shouldSendAssistantModelOverride(aiDeploymentMode.value)) return null;
   const currentModel = selectedModel.value;
   if (!attachmentsContainReadyImage(attachments)) return currentModel;
   if (modelHasImageInput(currentModel.capabilities)) return currentModel;
@@ -2622,7 +2626,7 @@ async function submitAssistantText(
   assistantTurnStatusText.value = assistantTurnStatusForModel(
     attachments,
     turnModel,
-  );
+  ) || "Preparing your request…";
   const abortController = new AbortController();
   assistantAbortController = abortController;
   agentChat.appendMessage({
@@ -2695,8 +2699,15 @@ async function submitAssistantText(
             if (message) message.text = "";
             assistantAwaitingResponse.value = true;
           }
-          if (data.state === "model_started") {
-            assistantTurnStatusText.value = assistantThinkingLabel.value;
+          if (data.state === "started") {
+            assistantTurnStatusText.value = "Preparing your request…";
+          } else if (data.state === "context_loading") {
+            assistantTurnStatusText.value = "Loading relevant context…";
+          } else if (data.state === "model_started") {
+            assistantTurnStatusText.value =
+              typeof data.modelStep === "number" && data.modelStep > 1
+                ? "Putting the result together…"
+                : "Writing a response…";
           } else if (data.state === "finalizing") {
             assistantTurnStatusText.value = "Finishing the response…";
           }
@@ -2711,11 +2722,8 @@ async function submitAssistantText(
             if (message) message.text = "";
             assistantAwaitingResponse.value = true;
           }
-          const label = typeof data.capabilityId === "string"
-            ? data.capabilityId.replace(/^core\./, "").split(".").join(" ")
-            : "ME3 tool";
           assistantTurnStatusText.value = data.state === "started"
-            ? `Using ${label}…`
+            ? assistantToolStatusText(data.capabilityId)
             : "Finishing the response…";
           return;
         }
@@ -2860,6 +2868,22 @@ function streamEventRecord(event: ApiStreamEvent): Record<string, unknown> {
     !Array.isArray(event.data)
     ? (event.data as Record<string, unknown>)
     : {};
+}
+
+function assistantToolStatusText(capabilityId: unknown): string {
+  if (typeof capabilityId !== "string") return "Using a ME3 tool…";
+  if (capabilityId.startsWith("core.mailbox.")) return "Checking your mailbox…";
+  if (capabilityId.startsWith("core.calendar.")) return "Checking your calendar…";
+  if (capabilityId.startsWith("core.reminders.")) return "Checking your reminders…";
+  if (capabilityId.startsWith("core.scheduling.")) return "Checking availability…";
+  if (capabilityId.startsWith("core.network.")) return "Searching the ME3 Network…";
+  if (capabilityId.startsWith("core.journal.")) return "Reading your Journal…";
+  if (capabilityId.startsWith("core.mission.")) return "Checking your tasks…";
+  if (capabilityId.startsWith("core.social.")) return "Preparing social content…";
+  if (capabilityId.startsWith("core.sites.")) return "Checking your site…";
+  if (capabilityId === "core.bookings.lookup") return "Checking your bookings…";
+  if (capabilityId === "core.contacts.search") return "Searching your contacts…";
+  return "Using a ME3 tool…";
 }
 
 function applyAssistantResultToMessage(
@@ -5617,6 +5641,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
           >
             <div
               class="assistant-message__bubble assistant-message__bubble--pending"
+              role="status"
+              aria-live="polite"
             >
               <span class="assistant-message__pending-detail">
                 {{ assistantTurnStatusText || assistantThinkingLabel }}
@@ -5779,7 +5805,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 v-if="
                   voiceDictationState !== 'listening' &&
                   !aiSettingsLoading &&
-                  !managedDeployment
+                  aiDeploymentMode === 'self_hosted'
                 "
                 class="model-picker"
               >

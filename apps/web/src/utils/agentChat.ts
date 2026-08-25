@@ -21,6 +21,12 @@ export type AgentChatRuntimeResult = {
   trace?: AgentChatTurnTrace | null;
 };
 
+export function shouldSendAssistantModelOverride(
+  deploymentMode: "managed" | "self_hosted" | null,
+): boolean {
+  return deploymentMode === "self_hosted";
+}
+
 export type AgentChatImageAction = {
   kind: "generated" | "edited" | "blocked";
   status: "complete" | "failed" | "blocked";

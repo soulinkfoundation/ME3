@@ -3,12 +3,22 @@ import {
   CORE_CHAT_CAPABILITIES,
   CORE_CHAT_TOOLS,
   getCoreChatToolByName,
+  isContextFreeLiteralResponseRequest,
   parseAgentReminderInput,
   validateCoreChatCapabilityContracts,
   validateCoreChatToolDefinitions,
 } from "./agent-chat";
 
 describe("Core chat tool contracts", () => {
+  it("recognizes only bounded literal-response directives as context-free", () => {
+    expect(isContextFreeLiteralResponseRequest("Reply with exactly PONG")).toBe(true);
+    expect(isContextFreeLiteralResponseRequest('Respond only "READY".')).toBe(true);
+    expect(
+      isContextFreeLiteralResponseRequest("Reply with exactly what you know about me"),
+    ).toBe(false);
+    expect(isContextFreeLiteralResponseRequest("Help me plan my week")).toBe(false);
+  });
+
   it("projects every action capability into one provider-safe tool", () => {
     expect(validateCoreChatCapabilityContracts()).toEqual([]);
     expect(validateCoreChatToolDefinitions()).toEqual([]);

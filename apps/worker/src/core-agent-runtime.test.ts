@@ -35,6 +35,75 @@ afterEach(() => {
 });
 
 describe("Core Agent Runtime v2 reminders", () => {
+  it("omits tool schemas and tool instructions for a literal-response turn", async () => {
+    const run = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "PONG",
+    }));
+
+    const response = await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "request-literal",
+      turnId: "turn-literal",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute(run) as never,
+      messages: baseMessages("Reply with exactly PONG"),
+    });
+
+    expect(response.replyText).toBe("PONG");
+    expect(response.streamMetrics).toBeUndefined();
+    const modelInput = run.mock.calls[0]?.[1] as {
+      messages: AgentToolMessage[];
+      tools: unknown[];
+    };
+    expect(modelInput.tools).toEqual([]);
+    expect(modelInput.messages[0]?.content).toBe("You are ME3.");
+  });
+
+  it("sends only the relevant tool family and instructions for a clear action", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-01T10:00:00Z"));
+    const run = vi.fn(async (
+      _model: string,
+      _input: unknown,
+    ): Promise<unknown> => undefined)
+      .mockResolvedValueOnce({
+        tool_calls: [{
+          id: "create-family",
+          name: "core_reminders_create",
+          arguments: {
+            title: "Call Sam",
+            remindAt: "2026-07-11T09:00:00+01:00",
+            timezone: "Europe/Dublin",
+          },
+        }],
+      })
+      .mockResolvedValueOnce({ response: "Reminder created." });
+
+    await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "request-family",
+      turnId: "turn-family",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute(run) as never,
+      messages: baseMessages("Remind me on 11 July at 9am to call Sam"),
+    });
+
+    const firstModelInput = run.mock.calls[0]?.[1] as {
+      messages: AgentToolMessage[];
+      tools: Array<{ function: { name: string } }>;
+    };
+    expect(firstModelInput.tools.map((tool) => tool.function.name)).toEqual([
+      "core_reminders_list",
+      "core_reminders_create",
+      "core_reminders_update",
+      "core_reminders_cancel",
+    ]);
+    expect(firstModelInput.messages[0]?.content).toContain("Reminder tool rules:");
+    expect(firstModelInput.messages[0]?.content).not.toContain("Mailbox tool rules:");
+  });
+
   it.each(["workers-ai", "openai", "anthropic"] as const)(
     "executes the same typed create contract through %s",
     async (providerId) => {
@@ -290,9 +359,10 @@ describe("Core Agent Runtime v2 reminders", () => {
       toolCallCount: 1,
       toolExecutionDurationMs: expect.any(Number),
       inputCharacterCount: expect.any(Number),
-      availableToolCount: expect.any(Number),
+      availableToolCount: 4,
       toolSchemaCharacterCount: expect.any(Number),
     });
+    expect(response.streamMetrics?.toolSchemaCharacterCount).toBeLessThan(3_000);
     expect(response.modelAttempts).toEqual([
       expect.objectContaining({
         model: "workers-test-model",

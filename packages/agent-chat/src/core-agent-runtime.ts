@@ -89,6 +89,7 @@ import {
   formatAgentSiteBlogReadReply,
   readAgentSiteBlogPosts,
 } from "./site-blog";
+import { isContextFreeLiteralResponseRequest } from "./turn-policy";
 
 type CoreAgentDb = {
   prepare(sql: string): {
@@ -270,6 +271,48 @@ const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
     tool.capabilityId.startsWith("core.mailbox.") ||
     tool.capabilityId.startsWith("core.social."),
 );
+
+type CoreToolFamily =
+  | "bookings"
+  | "calendar"
+  | "journal"
+  | "mailbox"
+  | "mission"
+  | "network"
+  | "reminders"
+  | "scheduling"
+  | "sites"
+  | "social";
+
+const ALL_CORE_TOOL_FAMILIES: readonly CoreToolFamily[] = [
+  "bookings",
+  "calendar",
+  "journal",
+  "mailbox",
+  "mission",
+  "network",
+  "reminders",
+  "scheduling",
+  "sites",
+  "social",
+];
+
+const CORE_TOOL_FAMILY_PATTERNS: ReadonlyArray<{
+  family: CoreToolFamily;
+  pattern: RegExp;
+}> = [
+  { family: "mailbox", pattern: /\b(?:email|emails|inbox|mailbox|mail|sender|recipient|reply)\b/i },
+  { family: "calendar", pattern: /\b(?:calendar|agenda|calendar event|calendar events)\b/i },
+  { family: "reminders", pattern: /\bremind(?:er|ers|ing)?\b/i },
+  { family: "bookings", pattern: /\b(?:booking|bookings|booked call|booked calls|appointment|appointments|client session|client sessions)\b/i },
+  { family: "scheduling", pattern: /\b(?:availability|available times?|schedule|scheduling|meeting|meet with|call with|time with)\b/i },
+  { family: "network", pattern: /\b(?:me3 network|me3 directory|network directory|me3 profile)\b/i },
+  { family: "journal", pattern: /\b(?:journal|journal entry|journal entries|diary)\b/i },
+  { family: "mission", pattern: /\b(?:mission control|task|tasks|project|projects|backlog|to-do|todo|prioriti[sz]e|priority|priorities)\b/i },
+  { family: "sites", pattern: /\b(?:landing page|landing pages|profile site|website|site blog|blog post|blog posts|my blog)\b/i },
+  { family: "social", pattern: /\b(?:social post|social posts|social publishing|linkedin|instagram|twitter|x post|carousel|posting plan|post library|post from)\b/i },
+];
+
 const MISSION_TASK_STATUSES = new Set(["backlog", "in_progress", "review", "done"]);
 const OWNER_CONTENT_SOURCE_TYPES = new Set(["all", "journal", "mission_task"]);
 const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
@@ -304,14 +347,10 @@ export async function runCoreAgentToolTurn(input: {
     deltaCount += 1;
     await emit({ event: "delta", data: { text } });
   };
-  const messages = withCoreToolInstructions(
-    input.messages,
-    input.ownerTimezone,
-  );
   const outcomes: CoreToolOutcome[] = [];
   const socialSources = new Map<string, AgentSocialSource>();
   const modelAttempts: AgentChatModelAttemptTrace[] = [];
-  const tools = ACTIVE_CORE_TOOLS.filter((tool) => {
+  const availableTools = ACTIVE_CORE_TOOLS.filter((tool) => {
     if (tool.capabilityId.startsWith("core.mailbox.") && !input.mailboxServices) {
       return false;
     }
@@ -337,24 +376,46 @@ export async function runCoreAgentToolTurn(input: {
     }
     return true;
   });
+  const requiredTool =
+    requiredSchedulingActionTool(input.messages, availableTools) ||
+    requiredPrivateReadTool(input.messages, availableTools);
+  const toolSelection = selectCoreToolsForTurn(
+    input.messages,
+    availableTools,
+    requiredTool,
+  );
+  const tools = toolSelection.tools;
+  const messages = withCoreToolInstructions(
+    input.messages,
+    input.ownerTimezone,
+    tools,
+    toolSelection.families,
+  );
   const inputCharacterCount = messages.reduce(
     (total, message) => total + message.content.length,
     0,
   );
-  const toolSchemaCharacterCount = JSON.stringify(
-    tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    })),
-  ).length;
-  const requiredTool =
-    requiredSchedulingActionTool(input.messages, tools) ||
-    requiredPrivateReadTool(input.messages, tools);
+  const toolSchemaCharacterCount = tools.length === 0
+    ? 0
+    : JSON.stringify(
+        tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
+      ).length;
+  const route: AgentChatAiRoute = {
+    ...input.route,
+    aiGatewayMetadata: {
+      ...input.route.aiGatewayMetadata,
+      me3_tool_count: tools.length,
+      me3_input_chars: inputCharacterCount,
+    },
+  };
   let requiredToolAttempted = false;
-  const models = input.route.backupModel && input.route.backupModel !== input.route.model
-    ? [input.route.model, input.route.backupModel]
-    : [input.route.model];
+  const models = route.backupModel && route.backupModel !== route.model
+    ? [route.model, route.backupModel]
+    : [route.model];
   let lastError: unknown = null;
 
   for (const model of models) {
@@ -375,7 +436,7 @@ export async function runCoreAgentToolTurn(input: {
             : null;
           const modelTools = forcedTool ? [forcedTool] : availableTools;
           const modelRequestStartedAt = performance.now();
-          const gatewayLogIdBefore = input.route.ai?.aiGatewayLogId ?? null;
+          const gatewayLogIdBefore = route.ai?.aiGatewayLogId ?? null;
           modelRequestCount += 1;
           await emit({
             event: "status",
@@ -388,7 +449,7 @@ export async function runCoreAgentToolTurn(input: {
           });
           const response = input.streamOptions
             ? runAgentToolModelStreamStep(
-                { ...input.route, model },
+                { ...route, model },
                 turnMessages,
                 modelTools,
                 forcedTool ? () => undefined : emitDelta,
@@ -396,14 +457,14 @@ export async function runCoreAgentToolTurn(input: {
                 forcedTool?.name,
               )
             : runAgentToolModelStep(
-                { ...input.route, model },
+                { ...route, model },
                 turnMessages,
                 modelTools,
                 forcedTool?.name,
               );
           const resolved = await response.finally(() => {
             modelRequestDurationMs += durationMs(modelRequestStartedAt);
-            const gatewayLogId = input.route.ai?.aiGatewayLogId ?? null;
+            const gatewayLogId = route.ai?.aiGatewayLogId ?? null;
             if (
               gatewayLogId &&
               gatewayLogId !== gatewayLogIdBefore &&
@@ -500,7 +561,7 @@ export async function runCoreAgentToolTurn(input: {
         },
       });
       modelAttempts.push({
-        providerId: input.route.providerId,
+        providerId: route.providerId,
         model,
         status: "succeeded",
         error: null,
@@ -516,7 +577,7 @@ export async function runCoreAgentToolTurn(input: {
       return attachStreamMetrics(
         successfulResponse(
           input.turnId,
-          input.route,
+          route,
           model,
           result.text,
           outcomes.at(-1) || null,
@@ -540,7 +601,7 @@ export async function runCoreAgentToolTurn(input: {
         "returned neither text nor tool calls",
       );
       modelAttempts.push({
-        providerId: input.route.providerId,
+        providerId: route.providerId,
         model,
         status: empty ? "empty" : "failed",
         error: empty
@@ -562,7 +623,7 @@ export async function runCoreAgentToolTurn(input: {
   return attachStreamMetrics(
     fallbackResponse(
       input.turnId,
-      input.route,
+      route,
       outcomes.at(-1) || null,
       modelAttempts,
       lastError,
@@ -2111,6 +2172,86 @@ export function buildReminderActionCard(
   };
 }
 
+function selectCoreToolsForTurn(
+  messages: readonly AgentToolMessage[],
+  availableTools: readonly CoreChatToolDefinition[],
+  requiredTool: CoreChatToolDefinition | null,
+): {
+  tools: CoreChatToolDefinition[];
+  families: ReadonlySet<CoreToolFamily>;
+} {
+  const latestUserMessage = latestMessageContent(messages, "user");
+  if (latestUserMessage && isContextFreeLiteralResponseRequest(latestUserMessage)) {
+    return { tools: [], families: new Set() };
+  }
+
+  const families = new Set<CoreToolFamily>();
+  if (requiredTool) {
+    for (const family of coreToolFamiliesForCapability(requiredTool.capabilityId)) {
+      families.add(family);
+    }
+  } else {
+    const recentAssistantMessage = latestMessageContent(messages, "assistant");
+    const routingText = [latestUserMessage, recentAssistantMessage]
+      .filter(Boolean)
+      .join("\n");
+    for (const matcher of CORE_TOOL_FAMILY_PATTERNS) {
+      if (matcher.pattern.test(routingText)) families.add(matcher.family);
+    }
+  }
+
+  if (families.size === 0) {
+    return {
+      tools: [...availableTools],
+      families: new Set(ALL_CORE_TOOL_FAMILIES),
+    };
+  }
+  return {
+    tools: availableTools.filter((tool) =>
+      coreToolFamiliesForCapability(tool.capabilityId).some((family) =>
+        families.has(family),
+      ),
+    ),
+    families,
+  };
+}
+
+function latestMessageContent(
+  messages: readonly AgentToolMessage[],
+  role: "user" | "assistant",
+): string {
+  return [...messages]
+    .reverse()
+    .find((message) => message.role === role)
+    ?.content.trim() || "";
+}
+
+function coreToolFamiliesForCapability(
+  capabilityId: CoreChatToolDefinition["capabilityId"],
+): CoreToolFamily[] {
+  if (capabilityId.startsWith("core.mailbox.")) return ["mailbox"];
+  if (capabilityId.startsWith("core.calendar.")) return ["calendar"];
+  if (capabilityId === "core.bookings.lookup") return ["bookings"];
+  if (capabilityId.startsWith("core.reminders.")) return ["reminders"];
+  if (capabilityId === "core.contacts.search") return ["scheduling"];
+  if (capabilityId.startsWith("core.scheduling.")) return ["scheduling"];
+  if (capabilityId === "core.network.directory.search") return ["network"];
+  if (capabilityId === "core.network.scheduling.request") {
+    return ["network", "scheduling"];
+  }
+  if (capabilityId === "core.journal.read") return ["journal"];
+  if (capabilityId === "core.owner_content.search") {
+    return ["journal", "mission", "social"];
+  }
+  if (capabilityId.startsWith("core.mission.task.")) return ["mission"];
+  if (capabilityId.startsWith("core.sites.")) return ["sites"];
+  if (capabilityId === "core.social.source.read") {
+    return ["social", "journal", "mission"];
+  }
+  if (capabilityId.startsWith("core.social.")) return ["social"];
+  return [];
+}
+
 function requiredPrivateReadTool(
   messages: readonly AgentToolMessage[],
   tools: readonly CoreChatToolDefinition[],
@@ -2209,6 +2350,12 @@ function requiredPrivateReadTool(
   if (hasAny(["email", "emails", "inbox", "mailbox"])) {
     requiredCapabilities.add("core.mailbox.search");
   }
+  if (hasAny(["reminder", "reminders"])) {
+    requiredCapabilities.add("core.reminders.list");
+  }
+  if (hasAny(["contact", "contacts", "rolodex", "address book"])) {
+    requiredCapabilities.add("core.contacts.search");
+  }
   if (
     hasAny(["me3 network", "me3 directory", "network directory"]) ||
     (hasAny(["find ", "search ", "who "]) &&
@@ -2232,6 +2379,16 @@ function requiredPrivateReadTool(
         ? "core.owner_content.search"
         : "core.mission.task.list",
     );
+  }
+  if (hasAny(["landing page", "landing pages"])) {
+    requiredCapabilities.add(
+      hasAny(["design", "designs", "template", "templates"])
+        ? "core.sites.landing_page.designs"
+        : "core.sites.landing_page.list",
+    );
+  }
+  if (hasAny(["social post", "social posts", "post library"])) {
+    requiredCapabilities.add("core.social.library.search");
   }
 
   if (requiredCapabilities.size !== 1) return null;
@@ -2317,97 +2474,151 @@ function requiredSchedulingActionTool(
 function withCoreToolInstructions(
   messages: readonly AgentToolMessage[],
   timezoneInput: string | null | undefined,
+  tools: readonly CoreChatToolDefinition[],
+  families: ReadonlySet<CoreToolFamily>,
 ): AgentToolMessage[] {
+  if (tools.length === 0) return [...messages];
+
   const timezone = normalizeTimeZone(timezoneInput) || "UTC";
   const now = new Date();
+  const hasFamily = (family: CoreToolFamily) => families.has(family);
+  const needsTimeContext = [
+    "calendar",
+    "journal",
+    "mission",
+    "reminders",
+    "scheduling",
+    "social",
+  ].some((family) => hasFamily(family as CoreToolFamily));
   const instructions = [
-    "Reminder tool rules:",
-    `- Current instant: ${now.toISOString()}. Owner timezone: ${timezone}. Local owner time: ${formatAgentDateTime(now.toISOString(), timezone)}.`,
-    "- Use reminder tools only when the owner clearly asks to list, create, update, or cancel reminders.",
-    "- For create/update, remindAt must be a future ISO date-time with the correct timezone offset. Noon means 12:00; midnight means 00:00. Resolve weekdays in the owner's timezone.",
-    "- If the requested date or time is missing or ambiguous, ask one concise clarification question and do not call a write tool.",
-    "- Before update/cancel, list reminders unless a stable reminder ID is already present in the conversation. Never invent or infer an ID from a title.",
-    "- If multiple listed reminders could match, ask the owner which one they mean and do not write.",
-    "Calendar event tool rules:",
-    "- Use core_calendar_events_list to read personal and imported calendar events. Use core_calendar_event_create to create a private event in the owner's ME3 calendar. Use reminder tools for reminders and booking lookup for bookings.",
-    "- Resolve relative dates in the owner's timezone. Calendar reads require an inclusive dateFrom and dateTo and are limited to 31 days.",
-    "- For event creation, title, date, and start time must be clear. If any is missing, ask one concise clarification question and do not call the tool.",
-    "- A missing duration is not ambiguous: omit durationMinutes and ME3 will default to 60 minutes. Mention that default after creation.",
-    "- Pass the requested wall date and time unchanged with its IANA startTimezone; the tool performs the timezone conversion. Use calendarTimezone only when the owner explicitly requests a display timezone; otherwise omit it to use the owner's timezone.",
-    "- Treat startTimezone and calendarTimezone as separate IANA zones and never hardcode a fixed hour difference. Resolve an abbreviation from clear geographic context; abbreviations such as IST, CST, and BST have multiple meanings, so ask which source region the owner means when context does not disambiguate it. Never pass an abbreviation to the tool.",
-    "- Calendar event creation writes only to the private ME3 calendar. Do not claim it synced to Google Calendar, Outlook, or another external provider.",
-    "Booking tool rules:",
-    "- Use core_bookings_lookup whenever the owner asks about upcoming confirmed bookings, appointments, client sessions, or booked calls. Do not answer from calendar events or email.",
-    "- Booking lookup is read-only and returns the next confirmed bookings in chronological order. It does not include reminders, ordinary calendar events, or cancelled bookings.",
-    "Contact and agent-assisted scheduling tool rules:",
-    "- Use core_contacts_search to find owner contacts and whether a contact has a connected ME3 assistant through Soulink. Do not expose contact IDs, connection tokens, node IDs, or private chat history.",
-    "- Use core_scheduling_request when the owner asks to arrange time with a contact. The contact name is the only required input.",
-    "- A missing duration is not ambiguous: omit durationMinutes and ME3 will default to 30 minutes. A missing date window is not ambiguous: omit dateFrom and dateTo and ME3 will default to the next seven local calendar days. Do not ask a clarification question for either omission.",
-    "- The request tool exchanges only structured availability with the other ME3 assistant. It does not open, read, or write either owner's private assistant chat.",
-    "- If the other owner's policy requires review before sharing availability, explain that their approval is pending. Do not ask the requester to choose a time until mutual options arrive.",
-    "- The request tool never books immediately. Show the returned numbered mutual options and wait for the owner to choose one.",
-    "- Use core_scheduling_approve after the recipient explicitly authorizes an exact set of incoming options, or after the requester chooses one shown option. Set confirmed=true only for that explicit action.",
-    "- Use core_scheduling_decline when the owner explicitly declines or cancels an open scheduling request. Declining never writes a calendar event.",
-    "- Recipient authorization applies only to the exact offered slots. The requester’s selection of one of those slots completes both-owner approval; do not ask the recipient to approve it again. Never claim a meeting is booked while the result says waiting_for_other_owner.",
-    "- Never mention scheduling request IDs or internal Soulink identifiers in the user-facing reply.",
-    "ME3 Network directory rules:",
-    "- Use core_network_directory_search when the owner asks to find a person, service, product, provider, skill, or collaborator among public ME3 Network profiles.",
-    "- Search with the owner's actual need in plain language. Use offeringType only when the owner clearly asks for a service or product, and countryCode only when a country is explicit.",
-    "- Treat matches as discovery candidates, not endorsements. Explain the public fields or offerings that made each result relevant and include its public profile link.",
-    "- Each result includes a stable profileId. Include its exact ME3 profile reference in the reply. Use core_network_scheduling_request only after the owner explicitly asks to meet one unambiguous result, and copy that exact profileId. If the selection is ambiguous or no stable profile ID is present in the conversation, search again or ask which result they mean.",
-    "- Network scheduling sends a free one-to-one meeting request for recipient review. It never creates a contact. Paid bookings and group scheduling are not supported by this tool.",
-    "- Directory results are public profile data only. Never imply access to private ME3 memory, contacts, messages, assistant chats, or precise location.",
-    "- Location in v1 is a textual filter. Do not claim distance, travel time, or 'near me' ranking.",
-    "Site blog read tool rules:",
-    "- Use core_sites_blog_post_read to list profile-site blog posts or read one named post. Omit post to list; provide the title, slug, or file path to read the full markdown body.",
-    "- Site blog access is read-only. No tool can create, draft, edit, publish, unpublish, archive, or delete a blog post.",
-    "Task and project tool rules:",
-    "- Use task tools only when the owner clearly asks to list, read, create, update, move, complete, or archive tasks.",
-    "- When the owner remembers a task or Journal entry by title or content, use core_owner_content_search. Search returns lightweight candidates with stable source IDs; read the selected source before using its full body.",
-    "- Search before task read/update/archive when the owner names or describes a record but no stable task ID is present. Use task list for browsing a project or status, not title discovery.",
-    "- Task list accepts an exact projectName directly. Use projectId=null and projectName=null to list across all projects; never claim a project ID is required for a read.",
-    "- Never invent a taskId or projectId. If multiple records could match, ask one concise clarification question and do not write.",
-    "- For create, use the project ID selected by the owner. Omit projectId only when the owner did not name a project and the host can choose an unambiguous default.",
-    "- When asked to prioritise, list the matching tasks first and recommend a small Now set. Only update status or priority after the owner clearly confirms.",
-    "- Priority is 1 (highest) through 5 (lowest). Use in_progress for the owner's small Now commitment list.",
-    "- Convert relative due dates such as today or tomorrow to YYYY-MM-DD in the owner's timezone using the current-time context above.",
-    "- For update, send only fields the owner asked to change. Null optional fields mean no change.",
-    "- Set clearDescription or clearDueAt only when the owner explicitly asks to remove that value.",
-    "Journal tool rules:",
-    "- Use core_journal_read whenever the owner asks to read, list, review, summarize, or reason about Journal entries. Journal content is never present in the owner snapshot.",
-    "- Use mode latest for recent entries (default 7), mode date for one YYYY-MM-DD date, and mode range for an inclusive YYYY-MM-DD date range.",
-    "- Resolve today and other relative dates using the owner's timezone and current-time context above. Never invent an entry or infer that an entry is missing without calling the Journal tool in this turn.",
-    "Landing-page tool rules:",
-    "- Use landing-page tools when the owner clearly asks to list, create, or revise a landing page. Brainstorming alone is conversation, not a write request.",
-    "- A landing-page create or update tool saves a private draft only. Never claim the page is live or published.",
-    "- Use the owner's factual brief. Do not invent dates, locations, prices, testimonials, guarantees, customer names, or product claims.",
-    "- Choose purpose event, service, or waitlist from the owner's goal. Omit designPackId to use the recommended compatible starter design.",
-    "- If the owner asks what designs exist, list designs before creating. Design display names are changeable; stable IDs are tool data, not marketing copy.",
-    "- For revisions, list landing pages first unless the exact stable page ID is already present in tool context. Never invent a page ID.",
-    "- Keep highlights newline-separated in the form Title: factual explanation. Prefer three specific highlights over generic filler.",
-    "- After creating or revising, direct the owner to the returned draft or preview action. Publishing is not an available chat tool yet.",
-    "Mailbox tool rules:",
-    "- Search before reading or replying unless a stable mailbox message ID is already present. Never invent a message ID.",
-    "- Search returns summaries only. Read exactly the intended stable message ID before using the full private body.",
-    "- If several messages or recipients could match, ask one concise clarification question and do not create a draft.",
-    "- Draft requires a complete recipient, subject, and plain-text body. Use replyToMessageId only after reading that exact message.",
-    "- Draft creation saves a reviewable mailbox draft only. Never claim the email was sent; sending is not an available tool.",
-    "Social publishing tool rules:",
-    "- Use social tools when the owner asks to turn a Journal entry or task into social Posts or Suggestions.",
-    "- Search owner content when the owner gives a remembered task or Journal title. For Journal, an entry ID, YYYY-MM-DD date, or today can also be used directly. Never invent a source ID.",
-    "- Read the exact Source with core_social_source_read before calling core_social_suggestions_create or core_social_draft_create. Build every Suggestion and Version from that returned Source, not from assumptions or a summary invented by the model.",
-    "- If source reading is the last action in a turn, confirm the source by its human title only. ME3 preserves the stable source ID privately for safe cross-turn revalidation.",
-    "- Preserve the owner's words, voice, claims, tone, and intended meaning by default. Reuse exact source phrases where they fit and make only light edits for length, clarity, or platform formatting unless the owner asks for a rewrite.",
-    "- Do not add generic hooks, emojis, hashtags, advice, claims, or framing that are not in the source. When one source wording already fits several platforms, keep it instead of rewriting for novelty.",
-    "- When the owner asks for ideas, options, repurposing, a Quote, Short Post, Thread, or carousel outline, call core_social_suggestions_create. Provide exact Source text for each Suggestion. Quotes must stay verbatim; set quoteTrimmed only when words were removed without adding or reordering words.",
-    "- Suggestions remain owner-controlled review material. Never claim that a Suggestion became a Post until the owner chooses and saves it.",
-    "- Create only the platforms the owner requested. Draft creation saves reviewable internal drafts only; it never approves, schedules, or publishes them.",
-    "- Use core_social_library_search to find existing Social Post Versions by Source, topic text, platform, account, approval, delivery state, tag, or published date. Never invent a Post, Version, account, or Posting plan ID.",
-    "- Use core_social_posting_plan_create to propose times only after the target account and time window are clear. A proposal creates no Publications and schedules nothing; show its warnings and review action to the owner.",
-    "- Never fill or confirm a Posting plan autonomously. Call core_social_posting_plan_confirm only when the owner explicitly confirms the exact reviewed plan in the conversation, and pass its exact planId, expectedUpdatedAt, and confirmed=true.",
-    "- Describe owner-facing timing rules as Preferred posting times, minimum gap, and minimum time before reposting. Do not use internal implementation terminology.",
-    "- Never mention internal Social Suggestion, Post, or Version IDs in the user-facing reply. Confirm the review action in ordinary language instead.",
-    "- Never mention internal Mission task or Journal source IDs in the user-facing reply. Disambiguate with human titles, projects, dates, and snippets.",
+    ...(needsTimeContext
+      ? [`Current instant: ${now.toISOString()}. Owner timezone: ${timezone}. Local owner time: ${formatAgentDateTime(now.toISOString(), timezone)}.`]
+      : []),
+    ...(hasFamily("reminders")
+      ? [
+          "Reminder tool rules:",
+          "- Use reminder tools only when the owner clearly asks to list, create, update, or cancel reminders.",
+          "- For create/update, remindAt must be a future ISO date-time with the correct timezone offset. Noon means 12:00; midnight means 00:00. Resolve weekdays in the owner's timezone.",
+          "- If the requested date or time is missing or ambiguous, ask one concise clarification question and do not call a write tool.",
+          "- Before update/cancel, list reminders unless a stable reminder ID is already present in the conversation. Never invent or infer an ID from a title.",
+          "- If multiple listed reminders could match, ask the owner which one they mean and do not write.",
+        ]
+      : []),
+    ...(hasFamily("calendar")
+      ? [
+          "Calendar event tool rules:",
+          "- Use core_calendar_events_list to read personal and imported calendar events. Use core_calendar_event_create to create a private event in the owner's ME3 calendar. Use reminder tools for reminders and booking lookup for bookings.",
+          "- Resolve relative dates in the owner's timezone. Calendar reads require an inclusive dateFrom and dateTo and are limited to 31 days.",
+          "- For event creation, title, date, and start time must be clear. If any is missing, ask one concise clarification question and do not call the tool.",
+          "- A missing duration is not ambiguous: omit durationMinutes and ME3 will default to 60 minutes. Mention that default after creation.",
+          "- Pass the requested wall date and time unchanged with its IANA startTimezone; the tool performs the timezone conversion. Use calendarTimezone only when the owner explicitly requests a display timezone; otherwise omit it to use the owner's timezone.",
+          "- Treat startTimezone and calendarTimezone as separate IANA zones and never hardcode a fixed hour difference. Resolve an abbreviation from clear geographic context; abbreviations such as IST, CST, and BST have multiple meanings, so ask which source region the owner means when context does not disambiguate it. Never pass an abbreviation to the tool.",
+          "- Calendar event creation writes only to the private ME3 calendar. Do not claim it synced to Google Calendar, Outlook, or another external provider.",
+        ]
+      : []),
+    ...(hasFamily("bookings")
+      ? [
+          "Booking tool rules:",
+          "- Use core_bookings_lookup whenever the owner asks about upcoming confirmed bookings, appointments, client sessions, or booked calls. Do not answer from calendar events or email.",
+          "- Booking lookup is read-only and returns the next confirmed bookings in chronological order. It does not include reminders, ordinary calendar events, or cancelled bookings.",
+        ]
+      : []),
+    ...(hasFamily("scheduling")
+      ? [
+          "Contact and agent-assisted scheduling tool rules:",
+          "- Use core_contacts_search to find owner contacts and whether a contact has a connected ME3 assistant through Soulink. Do not expose contact IDs, connection tokens, node IDs, or private chat history.",
+          "- Use core_scheduling_request when the owner asks to arrange time with a contact. The contact name is the only required input.",
+          "- A missing duration is not ambiguous: omit durationMinutes and ME3 will default to 30 minutes. A missing date window is not ambiguous: omit dateFrom and dateTo and ME3 will default to the next seven local calendar days. Do not ask a clarification question for either omission.",
+          "- The request tool exchanges only structured availability with the other ME3 assistant. It does not open, read, or write either owner's private assistant chat.",
+          "- If the other owner's policy requires review before sharing availability, explain that their approval is pending. Do not ask the requester to choose a time until mutual options arrive.",
+          "- The request tool never books immediately. Show the returned numbered mutual options and wait for the owner to choose one.",
+          "- Use core_scheduling_approve after the recipient explicitly authorizes an exact set of incoming options, or after the requester chooses one shown option. Set confirmed=true only for that explicit action.",
+          "- Use core_scheduling_decline when the owner explicitly declines or cancels an open scheduling request. Declining never writes a calendar event.",
+          "- Recipient authorization applies only to the exact offered slots. The requester’s selection of one of those slots completes both-owner approval; do not ask the recipient to approve it again. Never claim a meeting is booked while the result says waiting_for_other_owner.",
+          "- Never mention scheduling request IDs or internal Soulink identifiers in the user-facing reply.",
+        ]
+      : []),
+    ...(hasFamily("network")
+      ? [
+          "ME3 Network directory rules:",
+          "- Use core_network_directory_search when the owner asks to find a person, service, product, provider, skill, or collaborator among public ME3 Network profiles.",
+          "- Search with the owner's actual need in plain language. Use offeringType only when the owner clearly asks for a service or product, and countryCode only when a country is explicit.",
+          "- Treat matches as discovery candidates, not endorsements. Explain the public fields or offerings that made each result relevant and include its public profile link.",
+          "- Each result includes a stable profileId. Include its exact ME3 profile reference in the reply. Use core_network_scheduling_request only after the owner explicitly asks to meet one unambiguous result, and copy that exact profileId. If the selection is ambiguous or no stable profile ID is present in the conversation, search again or ask which result they mean.",
+          "- Network scheduling sends a free one-to-one meeting request for recipient review. It never creates a contact. Paid bookings and group scheduling are not supported by this tool.",
+          "- Directory results are public profile data only. Never imply access to private ME3 memory, contacts, messages, assistant chats, or precise location.",
+          "- Location in v1 is a textual filter. Do not claim distance, travel time, or 'near me' ranking.",
+        ]
+      : []),
+    ...(hasFamily("sites")
+      ? [
+          "Site and landing-page tool rules:",
+          "- Use core_sites_blog_post_read to list profile-site blog posts or read one named post. Omit post to list; provide the title, slug, or file path to read the full markdown body.",
+          "- Site blog access is read-only. No tool can create, draft, edit, publish, unpublish, archive, or delete a blog post.",
+          "- Use landing-page tools when the owner clearly asks to list, create, or revise a landing page. Brainstorming alone is conversation, not a write request.",
+          "- A landing-page create or update tool saves a private draft only. Never claim the page is live or published.",
+          "- Use the owner's factual brief. Do not invent dates, locations, prices, testimonials, guarantees, customer names, or product claims.",
+          "- Choose purpose event, service, or waitlist from the owner's goal. Omit designPackId to use the recommended compatible starter design.",
+          "- If the owner asks what designs exist, list designs before creating. Design display names are changeable; stable IDs are tool data, not marketing copy.",
+          "- For revisions, list landing pages first unless the exact stable page ID is already present in tool context. Never invent a page ID.",
+          "- Keep highlights newline-separated in the form Title: factual explanation. Prefer three specific highlights over generic filler.",
+          "- After creating or revising, direct the owner to the returned draft or preview action. Publishing is not an available chat tool yet.",
+        ]
+      : []),
+    ...(hasFamily("mission")
+      ? [
+          "Task and project tool rules:",
+          "- Use task tools only when the owner clearly asks to list, read, create, update, move, complete, or archive tasks.",
+          "- When the owner remembers a task or Journal entry by title or content, use core_owner_content_search. Search returns lightweight candidates with stable source IDs; read the selected source before using its full body.",
+          "- Search before task read/update/archive when the owner names or describes a record but no stable task ID is present. Use task list for browsing a project or status, not title discovery.",
+          "- Task list accepts an exact projectName directly. Use projectId=null and projectName=null to list across all projects; never claim a project ID is required for a read.",
+          "- Never invent a taskId or projectId. If multiple records could match, ask one concise clarification question and do not write.",
+          "- For create, use the project ID selected by the owner. Omit projectId only when the owner did not name a project and the host can choose an unambiguous default.",
+          "- When asked to prioritise, list the matching tasks first and recommend a small Now set. Only update status or priority after the owner clearly confirms.",
+          "- Priority is 1 (highest) through 5 (lowest). Use in_progress for the owner's small Now commitment list.",
+          "- Convert relative due dates such as today or tomorrow to YYYY-MM-DD in the owner's timezone using the current-time context above.",
+          "- For update, send only fields the owner asked to change. Null optional fields mean no change.",
+          "- Set clearDescription or clearDueAt only when the owner explicitly asks to remove that value.",
+        ]
+      : []),
+    ...(hasFamily("journal")
+      ? [
+          "Journal tool rules:",
+          "- Use core_journal_read whenever the owner asks to read, list, review, summarize, or reason about Journal entries. Journal content is never present in the owner snapshot.",
+          "- Use mode latest for recent entries (default 7), mode date for one YYYY-MM-DD date, and mode range for an inclusive YYYY-MM-DD date range.",
+          "- Resolve today and other relative dates using the owner's timezone and current-time context above. Never invent an entry or infer that an entry is missing without calling the Journal tool in this turn.",
+        ]
+      : []),
+    ...(hasFamily("mailbox")
+      ? [
+          "Mailbox tool rules:",
+          "- Search before reading or replying unless a stable mailbox message ID is already present. Never invent a message ID.",
+          "- Search returns summaries only. Read exactly the intended stable message ID before using the full private body.",
+          "- If several messages or recipients could match, ask one concise clarification question and do not create a draft.",
+          "- Draft requires a complete recipient, subject, and plain-text body. Use replyToMessageId only after reading that exact message.",
+          "- Draft creation saves a reviewable mailbox draft only. Never claim the email was sent; sending is not an available tool.",
+        ]
+      : []),
+    ...(hasFamily("social")
+      ? [
+          "Social publishing tool rules:",
+          "- Use social tools when the owner asks to turn a Journal entry or task into social Posts or Suggestions.",
+          "- Search owner content when the owner gives a remembered task or Journal title. For Journal, an entry ID, YYYY-MM-DD date, or today can also be used directly. Never invent a source ID.",
+          "- Read the exact Source with core_social_source_read before calling core_social_suggestions_create or core_social_draft_create. Build every Suggestion and Version from that returned Source, not from assumptions or a summary invented by the model.",
+          "- If source reading is the last action in a turn, confirm the source by its human title only. ME3 preserves the stable source ID privately for safe cross-turn revalidation.",
+          "- Preserve the owner's words, voice, claims, tone, and intended meaning by default. Reuse exact source phrases where they fit and make only light edits for length, clarity, or platform formatting unless the owner asks for a rewrite.",
+          "- Do not add generic hooks, emojis, hashtags, advice, claims, or framing that are not in the source. When one source wording already fits several platforms, keep it instead of rewriting for novelty.",
+          "- When the owner asks for ideas, options, repurposing, a Quote, Short Post, Thread, or carousel outline, call core_social_suggestions_create. Provide exact Source text for each Suggestion. Quotes must stay verbatim; set quoteTrimmed only when words were removed without adding or reordering words.",
+          "- Suggestions remain owner-controlled review material. Never claim that a Suggestion became a Post until the owner chooses and saves it.",
+          "- Create only the platforms the owner requested. Draft creation saves reviewable internal drafts only; it never approves, schedules, or publishes them.",
+          "- Use core_social_library_search to find existing Social Post Versions by Source, topic text, platform, account, approval, delivery state, tag, or published date. Never invent a Post, Version, account, or Posting plan ID.",
+          "- Use core_social_posting_plan_create to propose times only after the target account and time window are clear. A proposal creates no Publications and schedules nothing; show its warnings and review action to the owner.",
+          "- Never fill or confirm a Posting plan autonomously. Call core_social_posting_plan_confirm only when the owner explicitly confirms the exact reviewed plan in the conversation, and pass its exact planId, expectedUpdatedAt, and confirmed=true.",
+          "- Describe owner-facing timing rules as Preferred posting times, minimum gap, and minimum time before reposting. Do not use internal implementation terminology.",
+          "- Never mention internal Social Suggestion, Post, or Version IDs in the user-facing reply. Confirm the review action in ordinary language instead.",
+          "- Never mention internal Mission task or Journal source IDs in the user-facing reply. Disambiguate with human titles, projects, dates, and snippets.",
+        ]
+      : []),
     "- A tool result is the source of truth. Do not claim an action succeeded unless its result says ok=true.",
     "- For current ME3 data, call the relevant tool in this turn instead of answering from earlier conversation or context alone.",
     "- When the owner confirms several independent actions and their stable IDs are known, return all tool calls together. ME3 executes them sequentially with policy and idempotency checks.",
