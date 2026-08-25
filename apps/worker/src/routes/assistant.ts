@@ -3722,6 +3722,9 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
                   typeof runtimeStream.doneData?.model === "string"
                     ? runtimeStream.doneData.model
                     : selectedModel?.model ?? null,
+                modelAttempts: Array.isArray(runtimeStream.doneData?.modelAttempts)
+                  ? runtimeStream.doneData.modelAttempts
+                  : null,
                 latency,
               }),
             );

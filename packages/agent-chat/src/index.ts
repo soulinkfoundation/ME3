@@ -448,6 +448,10 @@ export type AgentChatModelAttemptTrace = {
   model: string;
   status: "succeeded" | "empty" | "failed";
   error: string | null;
+  durationMs?: number;
+  modelRequestDurationMs?: number;
+  modelRequestCount?: number;
+  gatewayLogIds?: string[];
 };
 
 export type AgentChatTurnTrace = {
@@ -657,6 +661,7 @@ export type AgentMailboxDraftFailureInput = {
 type CoreAgentChatEnv = {
   DB: D1Like;
   AI?: {
+    aiGatewayLogId?: string | null;
     run(model: string, input: unknown, options?: unknown): Promise<unknown>;
   };
   SITE_ASSETS?: R2Like;
@@ -4460,6 +4465,9 @@ async function resolveAiRoute(
     apiKey,
     ai: env.AI || null,
     aiGateway,
+    aiGatewayRequestPolicy: managedEveryday
+      ? MANAGED_EVERYDAY_AI_GATEWAY_REQUEST_POLICY
+      : null,
     recordUsage:
       normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) === "managed"
         ? ({ model: usedModel, usage }) =>
@@ -4494,6 +4502,10 @@ const MANAGED_AI_BILLABLE_TEXT_MODEL_SET = new Set<string>(
   MANAGED_AI_BILLABLE_TEXT_MODELS,
 );
 const MANAGED_DEFAULT_MODEL = MANAGED_AI_MODELS[0];
+const MANAGED_EVERYDAY_AI_GATEWAY_REQUEST_POLICY = {
+  requestTimeoutMs: 12_000,
+  maxAttempts: 1,
+} as const;
 const MANAGED_AI_INCLUDED_MONTHLY_CENTS = 500;
 const MANAGED_AI_POLICY_SECRET = "ME3_MANAGED_AI_BILLING_POLICY";
 

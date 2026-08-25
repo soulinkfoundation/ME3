@@ -27,22 +27,53 @@ export type AgentChatAiGatewayRuntimeConfig = {
   routeExternalProviders: boolean;
 };
 
+export type AgentChatAiGatewayRequestPolicy = {
+  requestTimeoutMs: number;
+  maxAttempts: 1 | 2 | 3 | 4 | 5;
+};
+
 export type AgentChatAiRoute = {
   providerId: "workers-ai" | "openai" | "anthropic";
   model: string;
   backupModel: string | null;
   apiKey: string | null;
   ai: {
+    aiGatewayLogId?: string | null;
     run(model: string, input: unknown, options?: unknown): Promise<unknown>;
   } | null;
   aiGateway: AgentChatAiGatewayRuntimeConfig | null;
   aiGatewayMetadata?: Record<string, string | number | boolean>;
+  aiGatewayRequestPolicy?: AgentChatAiGatewayRequestPolicy | null;
   recordUsage?: (input: {
     model: string;
     usage: AgentModelUsage;
   }) => void | Promise<void>;
   configured: boolean;
 };
+
+export function workersAiGatewayRunOptions(
+  route: AgentChatAiRoute,
+): Record<string, unknown> | undefined {
+  if (!route.aiGateway?.routeWorkersAi || !route.aiGateway.gatewayId) {
+    return undefined;
+  }
+  return {
+    gateway: {
+      id: route.aiGateway.gatewayId,
+      ...(route.aiGatewayMetadata
+        ? { metadata: route.aiGatewayMetadata }
+        : {}),
+      ...(route.aiGatewayRequestPolicy
+        ? {
+            requestTimeoutMs: route.aiGatewayRequestPolicy.requestTimeoutMs,
+            retries: {
+              maxAttempts: route.aiGatewayRequestPolicy.maxAttempts,
+            },
+          }
+        : {}),
+    },
+  };
+}
 
 export function openAiCompatibleReasoningEffort(
   model: string,
@@ -72,6 +103,8 @@ export async function runModelTurn(
   const modelAttempts: AgentChatModelAttemptTrace[] = [];
 
   for (const model of attempts) {
+    const attemptStartedAt = performance.now();
+    const gatewayLogIdBefore = route.ai?.aiGatewayLogId ?? null;
     try {
       const attemptRoute = { ...route, model };
       const replyText =
@@ -87,6 +120,11 @@ export async function runModelTurn(
           model,
           status: "succeeded",
           error: null,
+          ...singleModelAttemptMetrics(
+            route,
+            attemptStartedAt,
+            gatewayLogIdBefore,
+          ),
         });
         return {
           ok: true,
@@ -113,6 +151,11 @@ export async function runModelTurn(
         model,
         status: "empty",
         error: message,
+        ...singleModelAttemptMetrics(
+          route,
+          attemptStartedAt,
+          gatewayLogIdBefore,
+        ),
       });
       lastError = new Error(emptyModelReply(attemptRoute));
     } catch (error) {
@@ -122,12 +165,37 @@ export async function runModelTurn(
         model,
         status: "failed",
         error: message,
+        ...singleModelAttemptMetrics(
+          route,
+          attemptStartedAt,
+          gatewayLogIdBefore,
+        ),
       });
       lastError = error;
     }
   }
 
   return modelFallbackResponse(route, turnId, modelAttempts, lastError);
+}
+
+function singleModelAttemptMetrics(
+  route: AgentChatAiRoute,
+  startedAt: number,
+  gatewayLogIdBefore: string | null,
+): Pick<
+  AgentChatModelAttemptTrace,
+  "durationMs" | "modelRequestDurationMs" | "modelRequestCount" | "gatewayLogIds"
+> {
+  const durationMs = Number((performance.now() - startedAt).toFixed(2));
+  const gatewayLogId = route.ai?.aiGatewayLogId ?? null;
+  return {
+    durationMs,
+    modelRequestDurationMs: durationMs,
+    modelRequestCount: 1,
+    ...(gatewayLogId && gatewayLogId !== gatewayLogIdBefore
+      ? { gatewayLogIds: [gatewayLogId] }
+      : {}),
+  };
 }
 
 export function modelErrorMessage(error: unknown): string {
@@ -328,17 +396,7 @@ async function runWorkersAi(
   images: AgentChatImageInput[] = [],
 ): Promise<string> {
   if (!route.ai) throw new Error("Workers AI binding is not configured");
-  const requestOptions =
-    route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
-      ? {
-          gateway: {
-            id: route.aiGateway.gatewayId,
-            ...(route.aiGatewayMetadata
-              ? { metadata: route.aiGatewayMetadata }
-              : {}),
-          },
-        }
-      : undefined;
+  const requestOptions = workersAiGatewayRunOptions(route);
   const anthropicModel = route.model
     .trim()
     .toLowerCase()

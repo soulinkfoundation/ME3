@@ -293,6 +293,15 @@ describe("Core Agent Runtime v2 reminders", () => {
       availableToolCount: expect.any(Number),
       toolSchemaCharacterCount: expect.any(Number),
     });
+    expect(response.modelAttempts).toEqual([
+      expect.objectContaining({
+        model: "workers-test-model",
+        status: "succeeded",
+        durationMs: expect.any(Number),
+        modelRequestDurationMs: expect.any(Number),
+        modelRequestCount: 2,
+      }),
+    ]);
     expect(events.map((event) => `${event.event}:${String(event.data.state || "delta")}`))
       .toEqual([
         "status:model_started",

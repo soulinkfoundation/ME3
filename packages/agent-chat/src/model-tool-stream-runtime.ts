@@ -14,6 +14,7 @@ import {
 import {
   externalProviderGatewayUrl,
   openAiCompatibleReasoningEffort,
+  workersAiGatewayRunOptions,
   type AgentChatAiRoute,
 } from "./model-runtime";
 
@@ -44,16 +45,7 @@ export async function runAgentToolModelStreamStep(
           ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
           stream: true,
         };
-    const options = route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
-      ? {
-          gateway: {
-            id: route.aiGateway.gatewayId,
-            ...(route.aiGatewayMetadata
-              ? { metadata: route.aiGatewayMetadata }
-              : {}),
-          },
-        }
-      : undefined;
+    const options = workersAiGatewayRunOptions(route);
     const result = options
       ? await route.ai.run(route.model, request, options)
       : await route.ai.run(route.model, request);

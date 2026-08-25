@@ -1270,6 +1270,9 @@ describe("Core chat native context", () => {
         ...env,
         AI: { run: aiRun },
         ME3_DEPLOYMENT_MODE: "managed",
+        CLOUDFLARE_ACCOUNT_ID: "managed-account",
+        CLOUDFLARE_AI_GATEWAY_ID: "managed-gateway",
+        CLOUDFLARE_API_TOKEN: "managed-gateway-token",
       } as never,
       createStorage(),
       { ...dispatchInput("Use my managed default."), mode: "everyday" },
@@ -1279,6 +1282,17 @@ describe("Core chat native context", () => {
     expect(aiRun).toHaveBeenCalledWith(
       "@cf/zai-org/glm-4.7-flash",
       expect.any(Object),
+      {
+        gateway: {
+          id: "managed-gateway",
+          metadata: {
+            me3_request_id: expect.any(String),
+            me3_turn_id: expect.any(String),
+          },
+          requestTimeoutMs: 12_000,
+          retries: { maxAttempts: 1 },
+        },
+      },
     );
   });
 

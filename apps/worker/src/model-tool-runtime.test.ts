@@ -81,6 +81,10 @@ describe("live agent tool model adapters", () => {
           me3_request_id: "request-1",
           me3_turn_id: "turn-1",
         },
+        aiGatewayRequestPolicy: {
+          requestTimeoutMs: 12_000,
+          maxAttempts: 1,
+        },
       }),
       [{ role: "user", content: "Say done" }],
       TOOLS,
@@ -96,6 +100,8 @@ describe("live agent tool model adapters", () => {
             me3_request_id: "request-1",
             me3_turn_id: "turn-1",
           },
+          requestTimeoutMs: 12_000,
+          retries: { maxAttempts: 1 },
         },
       },
     );

@@ -326,6 +326,10 @@ export async function runCoreAgentToolTurn(input: {
   let lastError: unknown = null;
 
   for (const model of models) {
+    const attemptStartedAt = performance.now();
+    const attemptRequestCountStartedAt = modelRequestCount;
+    const attemptRequestDurationStartedAt = modelRequestDurationMs;
+    const gatewayLogIds: string[] = [];
     const callCounts = new Map<string, number>();
     try {
       const result = await runAgentToolLoop({
@@ -339,6 +343,7 @@ export async function runCoreAgentToolTurn(input: {
             : null;
           const modelTools = forcedTool ? [forcedTool] : availableTools;
           const modelRequestStartedAt = performance.now();
+          const gatewayLogIdBefore = input.route.ai?.aiGatewayLogId ?? null;
           modelRequestCount += 1;
           await emit({
             event: "status",
@@ -366,6 +371,14 @@ export async function runCoreAgentToolTurn(input: {
               );
           const resolved = await response.finally(() => {
             modelRequestDurationMs += durationMs(modelRequestStartedAt);
+            const gatewayLogId = input.route.ai?.aiGatewayLogId ?? null;
+            if (
+              gatewayLogId &&
+              gatewayLogId !== gatewayLogIdBefore &&
+              !gatewayLogIds.includes(gatewayLogId)
+            ) {
+              gatewayLogIds.push(gatewayLogId);
+            }
           });
           if (
             forcedTool &&
@@ -459,6 +472,14 @@ export async function runCoreAgentToolTurn(input: {
         model,
         status: "succeeded",
         error: null,
+        ...modelAttemptMetrics({
+          startedAt: attemptStartedAt,
+          requestCountStartedAt: attemptRequestCountStartedAt,
+          requestDurationStartedAt: attemptRequestDurationStartedAt,
+          requestCount: modelRequestCount,
+          requestDurationMs: modelRequestDurationMs,
+          gatewayLogIds,
+        }),
       });
       return attachStreamMetrics(
         successfulResponse(
@@ -493,6 +514,14 @@ export async function runCoreAgentToolTurn(input: {
         error: empty
           ? "Model returned an empty reply."
           : modelErrorMessage(error) || "Agent model request failed.",
+        ...modelAttemptMetrics({
+          startedAt: attemptStartedAt,
+          requestCountStartedAt: attemptRequestCountStartedAt,
+          requestDurationStartedAt: attemptRequestDurationStartedAt,
+          requestCount: modelRequestCount,
+          requestDurationMs: modelRequestDurationMs,
+          gatewayLogIds,
+        }),
       });
       if (outcomes.length > 0) break;
     }
@@ -518,6 +547,29 @@ export async function runCoreAgentToolTurn(input: {
     tools.length,
     toolSchemaCharacterCount,
   );
+}
+
+function modelAttemptMetrics(input: {
+  startedAt: number;
+  requestCountStartedAt: number;
+  requestDurationStartedAt: number;
+  requestCount: number;
+  requestDurationMs: number;
+  gatewayLogIds: string[];
+}): Pick<
+  AgentChatModelAttemptTrace,
+  "durationMs" | "modelRequestDurationMs" | "modelRequestCount" | "gatewayLogIds"
+> {
+  return {
+    durationMs: durationMs(input.startedAt),
+    modelRequestDurationMs: Number(
+      (input.requestDurationMs - input.requestDurationStartedAt).toFixed(2),
+    ),
+    modelRequestCount: input.requestCount - input.requestCountStartedAt,
+    ...(input.gatewayLogIds.length > 0
+      ? { gatewayLogIds: [...input.gatewayLogIds] }
+      : {}),
+  };
 }
 
 function attachStreamMetrics(

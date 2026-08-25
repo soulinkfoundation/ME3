@@ -12,6 +12,7 @@ import {
 import {
   externalProviderGatewayUrl,
   openAiCompatibleReasoningEffort,
+  workersAiGatewayRunOptions,
   type AgentChatAiRoute,
 } from "./model-runtime";
 
@@ -24,17 +25,7 @@ export async function runAgentToolModelStep(
   const toolChoice = requiredToolName ? { name: requiredToolName } : undefined;
   if (route.providerId === "workers-ai") {
     if (!route.ai) throw new Error("Workers AI binding is not configured");
-    const options =
-      route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
-        ? {
-            gateway: {
-              id: route.aiGateway.gatewayId,
-              ...(route.aiGatewayMetadata
-                ? { metadata: route.aiGatewayMetadata }
-                : {}),
-            },
-          }
-        : undefined;
+    const options = workersAiGatewayRunOptions(route);
     const anthropicModel = isAnthropicUnifiedModel(route.model);
     const reasoningEffort = openAiCompatibleReasoningEffort(route.model);
     const request = anthropicModel
