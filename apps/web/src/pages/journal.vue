@@ -22,6 +22,7 @@ import {
   parseJournalTaskMarkers,
   type JournalTaskMarkerSuggestion,
 } from "../utils/journalOrganize";
+import { journalBodyForEditor } from "../utils/journalContent";
 
 definePage({
   meta: {
@@ -446,7 +447,9 @@ async function loadDay(date: string) {
     hydratingEntry.value = true;
     loadedEntry.value = response.entry;
     title.value = response.entry?.title || "";
-    description.value = response.entry?.body || "";
+    description.value = response.entry
+      ? journalBodyForEditor(response.entry.body, response.entry.bodyFormat)
+      : "";
     entryLinks.value = [];
     if (response.entry) void loadEntryLinks(response.entry.id);
     await nextTick();
