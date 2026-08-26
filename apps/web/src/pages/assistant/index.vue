@@ -2705,7 +2705,9 @@ async function submitAssistantText(
             assistantTurnStatusText.value = "Loading relevant context…";
           } else if (data.state === "model_started") {
             assistantTurnStatusText.value =
-              typeof data.modelStep === "number" && data.modelStep > 1
+              data.isBackup === true
+                ? "Trying the backup model…"
+                : typeof data.modelStep === "number" && data.modelStep > 1
                 ? "Putting the result together…"
                 : "Writing a response…";
           } else if (data.state === "finalizing") {

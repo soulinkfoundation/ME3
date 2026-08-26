@@ -102,6 +102,8 @@ type CoreAgentDb = {
   batch?: unknown;
 };
 
+const ZERO_TOOL_CONVERSATION_TIMEOUT_MS = 6_000;
+
 type CoreToolOutcome = {
   capabilityId: CoreChatToolDefinition["capabilityId"];
   result: Record<string, unknown>;
@@ -401,6 +403,16 @@ export async function runCoreAgentToolTurn(input: {
       ).length;
   const route: AgentChatAiRoute = {
     ...input.route,
+    aiGatewayRequestPolicy:
+      tools.length === 0 && input.route.aiGatewayRequestPolicy
+        ? {
+            ...input.route.aiGatewayRequestPolicy,
+            requestTimeoutMs: Math.min(
+              input.route.aiGatewayRequestPolicy.requestTimeoutMs,
+              ZERO_TOOL_CONVERSATION_TIMEOUT_MS,
+            ),
+          }
+        : input.route.aiGatewayRequestPolicy,
     aiGatewayMetadata: {
       ...input.route.aiGatewayMetadata,
       me3_tool_count: tools.length,
@@ -413,7 +425,7 @@ export async function runCoreAgentToolTurn(input: {
     : [route.model];
   let lastError: unknown = null;
 
-  for (const model of models) {
+  for (const [modelIndex, model] of models.entries()) {
     const attemptStartedAt = performance.now();
     const attemptRequestCountStartedAt = modelRequestCount;
     const attemptRequestDurationStartedAt = modelRequestDurationMs;
@@ -439,6 +451,7 @@ export async function runCoreAgentToolTurn(input: {
               state: "model_started",
               modelStep,
               model,
+              isBackup: modelIndex > 0,
               elapsedMs: durationMs(startedAt),
             },
           });

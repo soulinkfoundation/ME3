@@ -84,6 +84,95 @@ describe("Core Agent Runtime v2 reminders", () => {
     expect(response.streamMetrics).toBeUndefined();
   });
 
+  it("fails over zero-tool conversation after the shorter gateway timeout", async () => {
+    const run = vi.fn()
+      .mockRejectedValueOnce(new Error("Primary model unavailable"))
+      .mockResolvedValueOnce({ response: "Recovered with the backup." });
+    const events: AgentChatRuntimeStreamEvent[] = [];
+
+    const response = await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "request-zero-tool-fallback",
+      turnId: "turn-zero-tool-fallback",
+      ownerTimezone: "Europe/Dublin",
+      route: workersGatewayRoute(run, "workers-test-backup") as never,
+      messages: baseMessages("Help me think through the launch."),
+      streamOptions: {
+        onEvent: (event) => {
+          events.push(event);
+        },
+      },
+    });
+
+    expect(response).toMatchObject({
+      model: "workers-test-backup",
+      replyText: "Recovered with the backup.",
+    });
+    expect(run.mock.calls).toHaveLength(2);
+    expect(run.mock.calls.map((call) => call[2])).toEqual([
+      expect.objectContaining({
+        gateway: expect.objectContaining({ requestTimeoutMs: 6_000 }),
+      }),
+      expect.objectContaining({
+        gateway: expect.objectContaining({ requestTimeoutMs: 6_000 }),
+      }),
+    ]);
+    expect(
+      events
+        .filter((event) => event.event === "status")
+        .map((event) => event.data.isBackup),
+    ).toEqual([false, true]);
+  });
+
+  it("retains the configured gateway timeout for a tool-backed turn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-01T10:00:00Z"));
+    const run = vi.fn()
+      .mockResolvedValueOnce(providerToolCall(
+        "workers-ai",
+        "create-timeout",
+        "core_reminders_create",
+        {
+          title: "Call Sam",
+          remindAt: "2026-07-11T09:00:00+01:00",
+          timezone: "Europe/Dublin",
+        },
+      ))
+      .mockResolvedValueOnce({ response: "Reminder created." });
+    const events: AgentChatRuntimeStreamEvent[] = [];
+
+    await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "request-tool-timeout",
+      turnId: "turn-tool-timeout",
+      ownerTimezone: "Europe/Dublin",
+      route: workersGatewayRoute(run) as never,
+      messages: baseMessages("Remind me on 11 July at 9am to call Sam"),
+      streamOptions: {
+        onEvent: (event) => {
+          events.push(event);
+        },
+      },
+    });
+
+    expect(run.mock.calls).toHaveLength(2);
+    expect(run.mock.calls.map((call) => call[2])).toEqual([
+      expect.objectContaining({
+        gateway: expect.objectContaining({ requestTimeoutMs: 12_000 }),
+      }),
+      expect.objectContaining({
+        gateway: expect.objectContaining({ requestTimeoutMs: 12_000 }),
+      }),
+    ]);
+    expect(
+      events
+        .filter((event) => event.event === "status")
+        .map((event) => event.data.isBackup),
+    ).toEqual([false, false]);
+  });
+
   it.each([
     ["Show my tasks", "core_mission_task_list"],
     ["Show my latest journal entry", "core_journal_read"],
@@ -583,6 +672,27 @@ function workersRoute(run: ReturnType<typeof vi.fn>) {
     ai: { run },
     aiGateway: null,
     configured: true,
+  };
+}
+
+function workersGatewayRoute(
+  run: ReturnType<typeof vi.fn>,
+  backupModel: string | null = null,
+) {
+  return {
+    ...workersRoute(run),
+    backupModel,
+    aiGateway: {
+      accountId: null,
+      gatewayId: "default",
+      apiToken: null,
+      routeWorkersAi: true,
+      routeExternalProviders: false,
+    },
+    aiGatewayRequestPolicy: {
+      requestTimeoutMs: 12_000,
+      maxAttempts: 1 as const,
+    },
   };
 }
 
