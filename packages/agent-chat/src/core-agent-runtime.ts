@@ -284,19 +284,6 @@ type CoreToolFamily =
   | "sites"
   | "social";
 
-const ALL_CORE_TOOL_FAMILIES: readonly CoreToolFamily[] = [
-  "bookings",
-  "calendar",
-  "journal",
-  "mailbox",
-  "mission",
-  "network",
-  "reminders",
-  "scheduling",
-  "sites",
-  "social",
-];
-
 const CORE_TOOL_FAMILY_PATTERNS: ReadonlyArray<{
   family: CoreToolFamily;
   pattern: RegExp;
@@ -308,9 +295,17 @@ const CORE_TOOL_FAMILY_PATTERNS: ReadonlyArray<{
   { family: "scheduling", pattern: /\b(?:availability|available times?|schedule|scheduling|meeting|meet with|call with|time with)\b/i },
   { family: "network", pattern: /\b(?:me3 network|me3 directory|network directory|me3 profile)\b/i },
   { family: "journal", pattern: /\b(?:journal|journal entry|journal entries|diary)\b/i },
-  { family: "mission", pattern: /\b(?:mission control|task|tasks|project|projects|backlog|to-do|todo|prioriti[sz]e|priority|priorities)\b/i },
+  {
+    family: "mission",
+    pattern:
+      /\b(?:mission control|task list|task board|my tasks?|project tasks?|backlog|to-do|todo)\b|\b(?:add|create|list|show|find|search|read|open|update|change|move|complete|finish|mark|archive|delete|prioriti[sz]e|what|which|how many)\b[^.!?\n]{0,100}\btasks?\b|\bmark\b[^.!?\n]{0,100}\b(?:done|complete|in[_ -]?progress|backlog)\b|\badd\b[^.!?\n]{1,100}\bto\b[^.!?\n]{1,60}[.!?]?$/i,
+  },
   { family: "sites", pattern: /\b(?:landing page|landing pages|profile site|website|site blog|blog post|blog posts|my blog)\b/i },
-  { family: "social", pattern: /\b(?:social post|social posts|social publishing|linkedin|instagram|twitter|x post|carousel|posting plan|post library|post from)\b/i },
+  {
+    family: "social",
+    pattern:
+      /\b(?:social content|social post|social posts|social publishing|linkedin|instagram|twitter|x post|x draft|social draft|carousel|posting plan|post library|post from)\b|\buse\b[^.!?\n]{0,100}\b(?:task|journal entry)\b/i,
+  },
 ];
 
 const MISSION_TASK_STATUSES = new Set(["backlog", "in_progress", "review", "done"]);
@@ -2191,7 +2186,13 @@ function selectCoreToolsForTurn(
       families.add(family);
     }
   } else {
-    const recentAssistantMessage = latestMessageContent(messages, "assistant");
+    const latestAssistantMessage = latestMessageContent(messages, "assistant");
+    const recentAssistantMessage = isLikelyToolFollowUp(
+      latestUserMessage,
+      latestAssistantMessage,
+    )
+      ? latestAssistantMessage
+      : "";
     const routingText = [latestUserMessage, recentAssistantMessage]
       .filter(Boolean)
       .join("\n");
@@ -2201,10 +2202,7 @@ function selectCoreToolsForTurn(
   }
 
   if (families.size === 0) {
-    return {
-      tools: [...availableTools],
-      families: new Set(ALL_CORE_TOOL_FAMILIES),
-    };
+    return { tools: [], families };
   }
   return {
     tools: availableTools.filter((tool) =>
@@ -2214,6 +2212,29 @@ function selectCoreToolsForTurn(
     ),
     families,
   };
+}
+
+function isLikelyToolFollowUp(message: string, assistantMessage: string): boolean {
+  const normalized = message
+    .toLowerCase()
+    .replaceAll("’", "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || normalized.length > 180) return false;
+  if (
+    /^(?:yes|yeah|yep|okay|ok|sure|go ahead|do (?:it|that)|(?:open|read|show|draft|reply|update|change|move|archive|delete|cancel|send|schedule|mark|complete)\b)|\b(?:it|that|those|them|the (?:first|second|third|last|latest) one)\b/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  const normalizedAssistant = assistantMessage.toLowerCase().replace(/\s+/g, " ");
+  return /\b(?:what|which)\b[^?]{0,80}\b(?:date|day|time|timezone)\b|\bwhen\b[^?]{0,80}\?/.test(
+      normalizedAssistant,
+    ) &&
+    /\b(?:today|tomorrow|tonight|morning|afternoon|evening|midnight|noon|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/.test(
+      normalized,
+    );
 }
 
 function latestMessageContent(

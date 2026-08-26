@@ -60,6 +60,115 @@ describe("Core Agent Runtime v2 reminders", () => {
     expect(modelInput.messages[0]?.content).toBe("You are ME3.");
   });
 
+  it("omits every tool schema when the owner does not name a tool domain", async () => {
+    const run = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Let's work through the launch decision.",
+    }));
+
+    const response = await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "request-conversation",
+      turnId: "turn-conversation",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute(run) as never,
+      messages: baseMessages("Help me prioritise the launch options."),
+    });
+
+    const modelInput = run.mock.calls[0]?.[1] as {
+      messages: AgentToolMessage[];
+      tools: unknown[];
+    };
+    expect(modelInput.tools).toEqual([]);
+    expect(modelInput.messages[0]?.content).toBe("You are ME3.");
+    expect(response.streamMetrics).toBeUndefined();
+  });
+
+  it.each([
+    ["Show my tasks", "core_mission_task_list"],
+    ["Show my latest journal entry", "core_journal_read"],
+  ])("routes an explicit %s request without unrelated private tools", async (prompt, expectedTool) => {
+    const run = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Done.",
+    }));
+
+    await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: `request-${expectedTool}`,
+      turnId: `turn-${expectedTool}`,
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute(run) as never,
+      messages: baseMessages(prompt),
+    });
+
+    const modelInput = run.mock.calls[0]?.[1] as {
+      tools: Array<{ function: { name: string } }>;
+    };
+    const names = modelInput.tools.map((tool) => tool.function.name);
+    expect(names).toContain(expectedTool);
+    if (expectedTool !== "core_mission_task_list") {
+      expect(names.some((name) => name.startsWith("core_mission_task_"))).toBe(false);
+    }
+    if (expectedTool !== "core_journal_read") {
+      expect(names).not.toContain("core_journal_read");
+    }
+    expect(names.some((name) => name.startsWith("core_mailbox_"))).toBe(false);
+  });
+
+  it("keeps mailbox tools for a referential follow-up but drops them for a new topic", async () => {
+    const runFollowUp = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Here is the second email.",
+    }));
+    const history: AgentToolMessage[] = [
+      { role: "system", content: "You are ME3." },
+      { role: "user", content: "Search my emails from Ada." },
+      { role: "assistant", content: "I found two emails from Ada. Which should I open?" },
+    ];
+    const mailboxServices = {
+      search: vi.fn(),
+      read: vi.fn(),
+      createDraft: vi.fn(),
+    };
+
+    await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "request-mail-follow-up",
+      turnId: "turn-mail-follow-up",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute(runFollowUp) as never,
+      messages: [...history, { role: "user", content: "Open the second one." }],
+      mailboxServices,
+    });
+
+    const followUpInput = runFollowUp.mock.calls[0]?.[1] as {
+      tools: Array<{ function: { name: string } }>;
+    };
+    expect(followUpInput.tools.map((tool) => tool.function.name)).toEqual([
+      "core_mailbox_search",
+      "core_mailbox_read",
+      "core_mailbox_draft",
+    ]);
+
+    const runNewTopic = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Let's plan it.",
+    }));
+    await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "request-new-topic",
+      turnId: "turn-new-topic",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute(runNewTopic) as never,
+      messages: [...history, { role: "user", content: "Help me plan tomorrow." }],
+      mailboxServices,
+    });
+
+    const newTopicInput = runNewTopic.mock.calls[0]?.[1] as { tools: unknown[] };
+    expect(newTopicInput.tools).toEqual([]);
+  });
+
   it("sends only the relevant tool family and instructions for a clear action", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-01T10:00:00Z"));

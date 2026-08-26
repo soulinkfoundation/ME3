@@ -3016,6 +3016,13 @@ describe("Core chat native context", () => {
     });
     expect(clarify.replyText).toContain("What date and time");
     expect(env.state.reminders).toHaveLength(0);
+    env.state.recentMessages = [...env.state.persistedMessages]
+      .reverse()
+      .map(({ role, content, metadata_json }) => ({
+        role,
+        content,
+        metadata_json,
+      }));
 
     const created = await dispatchAgentSandboxTurn(
       runtimeEnv as never,
