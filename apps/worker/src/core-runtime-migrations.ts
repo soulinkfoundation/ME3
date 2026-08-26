@@ -176,6 +176,21 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-08-26-remove-mission-task-review-v1",
     apply: applyRemoveMissionTaskReviewMigration,
   },
+  {
+    id: "0041_email_campaign_foundations",
+    checksum: "2026-08-26-email-campaign-foundations-v1",
+    apply: applyEmailCampaignFoundationsMigration,
+  },
+  {
+    id: "0042_email_campaign_assets",
+    checksum: "2026-08-26-email-campaign-assets-v1",
+    apply: applyEmailCampaignAssetsMigration,
+  },
+  {
+    id: "0043_email_campaign_delivery",
+    checksum: "2026-08-26-email-campaign-delivery-v1",
+    apply: applyEmailCampaignDeliveryMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -2392,6 +2407,314 @@ async function applySiteRolesMigration(db: D1Database): Promise<void> {
        BEGIN
          SELECT RAISE(ABORT, 'ME3_SITE_ORGANIZATION_LIMIT');
        END`,
+    ),
+  ];
+  if (typeof db.batch === "function") {
+    await db.batch(statements);
+  } else {
+    for (const statement of statements) await statement.run();
+  }
+}
+
+async function applyEmailCampaignFoundationsMigration(db: D1Database): Promise<void> {
+  if (!(await tableExists(db, "subscribers")) || !(await tableExists(db, "sites"))) {
+    throw new Error("Cannot apply 0041_email_campaign_foundations: subscribers or sites is missing");
+  }
+
+  const subscriberColumns: Array<[string, string]> = [
+    [
+      "marketing_status",
+      "TEXT NOT NULL DEFAULT 'pending' CHECK (marketing_status IN ('pending', 'marketable'))",
+    ],
+    [
+      "marketing_permission_method",
+      "TEXT CHECK (marketing_permission_method IS NULL OR marketing_permission_method IN ('single_opt_in', 'double_opt_in', 'import_attested'))",
+    ],
+    ["marketing_permission_granted_at", "TEXT"],
+    ["marketing_permission_evidence_json", "TEXT"],
+    [
+      "delivery_status",
+      "TEXT NOT NULL DEFAULT 'deliverable' CHECK (delivery_status IN ('deliverable', 'bounced', 'complained', 'suppressed'))",
+    ],
+    ["delivery_status_changed_at", "TEXT"],
+  ];
+  for (const [columnName, declaration] of subscriberColumns) {
+    await addColumnIfMissing(db, "subscribers", columnName, declaration);
+  }
+
+  const statements = [
+    db.prepare(
+      `UPDATE subscribers
+       SET marketing_status = CASE
+             WHEN source IN ('me3', 'substack_import') THEN 'marketable'
+             ELSE 'pending'
+           END,
+           marketing_permission_method = CASE
+             WHEN source = 'me3' THEN 'single_opt_in'
+             WHEN source = 'substack_import' THEN 'import_attested'
+             ELSE NULL
+           END,
+           marketing_permission_granted_at = CASE
+             WHEN source IN ('me3', 'substack_import') THEN subscribed_at
+             ELSE NULL
+           END,
+           marketing_permission_evidence_json = CASE
+             WHEN source = 'me3'
+               THEN '{"version":1,"kind":"site_form","source":"legacy_me3_signup"}'
+             WHEN source = 'substack_import'
+               THEN '{"version":1,"kind":"legacy_import","source":"substack_import"}'
+             ELSE NULL
+           END
+       WHERE marketing_permission_method IS NULL
+         AND marketing_permission_granted_at IS NULL
+         AND marketing_permission_evidence_json IS NULL`,
+    ),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS email_campaigns (
+        id TEXT PRIMARY KEY,
+        site_id TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT 'Untitled campaign',
+        status TEXT NOT NULL DEFAULT 'draft'
+          CHECK (status IN ('draft', 'scheduled', 'sending', 'sent', 'cancelled', 'failed')),
+        scheduled_for TEXT,
+        sent_at TEXT,
+        cancelled_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+      )`,
+    ),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS email_campaign_revisions (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL,
+        revision_number INTEGER NOT NULL CHECK (revision_number >= 1),
+        subject TEXT NOT NULL DEFAULT '',
+        preview_text TEXT NOT NULL DEFAULT '',
+        reply_to_address TEXT,
+        document_version TEXT NOT NULL DEFAULT 'me3.campaign-document.v1',
+        document_json TEXT NOT NULL DEFAULT '{"version":"me3.campaign-document.v1","blocks":[]}',
+        renderer_version TEXT,
+        rendered_html TEXT,
+        rendered_text TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (campaign_id, revision_number),
+        FOREIGN KEY (campaign_id) REFERENCES email_campaigns(id) ON DELETE CASCADE
+      )`,
+    ),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS email_campaign_audience_snapshots (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL,
+        revision_id TEXT NOT NULL,
+        site_id TEXT NOT NULL,
+        eligible_count INTEGER NOT NULL DEFAULT 0 CHECK (eligible_count >= 0),
+        excluded_count INTEGER NOT NULL DEFAULT 0 CHECK (excluded_count >= 0),
+        exclusion_counts_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (campaign_id) REFERENCES email_campaigns(id) ON DELETE CASCADE,
+        FOREIGN KEY (revision_id) REFERENCES email_campaign_revisions(id) ON DELETE CASCADE,
+        FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+      )`,
+    ),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS email_campaign_audience_members (
+        id TEXT PRIMARY KEY,
+        snapshot_id TEXT NOT NULL,
+        subscriber_id INTEGER,
+        normalized_email TEXT NOT NULL,
+        first_name TEXT,
+        last_name TEXT,
+        permission_method TEXT NOT NULL
+          CHECK (permission_method IN ('single_opt_in', 'double_opt_in', 'import_attested')),
+        permission_granted_at TEXT NOT NULL,
+        permission_evidence_json TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (snapshot_id, normalized_email),
+        FOREIGN KEY (snapshot_id) REFERENCES email_campaign_audience_snapshots(id) ON DELETE CASCADE,
+        FOREIGN KEY (subscriber_id) REFERENCES subscribers(id) ON DELETE SET NULL
+      )`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaigns_site_updated
+       ON email_campaigns(site_id, updated_at DESC)`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaigns_status_schedule
+       ON email_campaigns(status, scheduled_for)`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaign_revisions_campaign
+       ON email_campaign_revisions(campaign_id, revision_number DESC)`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaign_audience_snapshots_campaign
+       ON email_campaign_audience_snapshots(campaign_id, created_at DESC)`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaign_audience_members_snapshot
+       ON email_campaign_audience_members(snapshot_id)`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_subscribers_campaign_eligibility
+       ON subscribers(site_id, marketing_status, delivery_status, unsubscribed_at)`,
+    ),
+  ];
+  if (typeof db.batch === "function") {
+    await db.batch(statements);
+  } else {
+    for (const statement of statements) await statement.run();
+  }
+}
+
+async function applyEmailCampaignAssetsMigration(db: D1Database): Promise<void> {
+  if (
+    !(await tableExists(db, "email_campaigns")) ||
+    !(await tableExists(db, "email_campaign_revisions"))
+  ) {
+    throw new Error("Cannot apply 0042_email_campaign_assets: campaign foundations are missing");
+  }
+  const statements = [
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS email_campaign_assets (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL,
+        site_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        storage_path TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        content_type TEXT NOT NULL
+          CHECK (content_type IN ('image/jpeg', 'image/png', 'image/gif')),
+        size INTEGER NOT NULL CHECK (size > 0),
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (campaign_id, content_hash),
+        FOREIGN KEY (campaign_id) REFERENCES email_campaigns(id) ON DELETE CASCADE,
+        FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+      )`,
+    ),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS email_campaign_revision_assets (
+        revision_id TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (revision_id, asset_id),
+        FOREIGN KEY (revision_id) REFERENCES email_campaign_revisions(id) ON DELETE CASCADE,
+        FOREIGN KEY (asset_id) REFERENCES email_campaign_assets(id) ON DELETE RESTRICT
+      )`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaign_assets_campaign
+       ON email_campaign_assets(campaign_id, created_at DESC)`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaign_assets_site_hash
+       ON email_campaign_assets(site_id, content_hash)`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaign_revision_assets_asset
+       ON email_campaign_revision_assets(asset_id)`,
+    ),
+  ];
+  if (typeof db.batch === "function") {
+    await db.batch(statements);
+  } else {
+    for (const statement of statements) await statement.run();
+  }
+}
+
+async function applyEmailCampaignDeliveryMigration(db: D1Database): Promise<void> {
+  if (
+    !(await tableExists(db, "email_campaigns")) ||
+    !(await tableExists(db, "email_campaign_revisions")) ||
+    !(await tableExists(db, "email_campaign_audience_snapshots")) ||
+    !(await tableExists(db, "email_campaign_audience_members"))
+  ) {
+    throw new Error("Cannot apply 0043_email_campaign_delivery: campaign foundations are missing");
+  }
+  for (const [columnName, declaration] of [
+    ["current_revision_id", "TEXT"],
+    ["audience_snapshot_id", "TEXT"],
+    ["sender_ref", "TEXT"],
+    ["from_address", "TEXT"],
+    ["failure_reason", "TEXT"],
+  ] as const) {
+    await addColumnIfMissing(db, "email_campaigns", columnName, declaration);
+  }
+
+  const statements = [
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS email_campaign_recipient_jobs (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL,
+        revision_id TEXT NOT NULL,
+        audience_snapshot_id TEXT,
+        audience_member_id TEXT,
+        kind TEXT NOT NULL CHECK (kind IN ('campaign', 'test')),
+        recipient_ref TEXT NOT NULL,
+        recipient_email TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+          'queued', 'submitting', 'accepted', 'delivered', 'delayed', 'bounced',
+          'complained', 'suppressed', 'rejected', 'retry_wait', 'failed',
+          'delivery_unknown', 'unresolved', 'cancelled', 'paused'
+        )),
+        request_json TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        next_attempt_at TEXT NOT NULL,
+        provider_reason TEXT,
+        accepted_at TEXT,
+        terminal_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (campaign_id) REFERENCES email_campaigns(id) ON DELETE CASCADE,
+        FOREIGN KEY (revision_id) REFERENCES email_campaign_revisions(id) ON DELETE RESTRICT,
+        FOREIGN KEY (audience_snapshot_id) REFERENCES email_campaign_audience_snapshots(id) ON DELETE RESTRICT,
+        FOREIGN KEY (audience_member_id) REFERENCES email_campaign_audience_members(id) ON DELETE RESTRICT
+      )`,
+    ),
+    db.prepare(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_email_campaign_recipient_jobs_member
+       ON email_campaign_recipient_jobs(campaign_id, audience_member_id)
+       WHERE kind = 'campaign'`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaign_recipient_jobs_due
+       ON email_campaign_recipient_jobs(status, next_attempt_at, created_at)`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaign_recipient_jobs_campaign
+       ON email_campaign_recipient_jobs(campaign_id, status, created_at)`,
+    ),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS email_campaign_events (
+        event_id TEXT PRIMARY KEY,
+        operation_id TEXT NOT NULL,
+        campaign_id TEXT NOT NULL,
+        recipient_ref TEXT NOT NULL,
+        sequence INTEGER NOT NULL CHECK (sequence >= 1),
+        event_type TEXT NOT NULL,
+        reason TEXT,
+        occurred_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (operation_id) REFERENCES email_campaign_recipient_jobs(id) ON DELETE CASCADE,
+        FOREIGN KEY (campaign_id) REFERENCES email_campaigns(id) ON DELETE CASCADE
+      )`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_email_campaign_events_campaign
+       ON email_campaign_events(campaign_id, occurred_at DESC)`,
+    ),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS email_campaign_transport_state (
+        id TEXT PRIMARY KEY CHECK (id = 'managed'),
+        sender_ref TEXT,
+        from_address TEXT,
+        sender_domain TEXT,
+        ready INTEGER NOT NULL DEFAULT 0 CHECK (ready IN (0, 1)),
+        unavailable_reason TEXT,
+        event_cursor TEXT,
+        last_checked_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
     ),
   ];
   if (typeof db.batch === "function") {

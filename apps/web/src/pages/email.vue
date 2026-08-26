@@ -3339,6 +3339,18 @@ onBeforeUnmount(() => {
                     </div>
                   </details>
                 </div>
+                <Button
+                  class="mail-campaigns-link"
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  to="/email/campaigns"
+                >
+                  <template #icon>
+                    <UiIcon name="Send" :size="16" aria-hidden="true" />
+                  </template>
+                  Campaigns
+                </Button>
               </aside>
 
               <section
@@ -4985,6 +4997,12 @@ onBeforeUnmount(() => {
 
 .mail-rail::-webkit-scrollbar {
   display: none;
+}
+
+.mail-campaigns-link {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  margin-bottom: 4px;
 }
 
 .mail-folder-tabs--mobile {

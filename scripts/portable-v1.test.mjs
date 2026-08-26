@@ -140,6 +140,51 @@ test("exports sanitized owner data and restores the exact identity, D1 rows, and
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM assistant_messages;"), "1");
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM mission_tasks;"), "1");
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM journal_entries;"), "1");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM email_campaigns;"), "1");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM email_campaign_revisions;"), "1");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM email_campaign_audience_snapshots;"), "1");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM email_campaign_audience_members;"), "1");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM email_campaign_assets;"), "1");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM email_campaign_revision_assets;"), "1");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM email_campaign_recipient_jobs;"), "2");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM email_campaign_events;"), "1");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM email_campaign_transport_state;"), "0");
+  assert.equal(
+    queryScalar(
+      target,
+      `SELECT status = 'paused' AND request_json IS NULL
+          AND provider_reason = 'restore_requires_managed_transport'
+       FROM email_campaign_recipient_jobs WHERE id = 'campaign-test-operation-1';`,
+    ),
+    "1",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      `SELECT status = 'delivered' AND request_json IS NOT NULL
+       FROM email_campaign_recipient_jobs WHERE id = 'campaign-operation-1';`,
+    ),
+    "1",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      `SELECT marketing_status = 'marketable'
+          AND marketing_permission_method = 'single_opt_in'
+          AND delivery_status = 'deliverable'
+       FROM subscribers WHERE id = 1;`,
+    ),
+    "1",
+  );
+  assert.equal(
+    queryScalar(
+      target,
+      `SELECT normalized_email = 'reader@example.test'
+          AND permission_method = 'single_opt_in'
+       FROM email_campaign_audience_members WHERE id = 'campaign-audience-member-1';`,
+    ),
+    "1",
+  );
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM mobile_pairings;"), "0");
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM mobile_refresh_tokens;"), "0");
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM auth_rate_limits;"), "0");
@@ -189,11 +234,25 @@ test("exports sanitized owner data and restores the exact identity, D1 rows, and
     PROOF_SESSION_SECRET,
   );
   assert.equal(
-    queryScalar(target, "SELECT COUNT(*) FROM install_secrets WHERE name IN ('ME3_CLOUD_OWNER_ID', 'ME3_CLOUD_CORE_TOKEN');"),
+    queryScalar(target, "SELECT COUNT(*) FROM install_secrets WHERE name IN ('ME3_CLOUD_OWNER_ID', 'ME3_CLOUD_CORE_TOKEN', 'ME3_MANAGED_CAMPAIGN_CALLBACK_SECRET');"),
     "0",
   );
   assert.equal(readFileSync(join(targetR2, "assistant", "owner", "proof.txt"), "utf8"), "assistant proof\n");
-  assert.equal(listFiles(targetR2).length, 5);
+  assert.equal(
+    readFileSync(
+      join(
+        targetR2,
+        "sites",
+        "portable-owner",
+        "campaigns",
+        "campaign-1",
+        `${"a".repeat(64)}.png`,
+      ),
+      "utf8",
+    ),
+    "synthetic campaign image bytes\n",
+  );
+  assert.equal(listFiles(targetR2).length, 6);
   assert.equal(statSync(importSql).mode & 0o777, 0o600);
   assert.equal(readFileSync(importSql, "utf8").includes(PROOF_PLATFORM_SECRET), false);
   assert.equal(readFileSync(importSql, "utf8").includes(PROOF_SESSION_SECRET), false);

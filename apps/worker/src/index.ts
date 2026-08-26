@@ -29,6 +29,10 @@ import { Me3UserAgent } from "./user-agent";
 import { syncManagedAiUsage } from "./managed-ai-billing";
 import { syncDueSoulinkContacts } from "./routes/channels";
 import {
+  dispatchDueCampaignJobs,
+  recoverManagedCampaignEvents,
+} from "./campaign-delivery";
+import {
   beginManagedRuntimeWriteLease,
   getManagedInstallationId,
   isManagedRuntime,
@@ -104,6 +108,8 @@ const worker = {
       await dispatchDueCalendarSourceRefreshes(env);
       await syncDueSoulinkContacts(env);
       await syncManagedAiUsage(env);
+      await dispatchDueCampaignJobs(env);
+      await recoverManagedCampaignEvents(env).catch(() => undefined);
     } finally {
       await releaseManagedRuntimeWriteLease(env, lease);
     }

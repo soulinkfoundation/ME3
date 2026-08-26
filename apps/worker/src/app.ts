@@ -89,6 +89,7 @@ import { registerEventBookingRoutes } from "./routes/event-booking";
 import { registerCommerceRoutes } from "./routes/commerce";
 import { registerCalendarRoutes } from "./routes/calendar";
 import { registerCalendarSourceRoutes } from "./routes/calendar-sources";
+import { registerCampaignRoutes } from "./routes/campaigns";
 import { registerChannelRoutes } from "./routes/channels";
 import { registerAgentSchedulingRoutes } from "./routes/agent-scheduling";
 import { registerAssistantJobsRoutes } from "./routes/assistant-jobs";
@@ -1387,6 +1388,8 @@ app.post("/api/account/delete", async (c) => {
 });
 
 registerSiteRoutes(app, { requireOwner, unauthorized });
+
+registerCampaignRoutes(app, { requireOwner, unauthorized });
 
 registerMailboxRoutes(app, { requireOwner, unauthorized });
 

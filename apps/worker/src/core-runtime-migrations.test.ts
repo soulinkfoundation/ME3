@@ -31,6 +31,21 @@ describe("Core runtime migrations", () => {
     expect(db.columns.get("subscribers")?.has("page_id")).toBe(true);
     expect(db.columns.get("subscribers")?.has("action_id")).toBe(true);
     expect(db.columns.get("subscribers")?.has("campaign")).toBe(true);
+    expect(db.columns.get("subscribers")?.has("marketing_status")).toBe(true);
+    expect(db.columns.get("subscribers")?.has("marketing_permission_method")).toBe(true);
+    expect(db.columns.get("subscribers")?.has("marketing_permission_granted_at")).toBe(true);
+    expect(db.columns.get("subscribers")?.has("marketing_permission_evidence_json")).toBe(true);
+    expect(db.columns.get("subscribers")?.has("delivery_status")).toBe(true);
+    expect(db.columns.get("subscribers")?.has("delivery_status_changed_at")).toBe(true);
+    expect(db.tables.has("email_campaigns")).toBe(true);
+    expect(db.tables.has("email_campaign_revisions")).toBe(true);
+    expect(db.tables.has("email_campaign_audience_snapshots")).toBe(true);
+    expect(db.tables.has("email_campaign_audience_members")).toBe(true);
+    expect(db.tables.has("email_campaign_assets")).toBe(true);
+    expect(db.tables.has("email_campaign_recipient_jobs")).toBe(true);
+    expect(db.tables.has("email_campaign_events")).toBe(true);
+    expect(db.tables.has("email_campaign_transport_state")).toBe(true);
+    expect(db.tables.has("email_campaign_revision_assets")).toBe(true);
     expect(db.columns.get("bookings")?.has("page_id")).toBe(true);
     expect(db.columns.get("bookings")?.has("action_id")).toBe(true);
     expect(db.columns.get("bookings")?.has("campaign")).toBe(true);
@@ -156,6 +171,15 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.get("0040_remove_mission_task_review")).toBe(
       "2026-08-26-remove-mission-task-review-v1",
     );
+    expect(db.migrations.get("0041_email_campaign_foundations")).toBe(
+      "2026-08-26-email-campaign-foundations-v1",
+    );
+    expect(db.migrations.get("0042_email_campaign_assets")).toBe(
+      "2026-08-26-email-campaign-assets-v1",
+    );
+    expect(db.migrations.get("0043_email_campaign_delivery")).toBe(
+      "2026-08-26-email-campaign-delivery-v1",
+    );
     expect(
       db.statements.some(
         (sql) => sql.includes("UPDATE mission_tasks") && sql.includes("status = 'backlog'") &&
@@ -248,6 +272,7 @@ describe("Core runtime migrations", () => {
       hasSitePagesAndCommerce: true,
       hasJournalEntryRevision: true,
       hasSiteRole: true,
+      hasCampaignFoundations: true,
     });
 
     await ensureCoreRuntimeMigrations({ DB: db as unknown as D1Database } as Env);
@@ -304,6 +329,7 @@ type RuntimeMigrationDbOptions = {
   hasSitePagesAndCommerce?: boolean;
   hasJournalEntryRevision?: boolean;
   hasSiteRole?: boolean;
+  hasCampaignFoundations?: boolean;
   addFinancialProjectColumnBeforeAlterError?: boolean;
   failFinancialProjectAlterOnce?: boolean;
 };
@@ -420,6 +446,22 @@ class RuntimeMigrationDb {
     }
     if (options.hasSiteRole) {
       this.columns.get("sites")?.add("site_role");
+    }
+    if (options.hasCampaignFoundations) {
+      this.tables.add("email_campaigns");
+      this.tables.add("email_campaign_revisions");
+      this.tables.add("email_campaign_audience_snapshots");
+      this.tables.add("email_campaign_audience_members");
+      for (const column of [
+        "marketing_status",
+        "marketing_permission_method",
+        "marketing_permission_granted_at",
+        "marketing_permission_evidence_json",
+        "delivery_status",
+        "delivery_status_changed_at",
+      ]) {
+        this.columns.get("subscribers")?.add(column);
+      }
     }
     this.addFinancialProjectColumnBeforeAlterError = Boolean(
       options.addFinancialProjectColumnBeforeAlterError,

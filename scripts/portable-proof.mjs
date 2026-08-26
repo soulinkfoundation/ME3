@@ -375,6 +375,7 @@ export function seedProofInstallation(database, r2Directory) {
     ["JWT_SECRET", PROOF_SESSION_SECRET],
     ["ME3_CLOUD_OWNER_ID", "managed-owner-123"],
     ["ME3_CLOUD_CORE_TOKEN", PROOF_PLATFORM_SECRET],
+    ["ME3_MANAGED_CAMPAIGN_CALLBACK_SECRET", "a".repeat(64)],
   ];
   runSqlite(
     database,
@@ -421,6 +422,70 @@ export function seedProofInstallation(database, r2Directory) {
        (id, user_id, username, site_type, site_role, custom_domain, custom_domain_status, custom_domain_cf_id)
        VALUES ('site-1', 'owner', 'portable-owner', 'profile', 'profile', 'owner.example.test', 'active',
                'cloudflare-domain-id-must-reset');
+     INSERT INTO subscribers
+       (id, site_id, email, first_name, source, subscribed_at, marketing_status,
+        marketing_permission_method, marketing_permission_granted_at,
+        marketing_permission_evidence_json, delivery_status)
+       VALUES (1, 'site-1', 'reader@example.test', 'Portable', 'me3', ${quote(now)}, 'marketable',
+               'single_opt_in', ${quote(now)},
+               '{"version":1,"kind":"site_form","source":"me3"}', 'deliverable');
+     INSERT INTO email_campaigns
+       (id, site_id, name, status, current_revision_id, audience_snapshot_id,
+        sender_ref, from_address, created_at, updated_at)
+       VALUES ('campaign-1', 'site-1', 'Portable campaign', 'sending',
+               'campaign-revision-1', 'campaign-audience-1', 'managed-sender-1',
+               'campaign@managed.example.test', ${quote(now)}, ${quote(now)});
+     INSERT INTO email_campaign_revisions
+       (id, campaign_id, revision_number, subject, preview_text, document_version, document_json,
+        renderer_version, rendered_html, rendered_text, created_at)
+       VALUES ('campaign-revision-1', 'campaign-1', 1, 'Portable subject', 'Portable preview',
+               'me3.campaign-document.v1',
+               '{"version":"me3.campaign-document.v1","blocks":[{"type":"text","text":"Portable body"}]}',
+               'me3.email-renderer.v1', '<p>Portable body</p>', 'Portable body', ${quote(now)});
+     INSERT INTO email_campaign_audience_snapshots
+       (id, campaign_id, revision_id, site_id, eligible_count, excluded_count,
+        exclusion_counts_json, created_at)
+       VALUES ('campaign-audience-1', 'campaign-1', 'campaign-revision-1', 'site-1', 1, 0, '{}',
+               ${quote(now)});
+     INSERT INTO email_campaign_audience_members
+       (id, snapshot_id, subscriber_id, normalized_email, first_name, permission_method,
+        permission_granted_at, permission_evidence_json, created_at)
+       VALUES ('campaign-audience-member-1', 'campaign-audience-1', 1, 'reader@example.test',
+               'Portable', 'single_opt_in', ${quote(now)},
+               '{"version":1,"kind":"site_form","source":"me3"}', ${quote(now)});
+     INSERT INTO email_campaign_assets
+       (id, campaign_id, site_id, content_hash, storage_path, filename, content_type, size,
+        created_at)
+       VALUES ('campaign-asset-1', 'campaign-1', 'site-1', '${"a".repeat(64)}',
+               'campaigns/campaign-1/${"a".repeat(64)}.png', 'portable-image.png', 'image/png', 31,
+               ${quote(now)});
+     INSERT INTO email_campaign_revision_assets (revision_id, asset_id, created_at)
+       VALUES ('campaign-revision-1', 'campaign-asset-1', ${quote(now)});
+     INSERT INTO email_campaign_recipient_jobs
+       (id, campaign_id, revision_id, audience_snapshot_id, audience_member_id,
+        kind, recipient_ref, recipient_email, status, request_json,
+        next_attempt_at, created_at, updated_at)
+       VALUES
+       ('campaign-operation-1', 'campaign-1', 'campaign-revision-1',
+        'campaign-audience-1', 'campaign-audience-member-1', 'campaign',
+        'campaign-audience-member-1', 'reader@example.test', 'delivered',
+        '{"version":"me3-managed-campaign/2","operationId":"campaign-operation-1"}',
+        ${quote(now)}, ${quote(now)}, ${quote(now)}),
+       ('campaign-test-operation-1', 'campaign-1', 'campaign-revision-1',
+        NULL, NULL, 'test', 'campaign-test-operation-1', 'owner@example.test',
+        'queued', '{"version":"me3-managed-campaign/2","kind":"test"}',
+        ${quote(now)}, ${quote(now)}, ${quote(now)});
+     INSERT INTO email_campaign_events
+       (event_id, operation_id, campaign_id, recipient_ref, sequence,
+        event_type, reason, occurred_at, created_at)
+       VALUES ('campaign-event-1', 'campaign-operation-1', 'campaign-1',
+               'campaign-audience-member-1', 2, 'delivery.delivered', NULL,
+               ${quote(now)}, ${quote(now)});
+     INSERT INTO email_campaign_transport_state
+       (id, sender_ref, from_address, sender_domain, ready, event_cursor,
+        last_checked_at, updated_at)
+       VALUES ('managed', 'managed-sender-1', 'campaign@managed.example.test',
+               'managed.example.test', 1, '42', ${quote(now)}, ${quote(now)});
      INSERT INTO site_files (site_id, path, content, content_type, size, sha256)
        VALUES ('site-1', 'me.json', X'7B7D', 'application/json', 2,
                '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a');
@@ -497,6 +562,10 @@ export function seedProofInstallation(database, r2Directory) {
     ["drive/owner/owner-file.txt", "drive proof\n"],
     ["journal/owner/2026-07-15/proof.png", "synthetic image bytes\n"],
     ["mailbox/mail-1/proof.txt", "mailbox proof\n"],
+    [
+      `sites/portable-owner/campaigns/campaign-1/${"a".repeat(64)}.png`,
+      "synthetic campaign image bytes\n",
+    ],
     ["sites/site-1/index.html", "<h1>Portable site</h1>\n"],
   ]);
   for (const [key, value] of objects) {

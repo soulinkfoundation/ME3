@@ -180,6 +180,12 @@ export interface DbSubscriber {
   page_id?: string | null;
   action_id?: string | null;
   campaign?: string | null;
+  marketing_status: "pending" | "marketable";
+  marketing_permission_method: "single_opt_in" | "double_opt_in" | "import_attested" | null;
+  marketing_permission_granted_at: string | null;
+  marketing_permission_evidence_json: string | null;
+  delivery_status: "deliverable" | "bounced" | "complained" | "suppressed";
+  delivery_status_changed_at: string | null;
 }
 
 export interface DbBooking {

@@ -129,6 +129,11 @@ import {
   renamePersistentSite,
   renameProfileSite,
 } from "../site-lifecycle";
+import {
+  MARKETING_PERMISSION_ATTESTATION_VERSION,
+  createImportAttestationEvidence,
+  createSiteFormPermissionEvidence,
+} from "../campaign-audience";
 
 type LandingPageGenerateBody = {
   username?: string;
@@ -343,38 +348,62 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       const normalizedEmail = email.toLowerCase().trim();
       if (!EMAIL_REGEX.test(normalizedEmail)) return c.json({ error: "Invalid email address" }, 400);
 
+      const permissionEvidence = createSiteFormPermissionEvidence({
+        pageId: normalizeNullableText(pageId),
+        actionId: normalizeNullableText(actionId),
+        campaign: normalizeNullableText(campaign),
+      });
+
       const clientIp = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for");
       const ipHash = clientIp ? await hashSubscriberIdentifier(clientIp) : null;
       const existing = await c.env.DB.prepare(
-        "SELECT id, unsubscribed_at FROM subscribers WHERE site_id = ? AND email = ?",
+        `SELECT id, unsubscribed_at, marketing_status
+         FROM subscribers WHERE site_id = ? AND email = ?`,
       )
         .bind(site.id, normalizedEmail)
-        .first<{ id: number; unsubscribed_at: string | null }>();
+        .first<{
+          id: number;
+          unsubscribed_at: string | null;
+          marketing_status: "pending" | "marketable";
+        }>();
 
       if (existing) {
-        if (existing.unsubscribed_at) {
+        if (existing.unsubscribed_at || existing.marketing_status === "pending") {
           await c.env.DB.prepare(
             `UPDATE subscribers
              SET unsubscribed_at = NULL, subscribed_at = CURRENT_TIMESTAMP,
-                 page_id = ?, action_id = ?, campaign = ?
+                 page_id = ?, action_id = ?, campaign = ?,
+                 marketing_status = 'marketable',
+                 marketing_permission_method = 'single_opt_in',
+                 marketing_permission_granted_at = CURRENT_TIMESTAMP,
+                 marketing_permission_evidence_json = ?
              WHERE id = ?`,
           )
             .bind(
               normalizeNullableText(pageId),
               normalizeNullableText(actionId),
               normalizeNullableText(campaign),
+              permissionEvidence,
               existing.id,
             )
             .run();
-          return c.json({ ok: true, message: "Welcome back! You've been re-subscribed." });
+          return c.json({
+            ok: true,
+            message: existing.unsubscribed_at
+              ? "Welcome back! You've been re-subscribed."
+              : "Subscribed successfully!",
+          });
         }
         return c.json({ ok: true, message: "You're already subscribed!" });
       }
 
       await c.env.DB.prepare(
         `INSERT INTO subscribers
-         (site_id, email, first_name, last_name, source, ip_hash, page_id, action_id, campaign)
-         VALUES (?, ?, ?, ?, 'me3', ?, ?, ?, ?)`,
+         (site_id, email, first_name, last_name, source, ip_hash, page_id, action_id, campaign,
+          marketing_status, marketing_permission_method, marketing_permission_granted_at,
+          marketing_permission_evidence_json)
+         VALUES (?, ?, ?, ?, 'me3', ?, ?, ?, ?, 'marketable', 'single_opt_in',
+                 CURRENT_TIMESTAMP, ?)`,
       )
         .bind(
           site.id,
@@ -385,6 +414,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
           normalizeNullableText(pageId),
           normalizeNullableText(actionId),
           normalizeNullableText(campaign),
+          permissionEvidence,
         )
         .run();
 
@@ -449,6 +479,62 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     }
   });
 
+  app.post("/api/sites/:username/subscribers/marketing-permission/attest", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found or unauthorized" }, 404);
+
+    const body = await c.req
+      .json<{ confirmed?: unknown; statementVersion?: unknown }>()
+      .catch((): { confirmed?: unknown; statementVersion?: unknown } => ({}));
+    if (
+      body.confirmed !== true ||
+      body.statementVersion !== MARKETING_PERMISSION_ATTESTATION_VERSION
+    ) {
+      return c.json(
+        {
+          error: "Marketing permission confirmation is required",
+          statementVersion: MARKETING_PERMISSION_ATTESTATION_VERSION,
+        },
+        400,
+      );
+    }
+
+    try {
+      const attestedAt = new Date().toISOString();
+      const evidence = createImportAttestationEvidence({
+        attestedAt,
+        source: "owner_list",
+      });
+      const result = await c.env.DB.prepare(
+        `UPDATE subscribers
+         SET marketing_status = 'marketable',
+             marketing_permission_method = 'import_attested',
+             marketing_permission_granted_at = ?,
+             marketing_permission_evidence_json = ?
+         WHERE site_id = ?
+           AND unsubscribed_at IS NULL
+           AND marketing_status = 'pending'
+           AND marketing_permission_method IS NULL
+           AND delivery_status = 'deliverable'`,
+      )
+        .bind(attestedAt, evidence, site.id)
+        .run();
+
+      return c.json({
+        ok: true,
+        attested: Number(result.meta.changes || 0),
+        statementVersion: MARKETING_PERMISSION_ATTESTATION_VERSION,
+      });
+    } catch (error) {
+      if (isMissingSubscribersTableError(error)) return subscribersSetupRequired(c);
+      console.error("Attest subscriber marketing permission error:", error);
+      return c.json({ error: "Failed to record marketing permission" }, 500);
+    }
+  });
+
   app.get("/api/sites/:username/subscribers/export", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
@@ -458,7 +544,8 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     try {
       const result = await c.env.DB.prepare(
-        `SELECT email, first_name, last_name, source, page_id, action_id, campaign, subscribed_at
+        `SELECT email, first_name, last_name, source, page_id, action_id, campaign, subscribed_at,
+                marketing_status, marketing_permission_method, delivery_status
          FROM subscribers
          WHERE site_id = ? AND unsubscribed_at IS NULL
          ORDER BY subscribed_at DESC`,
@@ -474,6 +561,9 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         "action_id",
         "campaign",
         "subscribed_at",
+        "marketing_status",
+        "marketing_permission_method",
+        "delivery_status",
       ].join(",")];
       for (const subscriber of result.results || []) {
         rows.push(
@@ -486,6 +576,9 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
             escapeCsv(subscriber.action_id || ""),
             escapeCsv(subscriber.campaign || ""),
             escapeCsv(subscriber.subscribed_at),
+            escapeCsv(subscriber.marketing_status),
+            escapeCsv(subscriber.marketing_permission_method || ""),
+            escapeCsv(subscriber.delivery_status),
           ].join(","),
         );
       }
@@ -522,7 +615,9 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         .first<{ count: number | string | null }>();
       const total = Number(countResult?.count || 0);
       const result = await c.env.DB.prepare(
-        `SELECT id, email, first_name, last_name, source, page_id, action_id, campaign, subscribed_at
+        `SELECT id, email, first_name, last_name, source, page_id, action_id, campaign, subscribed_at,
+                marketing_status, marketing_permission_method, marketing_permission_granted_at,
+                delivery_status
          FROM subscribers
          WHERE site_id = ? AND unsubscribed_at IS NULL
          ORDER BY subscribed_at DESC
@@ -566,7 +661,15 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       if (existing) {
         if (existing.unsubscribed_at) {
           await c.env.DB.prepare(
-            "UPDATE subscribers SET unsubscribed_at = NULL, subscribed_at = CURRENT_TIMESTAMP, source = 'manual' WHERE id = ?",
+            `UPDATE subscribers
+             SET unsubscribed_at = NULL,
+                 subscribed_at = CURRENT_TIMESTAMP,
+                 source = 'manual',
+                 marketing_status = 'pending',
+                 marketing_permission_method = NULL,
+                 marketing_permission_granted_at = NULL,
+                 marketing_permission_evidence_json = NULL
+             WHERE id = ?`,
           )
             .bind(existing.id)
             .run();

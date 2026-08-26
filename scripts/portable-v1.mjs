@@ -62,6 +62,10 @@ export const RUNTIME_MIGRATIONS = [
   ["0036_calendar_push_notifications", "2026-08-19-calendar-push-notifications-v1"],
   ["0037_event_booking_capacity", "2026-08-21-event-booking-capacity-v1"],
   ["0038_site_roles", "2026-08-24-site-roles-v1"],
+  ["0040_remove_mission_task_review", "2026-08-26-remove-mission-task-review-v1"],
+  ["0041_email_campaign_foundations", "2026-08-26-email-campaign-foundations-v1"],
+  ["0042_email_campaign_assets", "2026-08-26-email-campaign-assets-v1"],
+  ["0043_email_campaign_delivery", "2026-08-26-email-campaign-delivery-v1"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];
@@ -93,6 +97,7 @@ const EXCLUDED_TABLES = [
   "local_executor_run_events",
   "local_executor_runs",
   "managed_email_inbound_deliveries",
+  "email_campaign_transport_state",
   "managed_runtime_control_requests",
   "managed_runtime_state",
   "managed_runtime_write_leases",
@@ -108,6 +113,7 @@ const EXCLUDED_TABLES = [
   "telegram_settings",
 ];
 const TRANSFORMED_TABLES = [
+  "email_campaign_recipient_jobs",
   "email_provider_settings",
   "mailbox_aliases",
   "sites",
@@ -145,6 +151,13 @@ const COPIED_TABLES = [
   "core_install",
   "drive_files",
   "drive_folders",
+  "email_campaign_assets",
+  "email_campaign_audience_members",
+  "email_campaign_audience_snapshots",
+  "email_campaign_revisions",
+  "email_campaign_revision_assets",
+  "email_campaign_events",
+  "email_campaigns",
   "email_send_audit",
   "financial_categories",
   "financial_entries",
@@ -197,6 +210,16 @@ export const TABLE_POLICIES = new Map([
 ]);
 
 const TRANSFORMS = {
+  email_campaign_recipient_jobs: {
+    columns: {
+      status:
+        "CASE WHEN status IN ('queued', 'submitting', 'retry_wait', 'paused') THEN 'paused' ELSE status END",
+      request_json:
+        "CASE WHEN status IN ('queued', 'submitting', 'retry_wait', 'paused') THEN NULL ELSE request_json END",
+      provider_reason:
+        "CASE WHEN status IN ('queued', 'submitting', 'retry_wait', 'paused') THEN 'restore_requires_managed_transport' ELSE provider_reason END",
+    },
+  },
   email_provider_settings: {
     where: `provider_id <> 'cloudflare-email'`,
   },
@@ -322,6 +345,7 @@ const KNOWN_INSTALL_SECRETS = new Map([
   ["JWT_SECRET", "rotate"],
   ["ME3_CLOUD_OWNER_ID", "exclude"],
   ["ME3_CLOUD_CORE_TOKEN", "exclude"],
+  ["ME3_MANAGED_CAMPAIGN_CALLBACK_SECRET", "exclude"],
 ]);
 
 const FORBIDDEN_ARCHIVE_PATTERNS = [
