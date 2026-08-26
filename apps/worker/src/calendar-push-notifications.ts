@@ -114,7 +114,7 @@ async function loadCalendarPushCandidates(
     env.DB.prepare(
       `SELECT id, due_at, scheduled_for FROM mission_tasks
        WHERE user_id = ? AND archived_at IS NULL
-         AND status IN ('backlog', 'in_progress', 'review')
+         AND status IN ('backlog', 'in_progress')
          AND (due_at IS NOT NULL OR scheduled_for IS NOT NULL)`,
     ).bind(owner.id).all<MissionTaskRow>(),
   ]);

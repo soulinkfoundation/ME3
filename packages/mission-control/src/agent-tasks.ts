@@ -67,7 +67,7 @@ export type AgentMissionTaskError = {
   status?: 400 | 404;
 };
 
-const TASK_STATUSES = new Set(["backlog", "in_progress", "review", "done"]);
+const TASK_STATUSES = new Set(["backlog", "in_progress", "done"]);
 
 export async function listAgentMissionProjects(
   env: MissionTaskEnv,
@@ -378,14 +378,12 @@ function optionalText(value: unknown): string | null {
 
 function statusLabel(status: string): string {
   if (status === "in_progress") return "Doing";
-  if (status === "review") return "Review";
   if (status === "done") return "Done";
   return "Backlog";
 }
 
 function statusPosition(status: string): number {
   if (status === "in_progress") return 1;
-  if (status === "review") return 2;
-  if (status === "done") return 3;
+  if (status === "done") return 2;
   return 0;
 }

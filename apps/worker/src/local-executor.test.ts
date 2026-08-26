@@ -131,7 +131,7 @@ describe("Local Executor worker runtime", () => {
     });
   });
 
-  it("links Mission Control tasks, dedupes active task runs, and moves successes to review", async () => {
+  it("links Mission Control tasks, dedupes active task runs, and moves successes to done", async () => {
     const env = createReadyPluginEnv();
     env.__state.missionTasks.push({
       id: "task-1",
@@ -178,7 +178,7 @@ describe("Local Executor worker runtime", () => {
 
     expect(env.__state.missionTasks[0]).toMatchObject({
       id: "task-1",
-      status: "review",
+      status: "done",
     });
     expect(env.__state.missionRuns[0]).toMatchObject({
       task_id: "task-1",
@@ -576,7 +576,7 @@ class FakeLocalExecutorStatement {
         task.status !== "done" &&
         task.status !== "cancelled"
       ) {
-        task.status = "review";
+        task.status = "done";
         task.updated_at = new Date().toISOString();
       }
       return { success: true };

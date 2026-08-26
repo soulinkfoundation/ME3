@@ -583,7 +583,7 @@ export const CORE_CHAT_CAPABILITIES = [
     owner: "core",
     pluginId: null,
     ownerFacingLabel: "List reminders",
-    summary: "Read pending Core reminders for the owner.",
+    summary: "Read upcoming Core reminders for the owner.",
     category: "calendar",
     handler: {
       surface: "chat",
@@ -594,7 +594,7 @@ export const CORE_CHAT_CAPABILITIES = [
     requiresSetup: ["calendar.reminders"],
     auditEventKind: "core_reminders_listed",
     examples: {
-      positive: ["Do I have any pending reminders?"],
+      positive: ["Do I have any upcoming reminders?"],
       negative: ["I want to test reminders, calendar, and tasks."],
     },
     chat: {
@@ -725,9 +725,9 @@ export const CORE_CHAT_CAPABILITIES = [
     id: "core.bookings.lookup",
     owner: "core",
     pluginId: null,
-    ownerFacingLabel: "Look up bookings",
+    ownerFacingLabel: "Look up website bookings",
     summary:
-      "Read the owner's upcoming confirmed bookings, including guests, times, duration, site, and notes.",
+      "Read the owner's upcoming confirmed website bookings, including guests, times, duration, site, and notes.",
     category: "calendar",
     handler: {
       surface: "chat",
@@ -1086,7 +1086,7 @@ export const CORE_CHAT_CAPABILITIES = [
         status: {
           type: "string",
           description: "Optional task status.",
-          enum: ["backlog", "in_progress", "review", "done", "cancelled"],
+          enum: ["backlog", "in_progress", "done", "cancelled"],
         },
         dateFrom: {
           type: "string",
@@ -1548,7 +1548,7 @@ export const CORE_CHAT_CAPABILITIES = [
         status: {
           type: "string",
           description: "Task status to filter, or null for every status.",
-          enum: ["backlog", "in_progress", "review", "done"],
+          enum: ["backlog", "in_progress", "done"],
         },
       },
       additionalProperties: false,
@@ -1626,7 +1626,7 @@ export const CORE_CHAT_CAPABILITIES = [
         status: {
           type: "string",
           description: "Optional task status.",
-          enum: ["backlog", "in_progress", "review", "done"],
+          enum: ["backlog", "in_progress", "done"],
         },
         dueAt: {
           type: "string",

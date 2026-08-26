@@ -5189,7 +5189,7 @@ function buildCoreChatOrientationFallbackReply(
     "",
     "Good test prompts after that:",
     "- What context do you have available about me?",
-    "- Do I have any pending reminders?",
+    "- Do I have any upcoming reminders?",
     "- Draft a reply to the latest email from Ada.",
   ].join("\n");
 }

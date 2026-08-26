@@ -2543,7 +2543,7 @@ async function upsertWeeklyReviewMissionTask(
     `INSERT OR IGNORE INTO mission_tasks
        (id, user_id, project_id, title, description, status, priority, due_at, scheduled_for,
         source_kind, source_ref, approval_id, metadata_json, created_at, updated_at, archived_at)
-     VALUES (?, ?, ?, ?, ?, 'review', ?, ?, ?, 'agent', ?, NULL, ?, ?, ?, NULL)`,
+     VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?, 'agent', ?, NULL, ?, ?, ?, NULL)`,
   )
     .bind(
       taskId,
@@ -2565,7 +2565,7 @@ async function upsertWeeklyReviewMissionTask(
     `UPDATE mission_tasks
      SET title = ?, description = ?, status = CASE
            WHEN status = 'done' THEN status
-           ELSE 'review'
+           ELSE 'backlog'
          END,
          priority = ?, scheduled_for = ?, metadata_json = ?, updated_at = ?
      WHERE id = ? AND user_id = ?`,
@@ -4370,7 +4370,7 @@ async function buildWeeklyReviewResult(env: Env, userId: string, runId: string) 
   const [openTasks, completedTasks, reminders, memoryRows] = await Promise.all([
     loadWeeklyReviewOpenTasks(env, userId),
     loadWeeklyReviewCompletedTasks(env, userId, weekStart, reviewDate),
-    loadWeeklyReviewReminders(env, userId),
+    loadWeeklyReviewReminders(env, userId, now.toISOString()),
     loadWeeklyReviewMemoryRows(env, userId),
   ]);
   const taskSummary = summarizeWeeklyReviewTasks(openTasks, completedTasks, reminders);
@@ -4444,15 +4444,15 @@ async function loadWeeklyReviewCompletedTasks(
   }));
 }
 
-async function loadWeeklyReviewReminders(env: Env, userId: string) {
+async function loadWeeklyReviewReminders(env: Env, userId: string, now: string) {
   const rows = await env.DB.prepare(
     `SELECT id, title, remind_at, status
      FROM user_reminders
-     WHERE user_id = ? AND status = 'pending'
+     WHERE user_id = ? AND status = 'pending' AND remind_at >= ?
      ORDER BY remind_at ASC
      LIMIT 20`,
   )
-    .bind(userId)
+    .bind(userId, now)
     .all<WeeklyReviewReminderRow>()
     .catch(() => ({ results: [] as WeeklyReviewReminderRow[] }));
   return rows.results || [];
@@ -4480,7 +4480,7 @@ function summarizeWeeklyReviewTasks(
   return [
     `${openTasks.length} open task${openTasks.length === 1 ? "" : "s"}`,
     `${completedTasks.length} completed this week`,
-    `${reminders.length} pending reminder${reminders.length === 1 ? "" : "s"}`,
+    `${reminders.length} upcoming reminder${reminders.length === 1 ? "" : "s"}`,
   ].join(", ");
 }
 

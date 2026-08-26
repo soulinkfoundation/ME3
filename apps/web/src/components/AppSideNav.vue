@@ -13,6 +13,23 @@ import {
   invalidatePluginAccess,
 } from "../utils/pluginAccess";
 
+const props = withDefaults(
+  defineProps<{
+    showSoulink?: boolean;
+    soulinkConnected?: boolean;
+    soulinkHref?: string;
+  }>(),
+  {
+    showSoulink: true,
+    soulinkConnected: false,
+    soulinkHref: "https://soulinkfoundation.org/chats",
+  },
+);
+
+const emit = defineEmits<{
+  openSoulink: [];
+}>();
+
 const route = useRoute();
 const sitesPath = "/sites";
 const navDrawerOpen = ref(false);
@@ -104,6 +121,11 @@ async function loadInstalledPluginNav() {
 function handlePluginChanged() {
   invalidatePluginAccess();
   void loadInstalledPluginNav();
+}
+
+function openSoulinkJoin() {
+  closeNavDrawer();
+  emit("openSoulink");
 }
 
 watch(
@@ -287,6 +309,40 @@ watch(navDrawerOpen, (isOpen) => {
           }}</span>
           <span class="sr-only">Accounts</span>
         </RouterLink>
+
+        <a
+          v-if="props.showSoulink && props.soulinkConnected"
+          :href="props.soulinkHref"
+          class="app-side-nav__row app-side-nav-control"
+          aria-label="Open Soulink chats"
+          title="Open Soulink chats"
+          @click="closeNavDrawer"
+        >
+          <img
+            class="app-side-nav__soulink-icon"
+            src="/images/soulink-logo.png"
+            alt=""
+            aria-hidden="true"
+          />
+          <span class="sr-only">Soulink</span>
+        </a>
+
+        <button
+          v-else-if="props.showSoulink"
+          type="button"
+          class="app-side-nav__row app-side-nav-control"
+          aria-label="Join Soulink"
+          title="Join Soulink"
+          @click="openSoulinkJoin"
+        >
+          <img
+            class="app-side-nav__soulink-icon"
+            src="/images/soulink-logo.png"
+            alt=""
+            aria-hidden="true"
+          />
+          <span class="sr-only">Soulink</span>
+        </button>
 
         <RouterLink
           to="/settings"
@@ -481,6 +537,14 @@ watch(navDrawerOpen, (isOpen) => {
   height: 28px;
   margin-right: -6px;
   transform: translateX(-3px);
+  object-fit: contain;
+}
+
+.app-side-nav__soulink-icon {
+  display: block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 28px;
   object-fit: contain;
 }
 </style>

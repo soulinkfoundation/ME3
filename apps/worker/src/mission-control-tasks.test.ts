@@ -13,7 +13,7 @@ type StoredTaskRow = {
   column_id: string | null;
   title: string;
   description: string | null;
-  status: "backlog" | "in_progress" | "review" | "done" | "cancelled";
+  status: "backlog" | "in_progress" | "done" | "cancelled";
   priority: number;
   position: number;
   pinned_at: string | null;

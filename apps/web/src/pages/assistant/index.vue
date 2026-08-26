@@ -799,7 +799,7 @@ const starterPrompts: StarterPrompt[] = [
     icon: "⚙️",
     prompt: configureStarterPrompt,
   },
-  { label: "Status update", icon: "🚀", prompt: "Review my week" },
+  { label: "Status update", icon: "🚀", prompt: "Status update" },
 ];
 const assistantPlaceholderIndex = Math.floor(
   Math.random() * assistantPlaceholders.length,
@@ -2703,10 +2703,14 @@ async function submitAssistantText(
             assistantTurnStatusText.value = "Preparing your request…";
           } else if (data.state === "context_loading") {
             assistantTurnStatusText.value = "Loading relevant context…";
+          } else if (data.state === "status_update_loading") {
+            assistantTurnStatusText.value = "Checking your day…";
           } else if (data.state === "model_started") {
             assistantTurnStatusText.value =
               data.isBackup === true
                 ? "Trying the backup model…"
+                : data.intent === "status_update"
+                ? "Choosing what matters now…"
                 : typeof data.modelStep === "number" && data.modelStep > 1
                 ? "Putting the result together…"
                 : "Writing a response…";

@@ -4182,11 +4182,11 @@ onBeforeUnmount(() => {
               </span>
             </li>
             <li>
-              <strong>Review the result.</strong>
+              <strong>Check the result.</strong>
               <span>
                 The local runner follows the rules in that project repo,
                 including its <code>AGENTS.md</code>. When the run succeeds, ME3
-                moves the task to Review.
+                moves the task to Done.
               </span>
             </li>
           </ol>

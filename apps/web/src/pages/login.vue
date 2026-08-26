@@ -10,7 +10,7 @@ import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { DEFAULT_APP_PATH } from "../utils/navigation";
 import {
-  normalizeSafeLoginRedirect,
+  resolveAuthenticatedLoginRedirect,
   resolveMe3OAuthRedirect,
   resolveProfileSetupPath,
 } from "../utils/loginRedirect";
@@ -154,7 +154,7 @@ async function resolveDefaultPostLoginRedirect(): Promise<string> {
 }
 
 async function resolvePostLoginRedirect(raw: unknown): Promise<string> {
-  const redirect = normalizeSafeLoginRedirect(raw, {
+  const redirect = resolveAuthenticatedLoginRedirect(raw, {
     origin: window.location.origin,
     hostname: window.location.hostname,
     dev: import.meta.env.DEV,
@@ -164,10 +164,6 @@ async function resolvePostLoginRedirect(raw: unknown): Promise<string> {
 }
 
 function navigateAfterLogin(target: string) {
-  if (target.startsWith("http://") || target.startsWith("https://")) {
-    window.location.href = target;
-    return;
-  }
   router.push(target);
 }
 

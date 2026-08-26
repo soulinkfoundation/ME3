@@ -956,7 +956,7 @@ CREATE TABLE mission_tasks (
   title TEXT NOT NULL,
   description TEXT,
   status TEXT NOT NULL DEFAULT 'backlog'
-    CHECK (status IN ('backlog', 'in_progress', 'review', 'done', 'cancelled')),
+    CHECK (status IN ('backlog', 'in_progress', 'done', 'cancelled')),
   priority INTEGER NOT NULL DEFAULT 3,
   pinned_at TEXT,
   due_at TEXT,

@@ -171,6 +171,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-08-24-site-roles-v1",
     apply: applySiteRolesMigration,
   },
+  {
+    id: "0040_remove_mission_task_review",
+    checksum: "2026-08-26-remove-mission-task-review-v1",
+    apply: applyRemoveMissionTaskReviewMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -267,6 +272,54 @@ async function applyMissionTaskPinsMigration(db: D1Database): Promise<void> {
     } catch (error) {
       if (!(await columnExists(db, "mission_tasks", "pinned_at"))) throw error;
     }
+  }
+}
+
+async function applyRemoveMissionTaskReviewMigration(db: D1Database): Promise<void> {
+  if (!(await tableExists(db, "mission_tasks"))) {
+    throw new Error("Cannot apply 0040_remove_mission_task_review: mission_tasks is missing");
+  }
+
+  const hasProjectColumns = await tableExists(db, "mission_project_columns");
+  const hasTaskColumnId = await columnExists(db, "mission_tasks", "column_id");
+  if (hasProjectColumns && hasTaskColumnId) {
+    await db.prepare(
+      `UPDATE mission_tasks
+       SET status = 'backlog',
+           column_id = COALESCE(
+             (
+               SELECT c.id
+               FROM mission_project_columns c
+               WHERE c.project_id = mission_tasks.project_id
+                 AND c.user_id = mission_tasks.user_id
+                 AND c.status = 'backlog'
+                 AND c.archived_at IS NULL
+               ORDER BY c.position ASC, c.id ASC
+               LIMIT 1
+             ),
+             CASE
+               WHEN project_id IS NOT NULL THEN project_id || ':backlog'
+               ELSE NULL
+             END
+           ),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'review'`,
+    ).run();
+  } else {
+    await db.prepare(
+      `UPDATE mission_tasks
+       SET status = 'backlog', updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'review'`,
+    ).run();
+  }
+
+  if (hasProjectColumns) {
+    await db.prepare("DELETE FROM mission_project_columns WHERE status = 'review'").run();
+    await db.prepare(
+      `UPDATE mission_project_columns
+       SET position = 2, updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'done'`,
+    ).run();
   }
 }
 

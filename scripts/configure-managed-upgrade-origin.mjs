@@ -19,8 +19,9 @@ export function configureManagedUpgradeOrigin({
     throw new Error("managed upgrade origin contract is invalid");
   }
   let config = readFileSync(configPath, "utf8");
+  const configuredWorkerName = config.match(/^name\s*=\s*"([^"]*)"$/m)?.[1];
   if (
-    !new RegExp(`^name\\s*=\\s*"${workerName}"$`, "m").test(config) ||
+    configuredWorkerName !== workerName ||
     !/^ME3_DEPLOYMENT_MODE\s*=\s*"managed"$/m.test(config)
   ) {
     throw new Error("managed upgrade origin config is invalid");

@@ -134,7 +134,7 @@ interface CalendarTaskRow {
   id: string;
   title: string;
   description: string | null;
-  status: "backlog" | "in_progress" | "review" | "done";
+  status: "backlog" | "in_progress" | "done";
   priority: number;
   dueAt: string | null;
   scheduledFor: string | null;
@@ -680,7 +680,6 @@ function formatEventDate(value: string) {
 function formatTaskStatus(task: Pick<CalendarTaskRow, "archivedAt" | "status">): string {
   if (task.archivedAt) return "Archived";
   if (task.status === "in_progress") return "Doing";
-  if (task.status === "review") return "Review";
   if (task.status === "done") return "Done";
   return "Backlog";
 }

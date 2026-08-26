@@ -14,7 +14,7 @@ export type CalendarTaskFeedRow = {
   id: string;
   title: string;
   description: string | null;
-  status: "backlog" | "in_progress" | "review" | "done";
+  status: "backlog" | "in_progress" | "done";
   priority: number;
   dueAt: string | null;
   scheduledFor: string | null;
@@ -56,7 +56,6 @@ type MissionCalendarTaskDbRow = {
 const CALENDAR_TASK_STATUSES = new Set([
   "backlog",
   "in_progress",
-  "review",
   "done",
 ]);
 
@@ -94,7 +93,7 @@ export async function listCalendarMissionTasks(
      FROM mission_tasks t
      LEFT JOIN mission_projects p ON p.id = t.project_id AND p.user_id = t.user_id
      WHERE t.user_id = ?
-       AND t.status IN ('backlog', 'in_progress', 'review', 'done')
+       AND t.status IN ('backlog', 'in_progress', 'done')
        AND (
          (t.due_at IS NOT NULL AND t.due_at != ''
           AND substr(t.due_at, 1, 10) >= ? AND substr(t.due_at, 1, 10) < ?)

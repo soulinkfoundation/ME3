@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   TASK_PAGE_SIZE,
+  TASK_MODES,
   displayTaskDate,
   projectEmoji,
   projectIconIsImage,
@@ -37,17 +38,23 @@ function workspaceTask(
 
 describe("task workspace utilities", () => {
   it("maps the compact views to durable task statuses", () => {
+    expect(TASK_MODES.map((item) => item.id)).toEqual([
+      "backlog",
+      "now",
+      "done",
+    ]);
     expect(taskMode("backlog")).toBe("backlog");
-    expect(taskMode(["review"])).toBe("review");
-    expect(taskMode("done")).toBe("now");
+    expect(taskMode(["done"])).toBe("done");
+    expect(taskMode("unknown")).toBe("now");
     expect(taskModeStatus("now")).toBe("in_progress");
+    expect(taskModeStatus("done")).toBe("done");
   });
 
   it("builds paginated task API URLs", () => {
     expect(
-      tasksUrl({ active: true, status: "review", cursor: "next-page" }),
+      tasksUrl({ active: true, status: "done", cursor: "next-page" }),
     ).toBe(
-      `/mission-control/tasks?limit=${TASK_PAGE_SIZE}&active=1&status=review&cursor=next-page`,
+      `/mission-control/tasks?limit=${TASK_PAGE_SIZE}&active=1&status=done&cursor=next-page`,
     );
   });
 

@@ -90,6 +90,11 @@ import {
   readAgentSiteBlogPosts,
 } from "./site-blog";
 import { isContextFreeLiteralResponseRequest } from "./turn-policy";
+import {
+  isStatusUpdateRequest,
+  loadStatusUpdateSnapshot,
+  withStatusUpdateContext,
+} from "./status-update";
 
 type CoreAgentDb = {
   prepare(sql: string): {
@@ -310,7 +315,7 @@ const CORE_TOOL_FAMILY_PATTERNS: ReadonlyArray<{
   },
 ];
 
-const MISSION_TASK_STATUSES = new Set(["backlog", "in_progress", "review", "done"]);
+const MISSION_TASK_STATUSES = new Set(["backlog", "in_progress", "done"]);
 const OWNER_CONTENT_SOURCE_TYPES = new Set(["all", "journal", "mission_task"]);
 const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
 
@@ -347,6 +352,21 @@ export async function runCoreAgentToolTurn(input: {
   const outcomes: CoreToolOutcome[] = [];
   const socialSources = new Map<string, AgentSocialSource>();
   const modelAttempts: AgentChatModelAttemptTrace[] = [];
+  const latestUserMessage = latestMessageContent(input.messages, "user");
+  const statusUpdateRequest = isStatusUpdateRequest(latestUserMessage);
+  if (statusUpdateRequest) {
+    await emit({
+      event: "status",
+      data: { state: "status_update_loading" },
+    });
+  }
+  const statusUpdateSnapshot = statusUpdateRequest
+    ? await loadStatusUpdateSnapshot({
+        db: input.db,
+        userId: input.userId,
+        ownerTimezone: input.ownerTimezone,
+      })
+    : null;
   const availableTools = ACTIVE_CORE_TOOLS.filter((tool) => {
     if (tool.capabilityId.startsWith("core.mailbox.") && !input.mailboxServices) {
       return false;
@@ -373,21 +393,26 @@ export async function runCoreAgentToolTurn(input: {
     }
     return true;
   });
-  const requiredTool =
-    requiredSchedulingActionTool(input.messages, availableTools) ||
-    requiredPrivateReadTool(input.messages, availableTools);
-  const toolSelection = selectCoreToolsForTurn(
-    input.messages,
-    availableTools,
-    requiredTool,
-  );
+  const requiredTool = statusUpdateRequest
+    ? null
+    : requiredSchedulingActionTool(input.messages, availableTools) ||
+      requiredPrivateReadTool(input.messages, availableTools);
+  const toolSelection = statusUpdateRequest
+    ? { tools: [], families: new Set<CoreToolFamily>() }
+    : selectCoreToolsForTurn(
+        input.messages,
+        availableTools,
+        requiredTool,
+      );
   const tools = toolSelection.tools;
-  const messages = withCoreToolInstructions(
-    input.messages,
-    input.ownerTimezone,
-    tools,
-    toolSelection.families,
-  );
+  const messages = statusUpdateSnapshot
+    ? withStatusUpdateContext(input.messages, statusUpdateSnapshot)
+    : withCoreToolInstructions(
+        input.messages,
+        input.ownerTimezone,
+        tools,
+        toolSelection.families,
+      );
   const inputCharacterCount = messages.reduce(
     (total, message) => total + message.content.length,
     0,
@@ -404,7 +429,7 @@ export async function runCoreAgentToolTurn(input: {
   const route: AgentChatAiRoute = {
     ...input.route,
     aiGatewayRequestPolicy:
-      tools.length === 0 && input.route.aiGatewayRequestPolicy
+      tools.length === 0 && !statusUpdateRequest && input.route.aiGatewayRequestPolicy
         ? {
             ...input.route.aiGatewayRequestPolicy,
             requestTimeoutMs: Math.min(
@@ -417,6 +442,7 @@ export async function runCoreAgentToolTurn(input: {
       ...input.route.aiGatewayMetadata,
       me3_tool_count: tools.length,
       me3_input_chars: inputCharacterCount,
+      ...(statusUpdateRequest ? { me3_intent: "status_update" } : {}),
     },
   };
   let requiredToolAttempted = false;
@@ -452,6 +478,7 @@ export async function runCoreAgentToolTurn(input: {
               modelStep,
               model,
               isBackup: modelIndex > 0,
+              ...(statusUpdateRequest ? { intent: "status_update" } : {}),
               elapsedMs: durationMs(startedAt),
             },
           });
@@ -2531,7 +2558,7 @@ function withCoreToolInstructions(
     ...(hasFamily("reminders")
       ? [
           "Reminder tool rules:",
-          "- Use reminder tools only when the owner clearly asks to list, create, update, or cancel reminders.",
+          "- Use reminder tools only when the owner clearly asks to list, create, update, or cancel reminders. Reminder lists contain future reminders only; do not infer work from reminders whose time has passed.",
           "- For create/update, remindAt must be a future ISO date-time with the correct timezone offset. Noon means 12:00; midnight means 00:00. Resolve weekdays in the owner's timezone.",
           "- If the requested date or time is missing or ambiguous, ask one concise clarification question and do not call a write tool.",
           "- Before update/cancel, list reminders unless a stable reminder ID is already present in the conversation. Never invent or infer an ID from a title.",
@@ -2554,6 +2581,7 @@ function withCoreToolInstructions(
       ? [
           "Booking tool rules:",
           "- Use core_bookings_lookup whenever the owner asks about upcoming confirmed bookings, appointments, client sessions, or booked calls. Do not answer from calendar events or email.",
+          "- In owner-facing replies, call these website bookings so they remain distinct from personal calendar events.",
           "- Booking lookup is read-only and returns the next confirmed bookings in chronological order. It does not include reminders, ordinary calendar events, or cancelled bookings.",
         ]
       : []),
@@ -3138,9 +3166,9 @@ function formatReminderList(
   reminders: AgentReminder[],
   timezone: string | null | undefined,
 ): string {
-  if (reminders.length === 0) return "You do not have any pending reminders right now.";
+  if (reminders.length === 0) return "You do not have any upcoming reminders right now.";
   return [
-    `You have ${reminders.length} pending reminder${reminders.length === 1 ? "" : "s"}:`,
+    `You have ${reminders.length} upcoming reminder${reminders.length === 1 ? "" : "s"}:`,
     ...reminders.map(
       (reminder) =>
         `- ${reminder.title} at ${formatAgentDateTime(reminder.remindAt, timezone || reminder.timezone)} (ID: ${reminder.id})`,
@@ -3244,10 +3272,10 @@ function formatBookingLookupReply(
   timezone: string | null | undefined,
 ): string {
   if (!bookings.length) {
-    return "I could not find any upcoming confirmed bookings.";
+    return "I could not find any upcoming website bookings.";
   }
   return [
-    `You have ${bookings.length} upcoming confirmed booking${bookings.length === 1 ? "" : "s"}:`,
+    `You have ${bookings.length} upcoming website booking${bookings.length === 1 ? "" : "s"}:`,
     ...bookings.map((booking) => {
       const site = booking.siteUsername ? ` via @${booking.siteUsername}` : "";
       const notes = booking.notes ? ` — ${booking.notes}` : "";

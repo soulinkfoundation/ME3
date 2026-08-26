@@ -103,8 +103,7 @@ const DEFAULT_PROJECT_COLUMNS: Array<{
 }> = [
   { status: "backlog", name: "Backlog", position: 0 },
   { status: "in_progress", name: "Doing", position: 1 },
-  { status: "review", name: "Review", position: 2 },
-  { status: "done", name: "Done", position: 3 },
+  { status: "done", name: "Done", position: 2 },
 ];
 
 type MissionTaskCursor =
@@ -392,7 +391,7 @@ type DashboardPluginRecord = Awaited<ReturnType<typeof listCorePluginRecords>>[n
 
 const PERSONAL_PROJECT_ID = "mission-project-personal";
 const DEFAULT_OWNER_TIMEZONE = "UTC";
-const ACTIVE_TASK_STATUSES: MissionTaskStatus[] = ["backlog", "in_progress", "review"];
+const WORKSPACE_TASK_STATUSES: MissionTaskStatus[] = ["backlog", "in_progress", "done"];
 const DEFAULT_MISSION_STATEMENT =
   "I am here to help [who/what] become [desired change] by being [way of being] and creating [work/service], guided by [values].";
 const DEFAULT_SETUP_CHECKLIST_DISMISSED = true;
@@ -647,7 +646,7 @@ export async function listMissionTaskPage(
       : null;
   const order = options.archived ? "archived" : "active";
   const cursor = decodeMissionTaskCursor(options.cursor, order);
-  const activeWhere = ACTIVE_TASK_STATUSES.map((item) => `'${item}'`).join(", ");
+  const workspaceStatusWhere = WORKSPACE_TASK_STATUSES.map((item) => `'${item}'`).join(", ");
   let sql = `SELECT id, user_id, project_id, column_id, title, description, status, priority, position, pinned_at,
                     due_at, scheduled_for, source_kind, source_ref, approval_id,
                     metadata_json, created_at, updated_at, archived_at
@@ -662,7 +661,7 @@ export async function listMissionTaskPage(
     sql += " AND status = ?";
     values.push(status);
   } else if (options.activeOnly) {
-    sql += ` AND status IN (${activeWhere})`;
+    sql += ` AND status IN (${workspaceStatusWhere})`;
   }
   if (options.dueDate) {
     sql += " AND (scheduled_for = ? OR substr(due_at, 1, 10) = ?)";
@@ -1214,7 +1213,7 @@ export async function getMissionDashboard(env: Env, userId: string) {
 type MissionProjectSummaryRow = {
   project_id: string | null;
   project_name: string;
-  status: Exclude<MissionTaskStatus, "done" | "cancelled">;
+  status: Extract<MissionTaskStatus, "backlog" | "in_progress">;
   count: number;
 };
 
@@ -1242,7 +1241,7 @@ export async function getMissionProjectsSummary(env: Env, userId: string) {
          ON p.id = t.project_id AND p.user_id = t.user_id
        WHERE t.user_id = ?
          AND t.archived_at IS NULL
-         AND t.status IN ('backlog', 'in_progress', 'review')
+         AND t.status IN ('backlog', 'in_progress')
        GROUP BY project_id, project_name, t.status`,
     )
       .bind(userId)
@@ -1285,7 +1284,7 @@ export async function getMissionProjectsSummary(env: Env, userId: string) {
       id,
       label: row.project_name,
       total: 0,
-      counts: { backlog: 0, in_progress: 0, review: 0, done: 0 },
+      counts: { backlog: 0, in_progress: 0, done: 0 },
     };
     summary.counts[row.status] = Number(row.count) || 0;
     summary.total += Number(row.count) || 0;

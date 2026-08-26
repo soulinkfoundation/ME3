@@ -19,7 +19,6 @@ export type MissionCaptureStatus = "open" | "done" | "archived";
 export type MissionTaskStatus =
   | "backlog"
   | "in_progress"
-  | "review"
   | "done"
   | "cancelled";
 export type MissionProjectStatus = "active" | "paused" | "archived";
@@ -99,7 +98,6 @@ export function normalizeMissionTaskStatus(value: unknown): MissionTaskStatus | 
   if (
     value === "backlog" ||
     value === "in_progress" ||
-    value === "review" ||
     value === "done" ||
     value === "cancelled"
   ) {

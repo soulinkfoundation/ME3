@@ -363,7 +363,7 @@ describe("Mission Control dashboard settings", () => {
         {
           project_id: null,
           project_name: "Personal",
-          status: "review",
+          status: "backlog",
           count: 4,
         },
       ],
@@ -388,13 +388,13 @@ describe("Mission Control dashboard settings", () => {
           id: "personal",
           label: "Personal",
           total: 4,
-          counts: { backlog: 0, in_progress: 0, review: 4, done: 0 },
+          counts: { backlog: 4, in_progress: 0, done: 0 },
         },
         {
           id: "project-a",
           label: "Alpha",
           total: 3,
-          counts: { backlog: 2, in_progress: 1, review: 0, done: 0 },
+          counts: { backlog: 2, in_progress: 1, done: 0 },
         },
       ],
       tasks: [
@@ -508,7 +508,7 @@ function createDashboardEnv(options: {
   projectSummaryRows?: Array<{
     project_id: string | null;
     project_name: string;
-    status: "backlog" | "in_progress" | "review";
+    status: "backlog" | "in_progress";
     count: number;
   }>;
   projectTaskRows?: Array<{

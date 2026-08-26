@@ -4,7 +4,7 @@ CREATE TABLE mission_project_columns (
   project_id TEXT NOT NULL,
   name TEXT NOT NULL,
   status TEXT NOT NULL
-    CHECK (status IN ('backlog', 'in_progress', 'review', 'done')),
+    CHECK (status IN ('backlog', 'in_progress', 'done')),
   position INTEGER NOT NULL DEFAULT 0,
   archived_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -25,12 +25,7 @@ FROM mission_projects;
 
 INSERT OR IGNORE INTO mission_project_columns
   (id, user_id, project_id, name, status, position)
-SELECT id || ':review', user_id, id, 'Review', 'review', 2
-FROM mission_projects;
-
-INSERT OR IGNORE INTO mission_project_columns
-  (id, user_id, project_id, name, status, position)
-SELECT id || ':done', user_id, id, 'Done', 'done', 3
+SELECT id || ':done', user_id, id, 'Done', 'done', 2
 FROM mission_projects;
 
 ALTER TABLE mission_tasks ADD COLUMN column_id TEXT;
@@ -52,7 +47,7 @@ WHERE project_id IS NULL
 UPDATE mission_tasks
 SET column_id = project_id || ':' || status
 WHERE project_id IS NOT NULL
-  AND status IN ('backlog', 'in_progress', 'review', 'done');
+  AND status IN ('backlog', 'in_progress', 'done');
 
 CREATE INDEX idx_mission_project_columns_project_position
   ON mission_project_columns(project_id, archived_at, position);

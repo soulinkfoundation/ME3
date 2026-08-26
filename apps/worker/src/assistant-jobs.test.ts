@@ -205,7 +205,7 @@ describe("assistant jobs persistence", () => {
       expect.objectContaining({
         id: expect.stringContaining("weekly-review-task:owner:"),
         title: expect.stringContaining("Weekly Review:"),
-        status: "review",
+        status: "backlog",
         source_kind: "agent",
         source_ref: expect.stringContaining("weekly-review:"),
       }),
@@ -264,7 +264,7 @@ describe("assistant jobs persistence", () => {
       user_id: "owner",
       project_id: "project-1",
       title: "Weekly Review: 2026-06-15 to 2026-06-21",
-      status: "review",
+      status: "backlog",
       source_ref: "weekly-review:2026-06-15:2026-06-21",
       metadata_json: JSON.stringify({
         kind: "weekly_review",
@@ -281,7 +281,7 @@ describe("assistant jobs persistence", () => {
       id: "weekly-review-task:owner:detail",
       projectId: "project-1",
       title: "Weekly Review: 2026-06-15 to 2026-06-21",
-      status: "review",
+      status: "backlog",
       sourceRef: "weekly-review:2026-06-15:2026-06-21",
     });
   });
@@ -1853,7 +1853,7 @@ class FakeStatement {
           project_id: values[2] as string | null,
           title: values[3] as string,
           description: values[4] as string | null,
-          status: sql.includes("'review'") ? "review" : "backlog",
+          status: "backlog",
           priority: values[5] as number,
           due_at: values[6] as string | null,
           scheduled_for: values[7] as string | null,
@@ -1876,7 +1876,7 @@ class FakeStatement {
       if (task) {
         task.title = values[0] as string;
         task.description = values[1] as string | null;
-        if (task.status !== "done") task.status = "review";
+        if (task.status !== "done") task.status = "backlog";
         task.priority = values[2] as number;
         task.scheduled_for = values[3] as string | null;
         task.metadata_json = values[4] as string;

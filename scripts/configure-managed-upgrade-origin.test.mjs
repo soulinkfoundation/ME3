@@ -38,3 +38,26 @@ test("sets the exact frozen origin independently of provisioning controls", () =
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("matches the configured worker name literally", () => {
+  const directory = mkdtempSync(join(tmpdir(), "me3-upgrade-origin-"));
+  const configPath = join(directory, "wrangler.toml");
+  writeFileSync(
+    configPath,
+    `name = "me3-mi-1234567890abc0"\n[vars]\nME3_DEPLOYMENT_MODE = "managed"\n`,
+  );
+  try {
+    assert.throws(
+      () =>
+        configureManagedUpgradeOrigin({
+          configPath,
+          workerName,
+          publicOrigin: "https://owner.me3.app",
+          canonicalHostname: "owner.me3.app",
+        }),
+      /managed upgrade origin config is invalid/,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

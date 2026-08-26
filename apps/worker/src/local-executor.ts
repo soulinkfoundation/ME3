@@ -913,7 +913,7 @@ export async function completeLocalExecutorRun(
     status: missionStatusFromLocalRun(status),
   });
   if (status === "succeeded") {
-    await moveLinkedMissionTaskToReview(env, auth.pairing.user_id, completed);
+    await moveLinkedMissionTaskToDone(env, auth.pairing.user_id, completed);
   }
   await appendLocalExecutorMissionEvent(env, completed, "completed", summary, { status });
   await appendLocalExecutorMissionActivity(env, auth.pairing.user_id, {
@@ -1175,7 +1175,7 @@ async function getActiveLocalExecutorRunForMissionTask(
   }
 }
 
-async function moveLinkedMissionTaskToReview(
+async function moveLinkedMissionTaskToDone(
   env: Env,
   userId: string,
   run: LocalExecutorRunRow,
@@ -1188,7 +1188,7 @@ async function moveLinkedMissionTaskToReview(
   if (!link.taskId) return;
   await env.DB.prepare(
     `UPDATE mission_tasks
-     SET status = 'review', updated_at = datetime('now')
+     SET status = 'done', updated_at = datetime('now')
      WHERE id = ? AND user_id = ? AND archived_at IS NULL
        AND status NOT IN ('done', 'cancelled')`,
   )

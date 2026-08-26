@@ -420,7 +420,15 @@ function createEnv(state: Partial<FakeDbState> = {}) {
             return { results: dbState.calendarEvents as T[] };
           }
           if (sql.includes("FROM user_reminders")) {
-            return { results: dbState.reminders as T[] };
+            const minimumRemindAt = sql.includes("remind_at >= ?")
+              ? String(values[1])
+              : null;
+            return {
+              results: dbState.reminders.filter(
+                (reminder) =>
+                  !minimumRemindAt || String(reminder.remind_at) >= minimumRemindAt,
+              ) as T[],
+            };
           }
           if (sql.includes("FROM bookings b")) {
             return { results: dbState.bookings as T[] };
@@ -2715,6 +2723,42 @@ describe("Core chat native context", () => {
       reminderAction: { kind: "listed" },
     });
     expect(response.replyText).toContain("Ship ME3");
+  });
+
+  it("does not give past reminders to the agent reminder list tool", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-07T08:00:00.000Z"));
+    let modelCall = 0;
+    const aiRun = vi.fn(async (_model: string, input: { messages?: Array<{ role?: string; content?: unknown }> }) => {
+      modelCall += 1;
+      if (modelCall === 1) {
+        return {
+          tool_calls: [
+            { id: "list-1", name: "core_reminders_list", arguments: {} },
+          ],
+        };
+      }
+
+      const toolMessage = input.messages?.find((message) => message.role === "tool");
+      expect(String(toolMessage?.content)).toContain("Future reminder");
+      expect(String(toolMessage?.content)).not.toContain("Past reminder");
+      return { response: "You have one upcoming reminder: Future reminder." };
+    });
+    const env = createEnv({
+      reminders: [
+        reminderRow("reminder-past", "Past reminder", "2026-06-07T07:00:00.000Z"),
+        reminderRow("reminder-future", "Future reminder", "2026-06-07T09:00:00.000Z"),
+      ],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      dispatchInput("Do I have any reminders coming up?"),
+    );
+
+    expect(response.replyText).toContain("Future reminder");
+    expect(response.replyText).not.toContain("Past reminder");
   });
 
   it("does not route reminder writes through the removed regex fallback", async () => {

@@ -127,15 +127,16 @@ export async function listPendingAgentReminders(
   env: ReminderEnv,
   userId: string,
 ): Promise<AgentReminder[]> {
+  const now = new Date().toISOString();
   const rows = await env.DB.prepare(
     `SELECT id, title, notes, remind_at, timezone, recurrence_rule, context_type,
             context_id, context_label, status, delivered_at, dismissed_at, created_at
      FROM user_reminders
-     WHERE user_id = ? AND status IN ('pending', 'failed')
+     WHERE user_id = ? AND status IN ('pending', 'failed') AND remind_at >= ?
      ORDER BY remind_at ASC
      LIMIT 8`,
   )
-    .bind(userId)
+    .bind(userId, now)
     .all<DbReminderRow>();
   return (rows.results || []).map(serializeAgentReminder);
 }

@@ -64,13 +64,9 @@ const { toastSuccess } = useAppToast();
 
 const projects = ref<TaskProject[]>([]);
 const tasks = ref<WorkspaceTask[]>([]);
-const completedTasks = ref<WorkspaceTask[]>([]);
 const selectedProjectId = ref(queryValue(route.query.project));
 const mode = ref<TaskModeId>(taskMode(route.query.view));
 const loading = ref(true);
-const completedLoading = ref(false);
-const completedLoaded = ref(false);
-const completedOpen = ref(false);
 const error = ref("");
 const taskError = ref("");
 const taskSaving = ref(false);
@@ -114,14 +110,6 @@ const modeCounts = computed(() =>
     ]),
   ) as Record<TaskModeId, number>,
 );
-const visibleCompletedTasks = computed(() =>
-  (selectedProjectId.value
-    ? completedTasks.value.filter((task) => task.projectId === selectedProjectId.value)
-    : [...completedTasks.value]
-  ).sort((left, right) =>
-    (right.archivedAt || right.updatedAt).localeCompare(left.archivedAt || left.updatedAt),
-  ),
-);
 const projectNames = computed(
   () => new Map(projects.value.map((project) => [project.id, project.name])),
 );
@@ -141,12 +129,12 @@ const taskSaveDisabled = computed(
 const emptyTitle = computed(() => {
   if (mode.value === "now") return "Nothing to do?";
   if (mode.value === "backlog") return "No tasks in backlog";
-  return "No tasks to review";
+  return "No completed tasks";
 });
 const emptyMessage = computed(() => {
   if (mode.value === "now") return "Go outside or choose something from the backlog.";
   if (mode.value === "backlog") return "Add a task or ask ME3 for ideas based on your goals.";
-  return "There is nothing waiting for review.";
+  return "Tasks you finish will appear here.";
 });
 
 async function loadWorkspace() {
@@ -192,26 +180,6 @@ async function fetchAllTasks(options: {
   return [...byId.values()];
 }
 
-async function loadCompleted(force = false) {
-  if ((!force && completedLoaded.value) || completedLoading.value) return;
-  completedLoading.value = true;
-  error.value = "";
-  try {
-    const [done, archived] = await Promise.all([
-      fetchAllTasks({ status: "done" }),
-      fetchAllTasks({ archived: true }),
-    ]);
-    completedTasks.value = [
-      ...new Map([...done, ...archived].map((task) => [task.id, task])).values(),
-    ];
-    completedLoaded.value = true;
-  } catch (caught) {
-    error.value = apiMessage(caught, "Completed tasks could not load");
-  } finally {
-    completedLoading.value = false;
-  }
-}
-
 async function selectProject(projectId: string) {
   selectedProjectId.value = projectId;
   if (projectPicker.value) projectPicker.value.open = false;
@@ -220,17 +188,11 @@ async function selectProject(projectId: string) {
 }
 
 async function selectMode(nextMode: TaskModeId) {
-  completedOpen.value = false;
   mode.value = nextMode;
   const { view: _view, ...query } = route.query;
   await router.replace({
     query: nextMode === "now" ? query : { ...query, view: nextMode },
   });
-}
-
-async function toggleCompleted() {
-  completedOpen.value = !completedOpen.value;
-  if (completedOpen.value) await loadCompleted();
 }
 
 function openNewTask() {
@@ -264,7 +226,7 @@ async function openTask(task: WorkspaceTask, updateRoute = true) {
 async function openTaskFromRoute() {
   const taskId = queryValue(route.query.task);
   if (!taskId || selectedTask.value?.id === taskId) return;
-  const local = [...tasks.value, ...completedTasks.value].find((task) => task.id === taskId);
+  const local = tasks.value.find((task) => task.id === taskId);
   if (local) {
     await openTask(local, false);
     return;
@@ -319,21 +281,44 @@ async function saveTask() {
   }
 }
 
-async function markDone(task: WorkspaceTask) {
+async function changeTaskStatus(
+  task: WorkspaceTask,
+  status: Extract<TaskStatus, "in_progress" | "done">,
+  successMessage: string,
+  failureMessage: string,
+) {
   if (taskActionId.value) return;
   taskActionId.value = task.id;
   try {
     const response = await api.patch<{ task: WorkspaceTask }>(
       `/mission-control/tasks/${encodeURIComponent(task.id)}`,
-      { status: "done" },
+      { status },
     );
     mergeTask(response.task);
-    toastSuccess("Task completed");
+    toastSuccess(successMessage);
   } catch (caught) {
-    error.value = apiMessage(caught, "Task could not be completed");
+    error.value = apiMessage(caught, failureMessage);
   } finally {
     taskActionId.value = "";
   }
+}
+
+async function markDone(task: WorkspaceTask) {
+  await changeTaskStatus(
+    task,
+    "done",
+    "Task completed",
+    "Task could not be completed",
+  );
+}
+
+async function moveToNow(task: WorkspaceTask) {
+  await changeTaskStatus(
+    task,
+    "in_progress",
+    "Moved to Now",
+    "Task could not move to Now",
+  );
 }
 
 async function archiveSelectedTask() {
@@ -344,12 +329,9 @@ async function archiveSelectedTask() {
   try {
     await api.delete(`/mission-control/tasks/${encodeURIComponent(task.id)}`);
     tasks.value = tasks.value.filter((item) => item.id !== task.id);
-    completedTasks.value = completedTasks.value.filter((item) => item.id !== task.id);
-    completedLoaded.value = false;
     toastSuccess("Task archived");
     taskSaving.value = false;
     await closeTaskDialog();
-    if (completedOpen.value) await loadCompleted(true);
   } catch (caught) {
     taskError.value = apiMessage(caught, "Task could not be archived");
   } finally {
@@ -359,10 +341,7 @@ async function archiveSelectedTask() {
 
 function mergeTask(task: WorkspaceTask) {
   tasks.value = tasks.value.filter((item) => item.id !== task.id);
-  completedTasks.value = completedTasks.value.filter((item) => item.id !== task.id);
-  if (task.status === "done" || task.archivedAt) {
-    completedTasks.value.push(task);
-  } else if (task.status !== "cancelled") {
+  if (!task.archivedAt && task.status !== "cancelled") {
     tasks.value.push(task);
   }
 }
@@ -434,7 +413,6 @@ async function deleteProject() {
     await api.delete(`/mission-control/projects/${encodeURIComponent(project.id)}`);
     projects.value = projects.value.filter((item) => item.id !== project.id);
     tasks.value = tasks.value.filter((task) => task.projectId !== project.id);
-    completedTasks.value = completedTasks.value.filter((task) => task.projectId !== project.id);
     await selectProject("");
     toastSuccess("Project deleted");
     projectDialogOpen.value = false;
@@ -619,19 +597,19 @@ onBeforeUnmount(() => {
         shape="soft"
         size="compact"
         icon-only
-        :active="completedOpen"
-        aria-label="Completed tasks"
-        title="Completed tasks"
-        @click="toggleCompleted"
+        aria-label="Add task"
+        title="Add task"
+        :disabled="loading || projects.length === 0"
+        @click="openNewTask"
       >
-        <UiIcon name="Archive" :size="18" />
+        <UiIcon name="Plus" :size="19" />
       </Button>
     </header>
 
     <section class="tasks-workspace" aria-labelledby="tasks-view-title">
       <h1 id="tasks-view-title" class="visually-hidden">Tasks</h1>
 
-      <div v-if="!completedOpen" class="task-modes" aria-label="Task view">
+      <div class="task-modes" aria-label="Task view">
         <button
           v-for="item in TASK_MODES"
           :key="item.id"
@@ -645,48 +623,31 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <div v-else class="completed-heading">
-        <div>
-          <strong>Completed</strong>
-          <span>{{ visibleCompletedTasks.length }}</span>
-        </div>
-        <button type="button" @click="toggleCompleted">Show active tasks</button>
-      </div>
-
       <p v-if="selectedProject?.description" class="project-purpose">
         {{ selectedProject.description }}
       </p>
 
       <p v-if="error" class="tasks-error" role="alert">{{ error }}</p>
 
-      <PageLoading
-        v-if="loading || (completedOpen && completedLoading)"
-        compact
-        :label="completedOpen ? 'Loading completed tasks...' : 'Loading tasks...'"
-      />
+      <PageLoading v-if="loading" compact label="Loading tasks..." />
 
-      <div
-        v-else-if="completedOpen && visibleCompletedTasks.length === 0"
-        class="tasks-empty"
-      >
-        <strong>No completed tasks</strong>
-        <p>Done and archived tasks will appear here.</p>
-      </div>
-
-      <div v-else-if="!completedOpen && visibleTasks.length === 0" class="tasks-empty">
+      <div v-else-if="visibleTasks.length === 0" class="tasks-empty">
         <strong>{{ emptyTitle }}</strong>
         <p>{{ emptyMessage }}</p>
       </div>
 
       <div v-else class="task-list">
         <article
-          v-for="task in completedOpen ? visibleCompletedTasks : visibleTasks"
+          v-for="task in visibleTasks"
           :key="task.id"
           class="task-row"
-          :class="{ 'is-busy': taskActionId === task.id }"
+          :class="{
+            'is-busy': taskActionId === task.id,
+            'has-now-action': task.status === 'backlog',
+          }"
         >
           <button
-            v-if="!completedOpen"
+            v-if="task.status !== 'done'"
             type="button"
             class="task-row__complete"
             :disabled="Boolean(taskActionId)"
@@ -720,31 +681,22 @@ onBeforeUnmount(() => {
                 <span v-if="!selectedProjectId" aria-hidden="true">·</span>
                 {{ displayTaskDate(task.scheduledFor || task.dueAt) }}
               </template>
-              <template v-if="completedOpen">
-                <span aria-hidden="true">·</span>
-                {{ task.archivedAt ? "Archived" : "Done" }}
-              </template>
             </span>
           </button>
-          <UiIcon name="ChevronRight" :size="16" class="task-row__chevron" />
+          <button
+            v-if="task.status === 'backlog'"
+            type="button"
+            class="task-row__now"
+            :disabled="Boolean(taskActionId)"
+            :aria-label="`Move ${task.title} to Now`"
+            title="Move to Now"
+            @click="moveToNow(task)"
+          >
+            <UiIcon name="CirclePlus" :size="20" aria-hidden="true" />
+          </button>
         </article>
       </div>
     </section>
-
-    <Button
-      v-if="!completedOpen"
-      class="task-add"
-      color="primary"
-      shape="pill"
-      size="large"
-      icon-only
-      aria-label="Add task"
-      title="Add task"
-      :disabled="loading || projects.length === 0"
-      @click="openNewTask"
-    >
-      <UiIcon name="Plus" :size="24" />
-    </Button>
 
     <AppDialog
       :open="taskDialogOpen"
@@ -807,7 +759,6 @@ onBeforeUnmount(() => {
               <select v-model="taskDraft.status">
                 <option value="in_progress">Now</option>
                 <option value="backlog">Backlog</option>
-                <option value="review">Review</option>
                 <option value="done">Done</option>
               </select>
             </label>
@@ -1154,36 +1105,6 @@ onBeforeUnmount(() => {
   box-shadow: var(--ui-shadow-sm);
 }
 
-.completed-heading {
-  display: flex;
-  min-height: 44px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.completed-heading div {
-  display: inline-flex;
-  gap: 7px;
-  align-items: baseline;
-}
-
-.completed-heading span {
-  color: var(--ui-text-muted);
-  font-size: 13px;
-}
-
-.completed-heading button {
-  border: 0;
-  background: transparent;
-  color: var(--ui-accent);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
 .project-purpose {
   margin: 14px 4px 2px;
   color: var(--ui-text-muted);
@@ -1229,13 +1150,17 @@ onBeforeUnmount(() => {
 
 .task-row {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 20px;
+  grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   min-width: 0;
   padding: 12px 2px;
   border-bottom: 1px solid var(--ui-border);
   transition: opacity 120ms ease;
+}
+
+.task-row.has-now-action {
+  grid-template-columns: 32px minmax(0, 1fr) 40px;
 }
 
 .task-row.is-busy {
@@ -1324,18 +1249,31 @@ onBeforeUnmount(() => {
   font-weight: 680;
 }
 
-.task-row__chevron {
+.task-row__now {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--ui-text-muted);
+  cursor: pointer;
 }
 
-.task-add {
-  position: fixed;
-  right: max(24px, calc((100vw - 700px) / 2 + 8px));
-  bottom: 28px;
-  z-index: 18;
-  width: 58px;
-  height: 58px;
-  box-shadow: 0 10px 28px color-mix(in oklab, #000, transparent 78%);
+.task-row__now:hover,
+.task-row__now:focus-visible {
+  color: var(--ui-accent);
+  outline: none;
+}
+
+.task-row__now:focus-visible {
+  border-radius: var(--ui-radius-sm);
+  box-shadow: inset 0 0 0 2px var(--ui-focus);
+}
+
+.task-row__now:disabled {
+  cursor: default;
 }
 
 .tasks-dialog {
@@ -1538,10 +1476,6 @@ onBeforeUnmount(() => {
     padding-left: var(--app-shell-mobile-nav-leading-padding);
   }
 
-  .task-add {
-    right: 20px;
-    bottom: 20px;
-  }
 }
 
 @media (max-width: 640px) {

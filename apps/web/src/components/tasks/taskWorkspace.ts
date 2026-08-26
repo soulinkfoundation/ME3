@@ -1,7 +1,7 @@
 import { resolveUiIconName, type UiIconName } from "../../utils/icons";
 
-export type TaskModeId = "now" | "backlog" | "review";
-export type TaskStatus = "backlog" | "in_progress" | "review" | "done" | "cancelled";
+export type TaskModeId = "now" | "backlog" | "done";
+export type TaskStatus = "backlog" | "in_progress" | "done" | "cancelled";
 
 export type TaskProject = {
   id: string;
@@ -31,18 +31,18 @@ export type WorkspaceTask = {
 export const TASK_MODES: ReadonlyArray<{
   id: TaskModeId;
   label: string;
-  status: Extract<TaskStatus, "backlog" | "in_progress" | "review">;
+  status: Extract<TaskStatus, "backlog" | "in_progress" | "done">;
 }> = [
-  { id: "now", label: "Now", status: "in_progress" },
   { id: "backlog", label: "Backlog", status: "backlog" },
-  { id: "review", label: "Review", status: "review" },
+  { id: "now", label: "Now", status: "in_progress" },
+  { id: "done", label: "Done", status: "done" },
 ];
 
 export const TASK_PAGE_SIZE = 50;
 
 export function taskMode(value: unknown): TaskModeId {
   const raw = Array.isArray(value) ? value[0] : value;
-  return raw === "backlog" || raw === "review" ? raw : "now";
+  return raw === "backlog" || raw === "done" ? raw : "now";
 }
 
 export function taskModeStatus(mode: TaskModeId) {

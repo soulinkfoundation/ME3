@@ -153,6 +153,15 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.get("0038_site_roles")).toBe(
       "2026-08-24-site-roles-v1",
     );
+    expect(db.migrations.get("0040_remove_mission_task_review")).toBe(
+      "2026-08-26-remove-mission-task-review-v1",
+    );
+    expect(
+      db.statements.some(
+        (sql) => sql.includes("UPDATE mission_tasks") && sql.includes("status = 'backlog'") &&
+          sql.includes("WHERE status = 'review'"),
+      ),
+    ).toBe(true);
     expect(
       db.statements.some(
         (sql) =>
