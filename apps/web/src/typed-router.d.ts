@@ -29,8 +29,6 @@ declare module 'vue-router/auto-routes' {
     '/email': RouteRecordInfo<'/email', '/email', Record<never, never>, Record<never, never>>,
     '/files': RouteRecordInfo<'/files', '/files', Record<never, never>, Record<never, never>>,
     '/journal': RouteRecordInfo<'/journal', '/journal', Record<never, never>, Record<never, never>>,
-    '/mission-control': RouteRecordInfo<'/mission-control', '/mission-control', Record<never, never>, Record<never, never>>,
-    '/mission-control-projects': RouteRecordInfo<'/mission-control-projects', '/mission-control/projects', Record<never, never>, Record<never, never>>,
     '/mission-control-wheel-of-life': RouteRecordInfo<'/mission-control-wheel-of-life', '/mission-control/wheel-of-life', Record<never, never>, Record<never, never>>,
     '/mobile/pair/[pairingId]': RouteRecordInfo<'/mobile/pair/[pairingId]', '/mobile/pair/:pairingId', { pairingId: ParamValue<true> }, { pairingId: ParamValue<false> }>,
     '/sites/': RouteRecordInfo<'/sites/', '/sites', Record<never, never>, Record<never, never>>,
@@ -39,5 +37,6 @@ declare module 'vue-router/auto-routes' {
     '/sites/[username]/landing-pages/new': RouteRecordInfo<'/sites/[username]/landing-pages/new', '/sites/:username/landing-pages/new', { username: ParamValue<true> }, { username: ParamValue<false> }>,
     '/sites/[username]/pages/[pageId]': RouteRecordInfo<'/sites/[username]/pages/[pageId]', '/sites/:username/pages/:pageId', { username: ParamValue<true>, pageId: ParamValue<true> }, { username: ParamValue<false>, pageId: ParamValue<false> }>,
     '/social': RouteRecordInfo<'/social', '/social', Record<never, never>, Record<never, never>>,
+    '/tasks': RouteRecordInfo<'/tasks', '/tasks', Record<never, never>, Record<never, never>>,
   }
 }

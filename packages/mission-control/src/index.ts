@@ -5,7 +5,7 @@ export const MISSION_CONTROL_RUNTIME = {
   packageName: "@me3-core/plugin-mission-control",
   bundled: true,
   runtimeStatus: "mission_control_workspace",
-  defaultRoute: "/mission-control/projects",
+  defaultRoute: "/tasks",
   notes: [
     "Core bundles Tasks and Projects as the default first-party owner workspace.",
     "Private memory, local daemon access, and run history stay plugin-owned and owner-scoped.",

@@ -203,7 +203,7 @@ watch(navDrawerOpen, (isOpen) => {
 
         <RouterLink
           v-if="missionControlInstalled"
-          to="/mission-control/projects"
+          to="/tasks"
           class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('mission-control') }"
           aria-label="Tasks"

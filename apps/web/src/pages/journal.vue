@@ -332,7 +332,7 @@ function defaultCaptureTitle(text: string): string {
 
 function missionTaskHref(projectId: string, taskId: string): string {
   const query = new URLSearchParams({ project: projectId, task: taskId });
-  return `/mission-control/projects?${query.toString()}`;
+  return `/tasks?${query.toString()}`;
 }
 
 function taskLinkHref(link: JournalProjectLink): string {
@@ -470,7 +470,7 @@ async function loadDay(date: string) {
 async function loadProjects() {
   if (projects.value.length > 0) return;
   const response = await api.get<{ projects: MissionProject[] }>(
-    "/mission-control/projects",
+    "/tasks",
   );
   projects.value = response.projects || [];
   if (!captureProjectId.value) captureProjectId.value = projects.value[0]?.id || "";

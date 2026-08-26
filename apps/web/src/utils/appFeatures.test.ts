@@ -14,6 +14,7 @@ describe("app feature utilities", () => {
 
   it("matches feature paths and nested routes", () => {
     expect(appFeatureForPath("/journal")).toBe("journal");
+    expect(appFeatureForPath("/tasks")).toBe("mission-control");
     expect(appFeatureForPath("/mission-control/wheel-of-life")).toBe(
       "mission-control",
     );

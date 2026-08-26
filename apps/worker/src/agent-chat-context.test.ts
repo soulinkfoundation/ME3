@@ -3615,7 +3615,7 @@ describe("Core chat golden transcript evals", () => {
           kind: expectedKind,
           capabilityId: scenario.expected.capabilityId,
           records: [{ kind: "mission_task", id: env.state.tasks.at(-1)?.id }],
-          primaryAction: { label: "Open Tasks", href: "/mission-control/projects" },
+          primaryAction: { label: "Open Tasks", href: "/tasks" },
         }),
       ]);
     }

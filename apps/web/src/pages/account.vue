@@ -4167,7 +4167,7 @@ onBeforeUnmount(() => {
               </span>
               <router-link
                 class="local-executor-project-link"
-                to="/mission-control/projects"
+                to="/tasks"
                 @click="closeLocalExecutorSetup"
               >
                 Open Projects

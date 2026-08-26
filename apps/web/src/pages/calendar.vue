@@ -1500,7 +1500,7 @@ function handleEventDangerAction(event: CalendarAgendaEvent) {
 function openTaskInMissionControl(taskId: string) {
   const task = tasks.value.find((item) => item.id === taskId);
   void router.push({
-    path: "/mission-control/projects",
+    path: "/tasks",
     query: {
       ...(task?.projectId ? { project: task.projectId } : {}),
       task: taskId,

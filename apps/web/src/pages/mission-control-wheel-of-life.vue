@@ -20,7 +20,7 @@ definePage({
   <main class="wheel-life-page">
     <RouterLink
       class="wheel-life-page__close"
-      to="/mission-control/projects"
+      to="/tasks"
       aria-label="Close Wheel of Life"
       title="Close Wheel of Life"
     >

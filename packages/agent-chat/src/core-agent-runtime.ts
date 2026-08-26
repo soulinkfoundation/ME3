@@ -1548,7 +1548,7 @@ export function buildMissionTaskActionCard(
       { label: "Status", value: action === "archived" ? "archived" : task.status },
     ],
     records: [{ kind: "mission_task", id: task.id }],
-    primaryAction: { label: "Open Tasks", href: "/mission-control/projects" },
+    primaryAction: { label: "Open Tasks", href: "/tasks" },
     secondaryActions: [],
   };
 }

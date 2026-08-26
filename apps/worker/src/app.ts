@@ -367,10 +367,9 @@ const OWNER_APP_ROUTE_PREFIXES = [
   "/login",
   "/mobile",
   "/mission-control",
-  "/mission-control-projects",
-  "/mission-control-wheel-of-life",
   "/sites",
   "/social",
+  "/tasks",
 ];
 const STRICT_TRANSPORT_SECURITY_HEADER = "max-age=31536000";
 const fetchWithWorkerGlobalContext: typeof fetch = (input, init) =>

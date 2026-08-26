@@ -92,7 +92,7 @@ describe("AppSideNav optional plugin links", () => {
       "Settings",
     ]);
     expect(wrapper.get('[aria-label="Tasks"]').attributes("href")).toBe(
-      "/mission-control/projects",
+      "/tasks",
     );
     expect(
       wrapper.get('[aria-label="Assistant"] img').attributes("src"),

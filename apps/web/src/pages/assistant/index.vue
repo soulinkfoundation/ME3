@@ -1315,7 +1315,7 @@ async function loadAssistantProjects() {
   assistantProjectsError.value = "";
   try {
     const response = await api.get<MissionProjectsResponse>(
-      "/mission-control/projects",
+      "/tasks",
     );
     assistantProjects.value = response.projects || [];
   } catch (err) {
@@ -3783,7 +3783,7 @@ async function runJob(job: AssistantJob) {
 function missionReviewTaskPath(task: AssistantJobReviewTask) {
   const params = new URLSearchParams({ task: task.id });
   if (task.projectId) params.set("project", task.projectId);
-  return `/mission-control/projects?${params.toString()}`;
+  return `/tasks?${params.toString()}`;
 }
 
 function openLatestReviewTask(task: AssistantJobReviewTask) {

@@ -1,6 +1,12 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
-import AccountsLedgerWorkspace from "./mission-control-projects.vue";
+import { API_BASE, ApiError, api } from "../api";
+import AppDialog from "../components/AppDialog.vue";
+import Button from "../components/Button.vue";
+import PageLoading from "../components/PageLoading.vue";
+import UiIcon from "../components/UiIcon.vue";
+import { useAppToast } from "../composables/useAppToast";
 
 definePage({
   path: "/accounts",
@@ -13,8 +19,496 @@ definePage({
     robots: "noindex,follow",
   },
 });
+
+type EntryType = "income" | "expense";
+type EntryStatus = "pending" | "paid" | "overdue" | "cancelled" | "needs_review";
+type EntrySource = "manual" | "email_triage" | "stripe" | "csv_import";
+type Category = { id: string; name: string; entryType: EntryType };
+type Entry = {
+  id: string;
+  date: string;
+  description: string;
+  categoryId: string | null;
+  categoryName: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  amountCents: number;
+  currency: string;
+  status: EntryStatus;
+  source: EntrySource;
+  notes: string | null;
+};
+type MoneyTotal = { currency: string; amountCents: number };
+type Stats = {
+  thisMonthCents: number;
+  lastMonthCents: number;
+  thisMonthTotals?: MoneyTotal[];
+  lastMonthTotals?: MoneyTotal[];
+  defaultCurrency?: string;
+};
+type EntryForm = {
+  date: string;
+  description: string;
+  categoryId: string;
+  projectId: string;
+  amount: string;
+  currency: string;
+  status: EntryStatus;
+  notes: string;
+};
+type ProjectOption = { id: string; name: string };
+
+const PAGE_SIZE = 50;
+const { toastSuccess } = useAppToast();
+const entryType = ref<EntryType>("expense");
+const entries = ref<Entry[]>([]);
+const categories = ref<Category[]>([]);
+const projects = ref<ProjectOption[]>([]);
+const stats = ref<Stats | null>(null);
+const loading = ref(true);
+const saving = ref(false);
+const importing = ref(false);
+const syncing = ref(false);
+const entryDialogOpen = ref(false);
+const filtersOpen = ref(false);
+const editingEntryId = ref<string | null>(null);
+const error = ref("");
+const total = ref(0);
+const offset = ref(0);
+const search = ref("");
+const statusFilter = ref("");
+const sourceFilter = ref("");
+const stripeConfigured = ref(false);
+const defaultCurrency = ref("USD");
+const importInput = ref<HTMLInputElement | null>(null);
+const actionsMenu = ref<HTMLDetailsElement | null>(null);
+const form = ref<EntryForm>(emptyForm("expense"));
+
+const page = computed(() => Math.floor(offset.value / PAGE_SIZE) + 1);
+const hasPrevious = computed(() => offset.value > 0);
+const hasNext = computed(() => offset.value + PAGE_SIZE < total.value);
+const entryCountLabel = computed(() => (total.value === 1 ? "1 entry" : `${total.value} entries`));
+const activeFilterCount = computed(
+  () => [search.value.trim(), statusFilter.value, sourceFilter.value].filter(Boolean).length,
+);
+const categoryOptions = computed(() =>
+  categories.value.filter((category) => category.entryType === entryType.value),
+);
+const formDisabled = computed(
+  () => saving.value || !form.value.date || !form.value.description.trim() || !text(form.value.amount),
+);
+
+async function loadAccounts() {
+  loading.value = true;
+  error.value = "";
+  try {
+    const query = new URLSearchParams({
+      entryType: entryType.value,
+      limit: String(PAGE_SIZE),
+      offset: String(offset.value),
+    });
+    if (search.value.trim()) query.set("search", search.value.trim());
+    if (statusFilter.value) query.set("status", statusFilter.value);
+    if (sourceFilter.value) query.set("source", sourceFilter.value);
+    const [entryResponse, categoryResponse, statsResponse, stripeResponse] = await Promise.all([
+      api.get<{ entries: Entry[]; total: number }>(`/accounts/entries?${query}`),
+      api.get<{ categories: Category[] }>(`/accounts/categories?entryType=${entryType.value}`),
+      api.get<{ stats: Stats }>(`/accounts/stats?entryType=${entryType.value}`),
+      api.get<{ connected: boolean }>("/accounts/stripe/status"),
+    ]);
+    entries.value = entryResponse.entries || [];
+    total.value = entryResponse.total || 0;
+    categories.value = categoryResponse.categories || [];
+    stats.value = statsResponse.stats || null;
+    defaultCurrency.value = normalizeCurrency(statsResponse.stats?.defaultCurrency) || "USD";
+    if (!form.value.currency.trim()) form.value.currency = defaultCurrency.value;
+    stripeConfigured.value = stripeResponse.connected;
+  } catch (caught) {
+    error.value = message(caught, "Accounts could not load");
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadProjects() {
+  try {
+    const response = await api.get<{ projects: ProjectOption[] }>("/mission-control/projects");
+    projects.value = response.projects || [];
+  } catch {
+    projects.value = [];
+  }
+}
+
+async function saveEntry() {
+  if (formDisabled.value) return;
+  const amount = Number(text(form.value.amount));
+  if (!Number.isFinite(amount) || amount <= 0) {
+    error.value = "Amount must be greater than zero";
+    return;
+  }
+  saving.value = true;
+  error.value = "";
+  const id = editingEntryId.value;
+  const payload = {
+    entryType: entryType.value,
+    date: form.value.date,
+    description: form.value.description.trim(),
+    categoryId: form.value.categoryId || null,
+    projectId: form.value.projectId || null,
+    amountCents: Math.round(amount * 100),
+    currency: form.value.currency.trim().toUpperCase() || "USD",
+    status: form.value.status,
+    notes: form.value.notes.trim() || null,
+  };
+  try {
+    if (id) await api.put(`/accounts/entries/${encodeURIComponent(id)}`, payload);
+    else {
+      await api.post("/accounts/entries", payload);
+      offset.value = 0;
+    }
+    entryDialogOpen.value = false;
+    editingEntryId.value = null;
+    form.value = emptyForm(entryType.value);
+    await loadAccounts();
+    toastSuccess(id ? "Entry updated." : "Entry added.");
+  } catch (caught) {
+    error.value = message(caught, id ? "Could not update account entry" : "Could not add account entry");
+  } finally {
+    saving.value = false;
+  }
+}
+
+function openNewEntry() {
+  editingEntryId.value = null;
+  form.value = emptyForm(entryType.value);
+  error.value = "";
+  entryDialogOpen.value = true;
+}
+
+function openEditEntry(entry: Entry) {
+  editingEntryId.value = entry.id;
+  form.value = {
+    date: entry.date,
+    description: entry.description,
+    categoryId: entry.categoryId || "",
+    projectId: entry.projectId || "",
+    amount: (entry.amountCents / 100).toFixed(2),
+    currency: entry.currency,
+    status: entry.status,
+    notes: entry.notes || "",
+  };
+  error.value = "";
+  entryDialogOpen.value = true;
+}
+
+function closeEntryDialog() {
+  if (saving.value) return;
+  entryDialogOpen.value = false;
+  editingEntryId.value = null;
+}
+
+async function deleteEntry(entry: Entry) {
+  if (!window.confirm(`Delete ${entry.description}?`)) return;
+  try {
+    await api.delete(`/accounts/entries/${encodeURIComponent(entry.id)}`);
+    await loadAccounts();
+    toastSuccess("Entry deleted.");
+  } catch (caught) {
+    error.value = message(caught, "Could not delete account entry");
+  }
+}
+
+function setType(type: EntryType) {
+  if (entryType.value === type) return;
+  entryType.value = type;
+  offset.value = 0;
+  form.value = emptyForm(type);
+  void loadAccounts();
+}
+
+function applyFilters() {
+  offset.value = 0;
+  filtersOpen.value = false;
+  void loadAccounts();
+}
+
+function clearFilters() {
+  search.value = "";
+  statusFilter.value = "";
+  sourceFilter.value = "";
+  applyFilters();
+}
+
+function changePage(delta: number) {
+  offset.value = Math.max(0, offset.value + delta * PAGE_SIZE);
+  void loadAccounts();
+}
+
+function chooseImportFile() {
+  if (actionsMenu.value) actionsMenu.value.open = false;
+  importInput.value?.click();
+}
+
+async function importCsv(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  importing.value = true;
+  try {
+    const data = new FormData();
+    data.append("entryType", entryType.value);
+    data.append("file", file);
+    const response = await api.upload<{ imported: number; skipped: number; total: number }>(
+      "/accounts/import",
+      data,
+    );
+    offset.value = 0;
+    await loadAccounts();
+    toastSuccess(`Imported ${response.imported} of ${response.total}; skipped ${response.skipped}.`);
+  } catch (caught) {
+    error.value = message(caught, "Could not import CSV");
+  } finally {
+    importing.value = false;
+    input.value = "";
+  }
+}
+
+function exportCsv() {
+  if (actionsMenu.value) actionsMenu.value.open = false;
+  const query = new URLSearchParams({ entryType: entryType.value });
+  if (search.value.trim()) query.set("search", search.value.trim());
+  if (statusFilter.value) query.set("status", statusFilter.value);
+  if (sourceFilter.value) query.set("source", sourceFilter.value);
+  window.location.href = `${API_BASE}/accounts/export?${query}`;
+}
+
+async function syncStripe() {
+  if (actionsMenu.value) actionsMenu.value.open = false;
+  syncing.value = true;
+  try {
+    const response = await api.post<{
+      chargesImported: number;
+      chargesUpdated: number;
+      chargesProcessed: number;
+    }>("/accounts/stripe/sync", {});
+    entryType.value = "income";
+    offset.value = 0;
+    await loadAccounts();
+    toastSuccess(
+      `Stripe sync processed ${response.chargesProcessed}; added ${response.chargesImported}, updated ${response.chargesUpdated}.`,
+    );
+  } catch (caught) {
+    error.value = message(caught, "Could not sync Stripe charges");
+  } finally {
+    syncing.value = false;
+  }
+}
+
+function emptyForm(type: EntryType): EntryForm {
+  return {
+    date: todayKey(),
+    description: "",
+    categoryId: "",
+    projectId: "",
+    amount: "",
+    currency: defaultCurrency.value,
+    status: type === "income" ? "paid" : "pending",
+    notes: "",
+  };
+}
+
+function text(value: unknown): string {
+  return value === null || value === undefined ? "" : String(value).trim();
+}
+
+function normalizeCurrency(value: unknown): string | null {
+  const currency = text(value).toUpperCase();
+  return /^[A-Z]{3}$/.test(currency) ? currency : null;
+}
+
+function statusLabel(status: EntryStatus): string {
+  return status === "needs_review" ? "Needs review" : status[0].toUpperCase() + status.slice(1);
+}
+
+function sourceLabel(source: EntrySource): string {
+  if (source === "email_triage") return "Email triage";
+  if (source === "csv_import") return "CSV import";
+  return source[0].toUpperCase() + source.slice(1);
+}
+
+function formatMoney(cents: number, currency: string): string {
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: currency || "USD" }).format(cents / 100);
+}
+
+function formatTotals(totals: MoneyTotal[] | undefined, cents: number, currency: string): string {
+  const visible = (totals || []).filter((item) => item.amountCents > 0);
+  return visible.length
+    ? visible.map((item) => formatMoney(item.amountCents, item.currency)).join(" + ")
+    : formatMoney(cents, currency);
+}
+
+function formatDate(value: string): string {
+  const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00` : value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" }).format(date);
+}
+
+function todayKey(): string {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function message(caught: unknown, fallback: string): string {
+  return caught instanceof ApiError ? caught.message : fallback;
+}
+
+onMounted(() => void Promise.all([loadAccounts(), loadProjects()]));
 </script>
 
 <template>
-  <AccountsLedgerWorkspace />
+  <main class="accounts-page">
+    <div class="accounts-workspace">
+      <header class="accounts-toolbar">
+        <div class="accounts-tabs" role="tablist" aria-label="Account entry type">
+          <button type="button" class="accounts-mode-tab" :class="{ 'is-active': entryType === 'expense' }" role="tab" :aria-selected="entryType === 'expense'" @click="setType('expense')">
+            <UiIcon name="ArrowUp" :size="15" class="expense-icon" /><span>Expenses</span>
+          </button>
+          <button type="button" class="accounts-mode-tab" :class="{ 'is-active': entryType === 'income' }" role="tab" :aria-selected="entryType === 'income'" @click="setType('income')">
+            <UiIcon name="ArrowUp" :size="15" /><span>Income</span>
+          </button>
+        </div>
+        <div class="accounts-toolbar__actions">
+          <Button color="ghost" shape="soft" size="compact" icon-only aria-label="Search and filter" :active="Boolean(activeFilterCount)" @click="filtersOpen = true">
+            <UiIcon name="Search" :size="17" /><span v-if="activeFilterCount" class="accounts-filter-count">{{ activeFilterCount }}</span>
+          </Button>
+          <Button color="primary" shape="soft" size="compact" icon-only aria-label="Add entry" @click="openNewEntry"><UiIcon name="Plus" :size="18" /></Button>
+          <details ref="actionsMenu" class="accounts-actions-menu">
+            <summary aria-label="Account actions"><UiIcon name="Ellipsis" :size="18" /></summary>
+            <div class="accounts-actions-menu__popover">
+              <button type="button" :disabled="syncing || !stripeConfigured" @click="syncStripe"><UiIcon name="RefreshCw" :size="15" />{{ syncing ? "Syncing Stripe" : "Sync Stripe" }}</button>
+              <button type="button" :disabled="importing" @click="chooseImportFile"><UiIcon name="Upload" :size="15" />{{ importing ? "Importing CSV" : "Import CSV" }}</button>
+              <button type="button" @click="exportCsv"><UiIcon name="Download" :size="15" />Export CSV</button>
+            </div>
+          </details>
+          <input ref="importInput" type="file" accept=".csv,text/csv" class="visually-hidden" @change="importCsv" />
+        </div>
+      </header>
+
+      <PageLoading v-if="loading && !stats" compact label="Loading accounts..." />
+      <div v-else class="accounts-summary">
+        <div><span>This month</span><strong>{{ formatTotals(stats?.thisMonthTotals, stats?.thisMonthCents || 0, form.currency) }}</strong></div>
+        <div><span>Last month</span><strong>{{ formatTotals(stats?.lastMonthTotals, stats?.lastMonthCents || 0, form.currency) }}</strong></div>
+      </div>
+      <p v-if="error" class="accounts-error" role="alert">{{ error }}</p>
+
+      <div class="accounts-table" aria-label="Payment log">
+        <div class="accounts-table__head"><span>Date</span><span>Description</span><span>Category</span><span>Project</span><span>Amount</span><span>Status</span><span>Source</span><span /></div>
+        <div v-if="loading" class="accounts-table__loading"><PageLoading compact label="Loading accounts..." /></div>
+        <div v-else-if="entries.length === 0" class="empty-row">No {{ entryType }} entries yet.</div>
+        <article v-for="entry in entries" v-else :key="entry.id" class="accounts-table__row">
+          <span>{{ formatDate(entry.date) }}</span><strong>{{ entry.description }}</strong><span>{{ entry.categoryName || "Uncategorized" }}</span><span>{{ entry.projectName || "No project" }}</span><span>{{ formatMoney(entry.amountCents, entry.currency) }}</span><span class="status-badge">{{ statusLabel(entry.status) }}</span><span>{{ sourceLabel(entry.source) }}</span>
+          <div class="accounts-table__row-actions">
+            <Button color="ghost" shape="soft" size="compact" icon-only aria-label="Edit entry" @click="openEditEntry(entry)"><UiIcon name="Pencil" :size="15" /></Button>
+            <Button color="ghost" shape="soft" size="compact" icon-only aria-label="Delete entry" @click="deleteEntry(entry)"><UiIcon name="Trash2" :size="15" /></Button>
+          </div>
+        </article>
+      </div>
+      <footer class="accounts-pagination">
+        <span>{{ entryCountLabel }} · page {{ page }}</span>
+        <div>
+          <Button color="ghost" shape="soft" size="compact" icon-only :disabled="!hasPrevious" aria-label="Previous page" @click="changePage(-1)"><UiIcon name="ChevronLeft" :size="18" /></Button>
+          <Button color="ghost" shape="soft" size="compact" icon-only :disabled="!hasNext" aria-label="Next page" @click="changePage(1)"><UiIcon name="ChevronRight" :size="18" /></Button>
+        </div>
+      </footer>
+    </div>
+
+    <AppDialog :open="filtersOpen" labelled-by="accounts-filter-title" close-on-backdrop @close="filtersOpen = false">
+      <form class="accounts-dialog" @submit.prevent="applyFilters">
+        <header class="accounts-dialog__header"><h2 id="accounts-filter-title">Search accounts</h2><Button color="ghost" shape="soft" size="compact" icon-only aria-label="Close filters" @click="filtersOpen = false"><UiIcon name="X" :size="18" /></Button></header>
+        <div class="accounts-dialog__content">
+          <label class="field"><span>Search</span><input v-model="search" type="search" placeholder="Search accounts" /></label>
+          <label class="field"><span>Status</span><select v-model="statusFilter"><option value="">Any status</option><option value="pending">Pending</option><option value="paid">Paid</option><option value="overdue">Overdue</option><option value="needs_review">Needs review</option><option value="cancelled">Cancelled</option></select></label>
+          <label class="field"><span>Source</span><select v-model="sourceFilter"><option value="">Any source</option><option value="manual">Manual</option><option value="csv_import">CSV import</option><option value="stripe">Stripe</option><option value="email_triage">Email triage</option></select></label>
+        </div>
+        <footer class="accounts-dialog__actions"><Button color="ghost" shape="soft" size="compact" type="button" :disabled="!activeFilterCount" @click="clearFilters">Clear</Button><Button color="primary" shape="soft" size="compact" type="submit">Search</Button></footer>
+      </form>
+    </AppDialog>
+
+    <AppDialog :open="entryDialogOpen" labelled-by="accounts-entry-title" close-on-backdrop @close="closeEntryDialog">
+      <form class="accounts-dialog" @submit.prevent="saveEntry">
+        <header class="accounts-dialog__header"><h2 id="accounts-entry-title">{{ editingEntryId ? "Edit account entry" : "Add account entry" }}</h2><Button color="ghost" shape="soft" size="compact" icon-only aria-label="Close" @click="closeEntryDialog"><UiIcon name="X" :size="18" /></Button></header>
+        <div class="accounts-dialog__content">
+          <div class="accounts-dialog__grid"><label class="field"><span>Date</span><input v-model="form.date" type="date" autofocus /></label><label class="field"><span>Amount</span><input v-model="form.amount" type="number" min="0" step="0.01" placeholder="0.00" /></label></div>
+          <label class="field"><span>Description</span><input v-model="form.description" type="text" autocomplete="off" /></label>
+          <div class="accounts-dialog__grid">
+            <label class="field"><span>Category</span><select v-model="form.categoryId"><option value="">Uncategorized</option><option v-for="category in categoryOptions" :key="category.id" :value="category.id">{{ category.name }}</option></select></label>
+            <label class="field"><span>Status</span><select v-model="form.status"><option value="pending">Pending</option><option value="paid">Paid</option><option value="overdue">Overdue</option><option value="needs_review">Needs review</option><option value="cancelled">Cancelled</option></select></label>
+          </div>
+          <div class="accounts-dialog__grid"><label class="field"><span>Project</span><select v-model="form.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label><label class="field"><span>Currency</span><input v-model="form.currency" type="text" maxlength="3" /></label></div>
+          <label class="field"><span>Notes</span><textarea v-model="form.notes" rows="3" /></label>
+          <p v-if="error" class="accounts-error" role="alert">{{ error }}</p>
+        </div>
+        <footer class="accounts-dialog__actions"><Button color="outline" shape="soft" size="compact" type="button" @click="closeEntryDialog">Cancel</Button><Button color="primary" shape="soft" size="compact" type="submit" :disabled="formDisabled">{{ saving ? "Saving..." : editingEntryId ? "Save changes" : "Add entry" }}</Button></footer>
+      </form>
+    </AppDialog>
+  </main>
 </template>
+
+<style scoped>
+.accounts-page { min-height: 100vh; min-height: 100dvh; padding: var(--workspace-topbar-padding-block) 24px 40px; background: var(--ui-bg); color: var(--ui-text); }
+.accounts-workspace { display: grid; width: min(1120px, 100%); gap: 14px; margin: 0 auto; }
+.accounts-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; min-height: var(--workspace-topbar-height); }
+.accounts-tabs { display: flex; grid-column: 2; justify-self: center; gap: 8px; }
+.accounts-toolbar__actions { position: relative; display: flex; grid-column: 3; justify-self: end; gap: 6px; }
+.accounts-mode-tab { display: inline-flex; min-height: 34px; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--ui-border); border-radius: 999px; background: var(--ui-surface); color: var(--ui-text-muted); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.accounts-mode-tab:hover, .accounts-mode-tab:focus-visible, .accounts-mode-tab.is-active { background: var(--ui-surface-muted); color: var(--ui-text); outline: none; }
+.expense-icon { transform: rotate(180deg); }
+.accounts-filter-count { position: absolute; top: 2px; right: 2px; display: grid; min-width: 14px; height: 14px; place-items: center; border-radius: 999px; background: var(--ui-accent); color: var(--ui-accent-contrast); font-size: 9px; font-weight: 800; }
+.accounts-actions-menu { position: relative; }
+.accounts-actions-menu summary { display: inline-grid; width: 34px; height: 34px; place-items: center; border-radius: var(--ui-radius-sm); color: var(--ui-text-muted); cursor: pointer; list-style: none; }
+.accounts-actions-menu summary::-webkit-details-marker { display: none; }
+.accounts-actions-menu summary:hover { background: var(--ui-surface-muted); color: var(--ui-text); }
+.accounts-actions-menu__popover { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; display: grid; min-width: 176px; gap: 3px; padding: 6px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: var(--ui-surface); box-shadow: var(--ui-shadow-md); }
+.accounts-actions-menu__popover button { display: flex; min-height: 34px; align-items: center; gap: 8px; padding: 0 9px; border: 0; border-radius: var(--ui-radius-sm); background: transparent; color: var(--ui-text); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.accounts-actions-menu__popover button:hover:not(:disabled) { background: var(--ui-surface-muted); }
+.accounts-actions-menu__popover button:disabled { opacity: 0.5; cursor: not-allowed; }
+.accounts-summary { display: grid; grid-template-columns: repeat(2, minmax(120px, 1fr)); gap: 18px; }
+.accounts-summary div { display: grid; gap: 4px; min-width: 0; padding: 2px 0 8px; }
+.accounts-summary span, .accounts-pagination span { color: var(--ui-text-muted); font-size: 12px; }
+.accounts-summary strong { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.accounts-error { margin: 0; padding: 9px 11px; border-radius: var(--ui-radius-sm); background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 13px; }
+.accounts-table { display: grid; min-width: 0; overflow-x: auto; border-top: 1px solid var(--ui-border); }
+.accounts-table__head, .accounts-table__row { display: grid; grid-template-columns: 96px minmax(180px, 1.7fr) minmax(128px, 1fr) minmax(128px, 1fr) 112px 118px 118px 72px; min-width: 980px; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--ui-border); }
+.accounts-table__head { color: var(--ui-text-muted); font-size: 12px; font-weight: 700; }
+.accounts-table__row { color: var(--ui-text-muted); font-size: 13px; }
+.accounts-table__row strong { overflow: hidden; color: var(--ui-text); text-overflow: ellipsis; white-space: nowrap; }
+.accounts-table__row-actions { display: flex; justify-content: flex-end; gap: 4px; }
+.accounts-table__loading, .empty-row { min-width: 980px; padding: 18px 0; border-bottom: 1px solid var(--ui-border); color: var(--ui-text-muted); font-size: 13px; }
+.status-badge { display: inline-flex; width: fit-content; padding: 2px 6px; border-radius: var(--ui-radius-sm); background: var(--ui-surface-muted); font-size: 12px; }
+.accounts-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.accounts-dialog { display: grid; width: min(520px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 48px)); overflow: hidden; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-lg); background: var(--ui-surface); box-shadow: var(--ui-shadow-md); }
+.accounts-dialog__header, .accounts-dialog__actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; }
+.accounts-dialog__header { border-bottom: 1px solid var(--ui-border); }
+.accounts-dialog__header h2 { margin: 0; font-size: 16px; }
+.accounts-dialog__actions { justify-content: flex-end; border-top: 1px solid var(--ui-border); }
+.accounts-dialog__content { display: grid; gap: 14px; overflow-y: auto; padding: 18px 16px; }
+.accounts-dialog__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.field { display: grid; gap: 6px; color: var(--ui-text); font-size: 13px; font-weight: 650; }
+.field input, .field select, .field textarea { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); background: var(--ui-bg); color: var(--ui-text); font: inherit; }
+.field input, .field select { min-height: 40px; padding: 0 10px; }
+.field textarea { resize: vertical; padding: 10px; line-height: 1.5; }
+.field input:focus, .field select:focus, .field textarea:focus { outline: 2px solid var(--ui-focus); outline-offset: 1px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 959px) { .accounts-page { padding: var(--workspace-topbar-padding-block) 16px 32px; } }
+@media (max-width: 640px) {
+  .accounts-toolbar { grid-template-columns: minmax(0, 1fr) auto; padding-left: var(--app-shell-mobile-nav-leading-padding); }
+  .accounts-tabs { grid-column: 1; justify-self: start; }
+  .accounts-toolbar__actions { grid-column: 2; }
+  .accounts-mode-tab { width: 34px; padding: 0; }
+  .accounts-mode-tab span { display: none; }
+  .accounts-summary strong { overflow-wrap: anywhere; white-space: normal; }
+  .accounts-dialog { width: 100vw; max-height: min(92vh, 92dvh); border-right: 0; border-bottom: 0; border-left: 0; border-radius: var(--ui-radius-lg) var(--ui-radius-lg) 0 0; }
+  .accounts-dialog__grid { grid-template-columns: 1fr; }
+}
+</style>

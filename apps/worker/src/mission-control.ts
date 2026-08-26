@@ -10,12 +10,7 @@ import { getUtcMsForLocalTime, normalizeTimeZone } from "./calendar";
 import { hasConfiguredAiProvider } from "./ai-providers";
 import { isCorePluginEnabled, listCorePluginRecords } from "./plugins";
 import { getSiteFileText } from "./sites";
-import {
-  createLocalExecutorPolicy,
-  createLocalExecutorRun,
-  getLocalExecutorRun,
-  getLocalExecutorSetupState,
-} from "./local-executor";
+import { getLocalExecutorSetupState } from "./local-executor";
 import type { Env } from "./types";
 
 export class MissionControlInputError extends Error {
@@ -469,7 +464,7 @@ const DASHBOARD_CARD_COMPONENT_KEYS = new Set([
   "SitesBlogSummaryCard",
 ]);
 const DASHBOARD_DESTINATIONS: Record<string, { path: string; requiresPluginId?: string }> = {
-  "mission.projects": { path: "/mission-control/projects" },
+  "mission.projects": { path: "/tasks" },
   "assistant.chat": { path: "/assistant" },
   "journal.today": { path: "/journal", requiresPluginId: "me3.journal" },
   "social.schedule": { path: "/social", requiresPluginId: "me3.social-publishing" },
@@ -531,16 +526,6 @@ export async function createMissionProject(env: Env, userId: string, input: unkn
   const slug = slugifyMissionProjectName(
     normalizeNullableText(body.slug) || name,
   );
-  const projectKind = normalizeProjectCreateKind(
-    body.projectType ?? body.type ?? body.sourceKind,
-  );
-  const localPath = normalizeNullableText(body.localPath ?? body.pathHint);
-  if (projectKind === "local" && !localPath) {
-    throw new MissionControlInputError("Paste the local folder path for this project");
-  }
-  if (projectKind === "local" && !(await isCorePluginEnabled(env, "me3.local-executor"))) {
-    throw new MissionControlInputError("Turn on Local Executor before adding a local project", 409);
-  }
   const duplicate = await env.DB.prepare(
     `SELECT id FROM mission_projects WHERE user_id = ? AND slug = ? LIMIT 1`,
   )
@@ -549,27 +534,6 @@ export async function createMissionProject(env: Env, userId: string, input: unkn
   if (duplicate) throw new MissionControlInputError("A project with that name already exists", 409);
 
   const id = crypto.randomUUID();
-  let sourceKind: MissionProjectRow["source_kind"] = "manual";
-  let sourceRef: string | null = null;
-  let metadata: Record<string, unknown> = {};
-
-  if (projectKind === "local") {
-    const { policy } = await createLocalExecutorPolicy(env, userId, {
-      projectLabel: name,
-      pathHint: localPath,
-      providerPreset: "opencode",
-      resourceKind: "repo",
-      allowedGitTarget: "none",
-      landingPolicy: "report_only",
-      dirtyRepo: "block",
-    });
-    sourceKind = "daemon_repo";
-    sourceRef = String(policy.id);
-    metadata = {
-      localExecutorPolicyId: policy.id,
-      localPath,
-    };
-  }
 
   try {
     await env.DB.prepare(
@@ -586,9 +550,9 @@ export async function createMissionProject(env: Env, userId: string, input: unkn
         normalizeNullableText(body.description),
         normalizeNullableText(body.color),
         normalizeNullableText(body.icon),
-        sourceKind,
-        sourceRef,
-        JSON.stringify(metadata),
+        "manual",
+        null,
+        "{}",
       )
       .run();
   } catch {
@@ -599,99 +563,6 @@ export async function createMissionProject(env: Env, userId: string, input: unkn
   return {
     project: await serializeProjectWithColumns(env, userId, (await getMissionProject(env, userId, id)) as MissionProjectRow),
   };
-}
-
-export async function getMissionTaskLocalExecutorRunInput(
-  env: Env,
-  userId: string,
-  taskId: string,
-) {
-  const task = await getMissionTask(env, userId, taskId);
-  if (!task || task.archived_at) throw new MissionControlInputError("Task not found", 404);
-  if (!task.project_id) {
-    throw new MissionControlInputError("Move this task into a local project first", 409);
-  }
-  const project = await getMissionProject(env, userId, task.project_id);
-  if (!project || project.source_kind !== "daemon_repo") {
-    throw new MissionControlInputError("Choose a local project before running this task locally", 409);
-  }
-
-  const projectMetadata = parseJsonRecord(project.metadata_json);
-  const projectPolicyId =
-    normalizeNullableText(projectMetadata.localExecutorPolicyId) ||
-    normalizeNullableText(project.source_ref);
-  if (!projectPolicyId) {
-    throw new MissionControlInputError("This local project is missing its runner policy", 409);
-  }
-
-  const prompt = [
-    `Project: ${project.name}`,
-    `Task: ${task.title}`,
-    task.description ? `Notes:\n${task.description}` : null,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
-  return {
-    projectPolicyId,
-    missionTaskId: task.id,
-    missionProjectId: project.id,
-    prompt,
-    promptSummary: task.title,
-    sourceKind: "manual",
-    ownerDirected: true,
-  };
-}
-
-export async function createMissionTaskLocalExecutorRun(
-  env: Env,
-  userId: string,
-  taskId: string,
-) {
-  const existing = await getActiveLocalExecutorRunForTask(env, userId, taskId);
-  if (existing) return existing;
-  return createLocalExecutorRun(
-    env,
-    userId,
-    await getMissionTaskLocalExecutorRunInput(env, userId, taskId),
-  );
-}
-
-async function queueLocalExecutorRunForDoingTask(
-  env: Env,
-  userId: string,
-  task: MissionTaskRow,
-) {
-  if (task.status !== "in_progress" || task.archived_at) return null;
-  const projectId = normalizeNullableText(task.project_id);
-  if (!projectId) return null;
-  const project = await getMissionProject(env, userId, projectId);
-  if (!project || project.source_kind !== "daemon_repo") return null;
-  const setup = await getLocalExecutorSetupState(env, userId);
-  if (!setup.ready) return null;
-  return createMissionTaskLocalExecutorRun(env, userId, task.id);
-}
-
-async function getActiveLocalExecutorRunForTask(env: Env, userId: string, taskId: string) {
-  const row = await env.DB.prepare(
-    `SELECT result_json
-     FROM mission_agent_runs
-     WHERE user_id = ? AND task_id = ? AND source = 'daemon'
-       AND status IN ('queued', 'running')
-     ORDER BY COALESCE(started_at, created_at) DESC
-     LIMIT 1`,
-  )
-    .bind(userId, taskId)
-    .first<{ result_json: string | null }>();
-  const runId = normalizeNullableText(
-    parseJsonRecord(row?.result_json ?? null).localExecutorRunId,
-  );
-  if (!runId) return null;
-  try {
-    return await getLocalExecutorRun(env, userId, runId);
-  } catch {
-    return null;
-  }
 }
 
 export async function updateMissionProject(
@@ -760,156 +631,6 @@ export async function archiveMissionProject(
     ok: true,
     projectId,
     archivedTasks: tasksResult.meta?.changes || 0,
-  };
-}
-
-export async function updateMissionProjectColumn(
-  env: Env,
-  userId: string,
-  projectId: string,
-  columnId: string,
-  input: unknown,
-) {
-  await ensureProjectExists(env, userId, projectId);
-  const existing = await getMissionProjectColumn(env, userId, projectId, columnId);
-  if (!existing) throw new MissionControlInputError("Project column not found", 404);
-  const body = isRecord(input) ? input : {};
-  const nameProvided = body.name !== undefined;
-  const name = nameProvided ? normalizeNullableText(body.name) : existing.name;
-  if (nameProvided && !name) throw new MissionControlInputError("Column name is required");
-  const nextName = name || existing.name;
-  const positionProvided = body.position !== undefined;
-  const position = positionProvided
-    ? normalizeProjectColumnPosition(body.position)
-    : null;
-  if (positionProvided && position === null) {
-    throw new MissionControlInputError("Column position is invalid");
-  }
-  if (!nameProvided && !positionProvided) {
-    throw new MissionControlInputError("Column update is required");
-  }
-
-  if (position !== null) {
-    const activeColumns = await listMissionProjectColumnRows(env, userId, projectId);
-    const reorderedColumns = activeColumns.filter((column) => column.id !== columnId);
-    const nextPosition = Math.max(0, Math.min(position, reorderedColumns.length));
-    reorderedColumns.splice(nextPosition, 0, { ...existing, name: nextName });
-
-    for (const [index, column] of reorderedColumns.entries()) {
-      await env.DB.prepare(
-        `UPDATE mission_project_columns
-         SET name = ?, position = ?, updated_at = datetime('now')
-         WHERE id = ? AND user_id = ? AND project_id = ? AND archived_at IS NULL`,
-      )
-        .bind(column.name, index, column.id, userId, projectId)
-        .run();
-    }
-
-    return {
-      column: serializeProjectColumn(
-        (await getMissionProjectColumn(env, userId, projectId, columnId)) as MissionProjectColumnRow,
-      ),
-      columns: await listMissionProjectColumns(env, userId, projectId),
-    };
-  }
-
-  await env.DB.prepare(
-    `UPDATE mission_project_columns
-     SET name = ?, updated_at = datetime('now')
-     WHERE id = ? AND user_id = ? AND project_id = ?`,
-  )
-    .bind(nextName, columnId, userId, projectId)
-    .run();
-
-  return {
-    column: serializeProjectColumn(
-      (await getMissionProjectColumn(env, userId, projectId, columnId)) as MissionProjectColumnRow,
-    ),
-    columns: await listMissionProjectColumns(env, userId, projectId),
-  };
-}
-
-export async function createMissionProjectColumn(
-  env: Env,
-  userId: string,
-  projectId: string,
-  input: unknown,
-) {
-  await ensureProjectExists(env, userId, projectId);
-  const body = isRecord(input) ? input : {};
-  const name = normalizeNullableText(body.name);
-  if (!name) throw new MissionControlInputError("Column name is required");
-  const status = normalizeMissionTaskStatus(body.status);
-  if (status === "cancelled") throw new MissionControlInputError("Column status is invalid");
-  const positionRow = await env.DB.prepare(
-    `SELECT COALESCE(MAX(position), -1) + 1 AS position
-     FROM mission_project_columns
-     WHERE user_id = ? AND project_id = ? AND archived_at IS NULL`,
-  )
-    .bind(userId, projectId)
-    .first<{ position: number }>();
-  const id = crypto.randomUUID();
-
-  await env.DB.prepare(
-    `INSERT INTO mission_project_columns
-       (id, user_id, project_id, name, status, position)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(id, userId, projectId, name, status || "backlog", positionRow?.position || 0)
-    .run();
-
-  return {
-    column: serializeProjectColumn(
-      (await getMissionProjectColumn(env, userId, projectId, id)) as MissionProjectColumnRow,
-    ),
-  };
-}
-
-export async function archiveMissionProjectColumn(
-  env: Env,
-  userId: string,
-  projectId: string,
-  columnId: string,
-  input: unknown,
-) {
-  await ensureProjectExists(env, userId, projectId);
-  const source = await getMissionProjectColumn(env, userId, projectId, columnId);
-  if (!source) throw new MissionControlInputError("Project column not found", 404);
-  const activeColumns = await listMissionProjectColumnRows(env, userId, projectId);
-  if (activeColumns.length < 2) {
-    throw new MissionControlInputError("A project needs at least one column", 409);
-  }
-  const body = isRecord(input) ? input : {};
-  const requestedTargetId = normalizeNullableText(body.moveToColumnId);
-  const target =
-    activeColumns.find((column) => column.id === requestedTargetId && column.id !== source.id) ||
-    activeColumns.find((column) => column.id !== source.id);
-  if (!target) throw new MissionControlInputError("Choose another column for moved tasks", 409);
-
-  await env.DB.prepare(
-    `UPDATE mission_tasks
-     SET column_id = ?, status = ?, updated_at = datetime('now')
-     WHERE user_id = ? AND project_id = ? AND archived_at IS NULL
-       AND (column_id = ? OR (column_id IS NULL AND status = ?))`,
-  )
-    .bind(target.id, target.status, userId, projectId, source.id, source.status)
-    .run();
-
-  const result = await env.DB.prepare(
-    `UPDATE mission_project_columns
-     SET archived_at = datetime('now'), updated_at = datetime('now')
-     WHERE id = ? AND user_id = ? AND project_id = ? AND archived_at IS NULL`,
-  )
-    .bind(source.id, userId, projectId)
-    .run();
-  if ((result.meta?.changes || 0) === 0) {
-    throw new MissionControlInputError("Project column not found", 404);
-  }
-
-  return {
-    ok: true,
-    movedToColumnId: target.id,
-    columns: (await listMissionProjectColumns(env, userId, projectId)),
   };
 }
 
@@ -1072,7 +793,6 @@ export async function createMissionTask(env: Env, userId: string, input: unknown
     .run();
 
   const task = (await getMissionTask(env, userId, id)) as MissionTaskRow;
-  await queueLocalExecutorRunForDoingTask(env, userId, task);
   return {
     task: serializeTask(task),
   };
@@ -1204,7 +924,6 @@ export async function updateMissionTask(
     .run();
 
   const task = (await getMissionTask(env, userId, taskId)) as MissionTaskRow;
-  await queueLocalExecutorRunForDoingTask(env, userId, task);
   return {
     task: serializeTask(task),
   };
@@ -3687,10 +3406,6 @@ function normalizeNullableText(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
-function normalizeProjectCreateKind(value: unknown): "standard" | "local" {
-  return value === "local" || value === "daemon_repo" ? "local" : "standard";
-}
-
 function normalizePriority(value: unknown, fallback = 3): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -3713,13 +3428,6 @@ function normalizeSortOrder(value: unknown): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return Math.max(0, Math.min(999, Math.round(parsed)));
-}
-
-function normalizeProjectColumnPosition(value: unknown): number | null {
-  if (value === null || value === "") return null;
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed)) return null;
-  return Math.max(0, Math.round(parsed));
 }
 
 function normalizeDashboardCardSize(value: unknown): DashboardCardSize | null {

@@ -38,7 +38,9 @@ const APP_FEATURE_MATCHERS: AppFeatureMatcher[] = [
   { id: "assistant", matches: (path) => matchesPathPrefix(path, "/assistant") },
   {
     id: "mission-control",
-    matches: (path) => matchesPathPrefix(path, "/mission-control"),
+    matches: (path) =>
+      matchesPathPrefix(path, "/tasks") ||
+      matchesPathPrefix(path, "/mission-control"),
   },
   { id: "journal", matches: (path) => matchesPathPrefix(path, "/journal") },
   { id: "calendar", matches: (path) => matchesPathPrefix(path, "/calendar") },

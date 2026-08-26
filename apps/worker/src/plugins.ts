@@ -473,7 +473,7 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   name: "ME3 Tasks and Projects",
   version: "0.1.0",
   description:
-    "Operational workspace for reviewing projects, tasks, approvals, private memory, sources, and assistant activity.",
+    "Focused owner workspace for organising projects and tasks across Now, Backlog, Review, and Completed.",
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
@@ -711,7 +711,7 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   dashboardQuickActions: [
     {
       id: "mission.projects",
-      label: "View Projects",
+      label: "View Tasks",
       icon: "ListChecks",
       defaultEnabled: false,
       destinationId: "mission.projects",
@@ -1300,12 +1300,6 @@ const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
     {
       id: "local-executor.runs.api",
       path: "/api/local-executor/runs",
-      methods: ["POST"],
-      auth: "owner",
-    },
-    {
-      id: "local-executor.mission-task-run.api",
-      path: "/api/mission-control/tasks/:id/local-run",
       methods: ["POST"],
       auth: "owner",
     },

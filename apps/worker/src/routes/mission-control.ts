@@ -1,21 +1,17 @@
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
 import { getAiGatewayUsageSummary } from "../ai-gateway";
 import { getLiveDailyBriefing } from "../assistant-jobs";
-import { LocalExecutorInputError } from "../local-executor";
 import {
   MissionControlInputError,
   archiveMissionProject,
   approveMissionMemory,
-  archiveMissionProjectColumn,
   archiveMissionTask,
   clearMissionActivity,
   createMissionContextSource,
   createMissionMemory,
   createMissionProject,
-  createMissionProjectColumn,
   createMissionTask,
   createMissionTaskFromJournal,
-  createMissionTaskLocalExecutorRun,
   createMissionWheelSnapshot,
   deleteMissionContextSource,
   deleteMissionMemory,
@@ -45,7 +41,6 @@ import {
   updateMissionDashboard,
   updateMissionMemory,
   updateMissionProject,
-  updateMissionProjectColumn,
   updateMissionTask,
   updateMissionWheelSettings,
 } from "../mission-control";
@@ -238,27 +233,6 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
     }
   });
 
-  app.post("/api/mission-control/projects/:id/columns", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-    const blocked = await requireMissionControlPlugin(c);
-    if (blocked) return blocked;
-
-    try {
-      return c.json(
-        await createMissionProjectColumn(
-          c.env,
-          ownerId,
-          c.req.param("id"),
-          await c.req.json().catch(() => ({})),
-        ),
-        201,
-      );
-    } catch (error) {
-      return missionControlErrorResponse(c, error);
-    }
-  });
-
   app.patch("/api/mission-control/projects/:id", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
@@ -288,48 +262,6 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
     try {
       return c.json(
         await archiveMissionProject(c.env, ownerId, c.req.param("id")),
-      );
-    } catch (error) {
-      return missionControlErrorResponse(c, error);
-    }
-  });
-
-  app.patch("/api/mission-control/projects/:id/columns/:columnId", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-    const blocked = await requireMissionControlPlugin(c);
-    if (blocked) return blocked;
-
-    try {
-      return c.json(
-        await updateMissionProjectColumn(
-          c.env,
-          ownerId,
-          c.req.param("id"),
-          c.req.param("columnId"),
-          await c.req.json().catch(() => ({})),
-        ),
-      );
-    } catch (error) {
-      return missionControlErrorResponse(c, error);
-    }
-  });
-
-  app.delete("/api/mission-control/projects/:id/columns/:columnId", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-    const blocked = await requireMissionControlPlugin(c);
-    if (blocked) return blocked;
-
-    try {
-      return c.json(
-        await archiveMissionProjectColumn(
-          c.env,
-          ownerId,
-          c.req.param("id"),
-          c.req.param("columnId"),
-          await c.req.json().catch(() => ({})),
-        ),
       );
     } catch (error) {
       return missionControlErrorResponse(c, error);
@@ -420,27 +352,6 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
       return c.json(await getMissionTaskDetail(c.env, ownerId, c.req.param("id")));
     } catch (error) {
       return missionControlErrorResponse(c, error);
-    }
-  });
-
-  app.post("/api/mission-control/tasks/:id/local-run", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-    const missionBlocked = await requireMissionControlPlugin(c);
-    if (missionBlocked) return missionBlocked;
-    const localExecutorBlocked = await requireLocalExecutorPlugin(c);
-    if (localExecutorBlocked) return localExecutorBlocked;
-
-    try {
-      return c.json(
-        await createMissionTaskLocalExecutorRun(c.env, ownerId, c.req.param("id")),
-        201,
-      );
-    } catch (error) {
-      if (error instanceof MissionControlInputError) {
-        return missionControlErrorResponse(c, error);
-      }
-      return localExecutorErrorResponse(c, error);
     }
   });
 
@@ -809,20 +720,8 @@ async function requireMissionControlPlugin(c: AppContext) {
   return c.json({ ok: false, error: "Tasks and Projects are disabled" }, 403);
 }
 
-async function requireLocalExecutorPlugin(c: AppContext) {
-  if (await isCorePluginEnabled(c.env, "me3.local-executor")) return null;
-  return c.json({ ok: false, error: "Local Executor is disabled" }, 403);
-}
-
 function missionControlErrorResponse(c: AppContext, error: unknown) {
   if (error instanceof MissionControlInputError) {
-    return c.json({ ok: false, error: error.message }, error.status as any);
-  }
-  throw error;
-}
-
-function localExecutorErrorResponse(c: AppContext, error: unknown) {
-  if (error instanceof LocalExecutorInputError) {
     return c.json({ ok: false, error: error.message }, error.status as any);
   }
   throw error;
