@@ -121,7 +121,7 @@ export type ManagedCampaignEventBatch = {
 
 export type ManagedCampaignSenderStatus = {
   connected: boolean;
-  provider: "aws_ses";
+  provider: "aws_ses" | "postmark";
   sender?: {
     ref: string;
     domain: string;

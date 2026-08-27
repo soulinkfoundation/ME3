@@ -84,6 +84,7 @@ describe("campaign delivery lifecycle", () => {
   let requests: ManagedCampaignDeliveryRequest[];
   let fetcher: typeof fetch;
   let transportSenderRef: string;
+  let transportProvider: "aws_ses" | "postmark";
 
   beforeEach(async () => {
     database = new DatabaseSync(":memory:");
@@ -140,12 +141,13 @@ describe("campaign delivery lifecycle", () => {
     } as Env;
     requests = [];
     transportSenderRef = "sender-1";
+    transportProvider = "aws_ses";
     fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/campaign-sender")) {
         return Response.json({
           connected: true,
-          provider: "aws_ses",
+          provider: transportProvider,
           sender: {
             ref: transportSenderRef,
             domain: "campaigns.example.com",
@@ -237,6 +239,20 @@ describe("campaign delivery lifecycle", () => {
         "SELECT COUNT(*) AS count FROM email_campaign_audience_snapshots",
       ).get(),
     ).toEqual({ count: 0 });
+  });
+
+  it("accepts the active Postmark managed sender", async () => {
+    transportProvider = "postmark";
+
+    await expect(getCampaignTransportStatus(env, fetcher)).resolves.toMatchObject({
+      available: true,
+      managed: true,
+      ready: true,
+      sender: {
+        ref: "sender-1",
+        fromAddress: "campaign@campaigns.example.com",
+      },
+    });
   });
 
   it("applies delivery outcomes idempotently to local campaign and subscriber truth", async () => {

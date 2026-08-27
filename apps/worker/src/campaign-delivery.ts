@@ -106,7 +106,7 @@ export async function getCampaignTransportStatus(
     const sender = body?.sender;
     if (
       !body ||
-      body.provider !== "aws_ses" ||
+      (body.provider !== "aws_ses" && body.provider !== "postmark") ||
       typeof body.ready !== "boolean" ||
       (sender && (!sender.ref || !sender.fromAddress || !sender.domain))
     ) {
