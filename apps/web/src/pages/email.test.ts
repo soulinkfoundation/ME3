@@ -32,9 +32,13 @@ vi.mock("../composables/useAppToast", () => ({
 const routerReplace = vi.fn();
 const routerPush = vi.fn();
 let routeTab = "sent";
+let routePath = "/email";
 
 vi.mock("vue-router", () => ({
-  useRoute: () => ({ query: { tab: routeTab } }),
+  RouterView: {
+    template: '<div data-email-child-route="true" />',
+  },
+  useRoute: () => ({ path: routePath, query: { tab: routeTab } }),
   useRouter: () => ({
     replace: routerReplace,
     push: routerPush,
@@ -185,8 +189,16 @@ function mountEmailPage(attachTo?: Element) {
         RouterLink: true,
         WorkspaceTabs: {
           emits: ["change", "update:modelValue"],
-          template:
-            '<button data-folder="archive" @click="$emit(\'change\', \'archive\')"><slot /></button>',
+          template: `
+            <nav>
+              <button
+                v-for="tab in tabs"
+                :key="tab.id"
+                :data-folder="tab.id"
+                @click="$emit('change', tab.id)"
+              >{{ tab.label }}</button>
+            </nav>
+          `,
           props: ["tabs", "modelValue"],
         },
       },
@@ -199,6 +211,7 @@ describe("EmailPage", () => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
     routeTab = "sent";
+    routePath = "/email";
     document.body.innerHTML = '<div id="app-side-nav-mobile-page-controls"></div>';
     window.matchMedia = vi.fn().mockReturnValue({
       matches: true,
@@ -235,6 +248,39 @@ describe("EmailPage", () => {
       ),
     ).not.toBeNull();
     expect(wrapper.text()).toContain("ME3");
+  });
+
+  it("renders Campaigns as a mailbox tab and routes to its nested page", async () => {
+    const wrapper = mountEmailPage();
+    await flushPromises();
+
+    const campaigns = wrapper.get('[data-folder="campaigns"]');
+    expect(campaigns.text()).toBe("Campaigns");
+    await campaigns.trigger("click");
+
+    expect(routerPush).toHaveBeenCalledWith("/email/campaigns");
+  });
+
+  it("renders a nested Campaigns route instead of leaving the inbox visible", async () => {
+    routePath = "/email/campaigns";
+
+    const wrapper = mountEmailPage();
+    await flushPromises();
+
+    expect(wrapper.find('[data-email-child-route="true"]').exists()).toBe(true);
+    expect(wrapper.find(".mail-workspace").exists()).toBe(false);
+  });
+
+  it("renders the mobile Compose action as an icon-only button", async () => {
+    mountEmailPage();
+    await flushPromises();
+
+    const compose = document.querySelector(
+      ".mail-mobile-compose-btn",
+    ) as HTMLElement;
+    expect(compose.classList.contains("me3-btn--icon-only")).toBe(true);
+    expect(compose.getAttribute("aria-label")).toBe("Compose");
+    expect(compose.textContent?.trim()).toBe("");
   });
 
   it("reveals the empty list after bulk trash removes the open message", async () => {

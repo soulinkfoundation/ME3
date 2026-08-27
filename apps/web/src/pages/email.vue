@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
-import { useRoute, useRouter } from "vue-router";
+import { RouterView, useRoute, useRouter } from "vue-router";
 import AppDialog from "../components/AppDialog.vue";
 import Button from "../components/Button.vue";
 import PageLoading from "../components/PageLoading.vue";
@@ -308,6 +308,10 @@ const auth = useAuthStore();
 const mailboxCache = useMailboxCacheStore();
 const route = useRoute();
 const router = useRouter();
+/** File-based child routes render here instead of leaving the inbox visible. */
+const isNestedEmailTool = computed(() =>
+  route.path.startsWith("/email/campaigns"),
+);
 const contactsStore = useContactsStore();
 const { contacts } = storeToRefs(contactsStore);
 const mobileFolderMore = ref<HTMLDetailsElement | null>(null);
@@ -471,7 +475,7 @@ const emailTabIcons: Record<EmailTab, UiIconName> = {
 };
 const mailFolderTabs = computed(() => {
   const tabs: Array<{
-    id: Tab | "contacts";
+    id: Tab | "contacts" | "campaigns";
     label: string;
     icon: UiIconName;
     count?: number | null;
@@ -490,6 +494,12 @@ const mailFolderTabs = computed(() => {
     count: contacts.value.length > 0 ? contacts.value.length : null,
     ariaLabel: "Contacts",
   });
+  tabs.push({
+    id: "campaigns",
+    label: "Campaigns",
+    icon: "Send",
+    ariaLabel: "Campaigns",
+  });
   return tabs;
 });
 const primaryMailFolderTabs = computed(() =>
@@ -499,12 +509,12 @@ const primaryMailFolderTabs = computed(() =>
 );
 const overflowMailFolderTabs = computed(() =>
   mailFolderTabs.value.filter((tab) =>
-    ["archive", "trash", "contacts"].includes(tab.id),
+    ["archive", "trash", "contacts", "campaigns"].includes(tab.id),
   ),
 );
 
-function isEmailTab(tab: Tab | "contacts"): tab is EmailTab {
-  return tab !== "telegram" && tab !== "contacts";
+function isEmailTab(tab: Tab | "contacts" | "campaigns"): tab is EmailTab {
+  return tab !== "telegram" && tab !== "contacts" && tab !== "campaigns";
 }
 
 const activeFolderLabel = computed(() =>
@@ -1747,6 +1757,10 @@ function switchMailFolderTab(tabId: string) {
   if (mobileFolderMore.value) mobileFolderMore.value.open = false;
   if (tabId === "contacts") {
     void router.push("/contacts");
+    return;
+  }
+  if (tabId === "campaigns") {
+    void router.push("/email/campaigns");
     return;
   }
   if (emailTabOrder.includes(tabId as EmailTab)) {
@@ -3100,7 +3114,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <RouterView v-if="isNestedEmailTool" />
   <div
+    v-else
     class="agent-page"
     :class="{ 'agent-page--with-mobile-controls': isEmailTab(activeTab) }"
   >
@@ -3133,18 +3149,17 @@ onBeforeUnmount(() => {
           <UiIcon name="Search" :size="18" aria-hidden="true" />
         </Button>
         <Button
-          color="outline"
+          color="ghost"
           shape="soft"
           size="compact"
-          class="mail-mobile-compose-btn"
+          icon-only
+          class="mail-mobile-icon-btn mail-mobile-compose-btn"
           type="button"
           aria-label="Compose"
+          title="Compose"
           @click="openComposeModal()"
         >
-          <template #icon>
-            <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
-          </template>
-          Compose
+          <UiIcon name="SquarePen" :size="18" aria-hidden="true" />
         </Button>
         <Button color="ghost" shape="soft" size="compact" icon-only class="mail-mobile-icon-btn" type="button"
           :disabled="loading"
@@ -3339,18 +3354,6 @@ onBeforeUnmount(() => {
                     </div>
                   </details>
                 </div>
-                <Button
-                  class="mail-campaigns-link"
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  to="/email/campaigns"
-                >
-                  <template #icon>
-                    <UiIcon name="Send" :size="16" aria-hidden="true" />
-                  </template>
-                  Campaigns
-                </Button>
               </aside>
 
               <section
@@ -4768,30 +4771,20 @@ onBeforeUnmount(() => {
 
 .mail-search--mobile-nav .mail-mobile-compose-btn {
   flex: 0 0 auto;
-  gap: 6px;
+  width: 36px;
+  height: 36px;
   min-height: 36px;
-  padding-inline: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  background: var(--ui-surface, var(--color-bg));
-  border-color: var(--ui-border, var(--color-border));
-  color: var(--ui-text, var(--color-text));
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text-muted, var(--color-text-muted));
 }
 
 .mail-search--mobile-nav .mail-mobile-compose-btn:hover:not(:disabled),
 .mail-search--mobile-nav .mail-mobile-compose-btn:focus-visible {
   background: var(--ui-surface-muted, var(--color-bg-subtle));
-  border-color: var(--ui-border, var(--color-border));
+  border-color: transparent;
   color: var(--ui-text, var(--color-text));
-}
-
-.mail-search--mobile-nav .mail-mobile-compose-btn :deep(.me3-btn__icon),
-.mail-search--mobile-nav .mail-mobile-compose-btn :deep(.me3-btn__label) {
-  display: inline-flex;
-  align-items: center;
-  line-height: 1;
-  color: inherit;
 }
 
 .mail-mobile-icon-btn {
@@ -4997,12 +4990,6 @@ onBeforeUnmount(() => {
 
 .mail-rail::-webkit-scrollbar {
   display: none;
-}
-
-.mail-campaigns-link {
-  flex: 0 0 auto;
-  margin-left: 8px;
-  margin-bottom: 4px;
 }
 
 .mail-folder-tabs--mobile {
