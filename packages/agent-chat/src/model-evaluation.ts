@@ -14,7 +14,7 @@ import {
 } from "./tool-runtime";
 import { CORE_CHAT_TOOLS } from "./tools";
 
-export const FIXED_MODEL_EVALUATION_SUITE_VERSION = "me3-fixed-39-v4";
+export const FIXED_MODEL_EVALUATION_SUITE_VERSION = "me3-fixed-40-v5";
 
 export type ModelEvaluationMode = "everyday" | "advanced";
 export type ModelEvaluationProvider = "workers-ai" | "openai" | "anthropic";

@@ -31,6 +31,9 @@ const router = useRouter();
 const route = useRoute();
 const auth = useAuthStore();
 const sites = useSitesStore();
+const remoteApiHost = import.meta.env.DEV
+  ? import.meta.env.VITE_REMOTE_API_HOST || ""
+  : "";
 
 const email = ref("");
 const name = ref("");
@@ -64,15 +67,23 @@ const isCustomPasswordSetupMode = computed(
     showAdvancedSetup.value &&
     !isResetMode.value,
 );
+const isManagedInstall = computed(() => deploymentMode.value === "managed");
+const canUseRemotePasswordSignIn = computed(
+  () => Boolean(remoteApiHost && ownerPasswordAuthConfigured.value),
+);
 const showAuthChoice = computed(
-  () =>
-    deploymentMode.value === "managed" ||
-    (!showAdvancedSetup.value &&
+  () => {
+    if (isManagedInstall.value) {
+      return !canUseRemotePasswordSignIn.value || !showAdvancedSetup.value;
+    }
+    return (
+      !showAdvancedSetup.value &&
       !isResetMode.value &&
       (!ownerAuthConfigured.value ||
-        (ownerMe3AuthConfigured.value && !ownerPasswordAuthConfigured.value))),
+        (ownerMe3AuthConfigured.value && !ownerPasswordAuthConfigured.value))
+    );
+  },
 );
-const isManagedInstall = computed(() => deploymentMode.value === "managed");
 const useBootstrapCodeInput = computed(
   () =>
     isSetupMode.value || isResetMode.value || isCustomPasswordSetupMode.value,
@@ -335,18 +346,18 @@ onMounted(loadConfig);
           {{ me3SignInLoading ? "Opening ME3..." : "Sign in with ME3.app" }}
         </button>
         <button
-          v-if="!isManagedInstall"
+          v-if="!isManagedInstall || canUseRemotePasswordSignIn"
           type="button"
           class="text-button"
           @click="startAdvancedSetup"
         >
-          Advanced setup for custom authentication
+          {{ isManagedInstall ? "Use installation password" : "Advanced setup for custom authentication" }}
         </button>
         <p v-if="error" class="error">{{ error }}</p>
       </section>
 
       <form
-        v-if="!showAuthChoice && !isManagedInstall"
+        v-if="!showAuthChoice && (!isManagedInstall || canUseRemotePasswordSignIn)"
         class="login-form"
         @submit.prevent="submitAuth"
       >
@@ -509,7 +520,7 @@ onMounted(loadConfig);
         </button>
 
         <button
-          v-if="ownerPasswordAuthConfigured && !isResetMode"
+          v-if="ownerPasswordAuthConfigured && !isResetMode && !remoteApiHost"
           class="text-button"
           type="button"
           @click="startResetMode"
@@ -525,7 +536,12 @@ onMounted(loadConfig);
           Back to sign in
         </button>
         <button
-          v-if="(isSetupMode || isCustomPasswordSetupMode) && showAdvancedSetup"
+          v-if="
+            showAdvancedSetup &&
+            (isSetupMode ||
+              isCustomPasswordSetupMode ||
+              (isManagedInstall && canUseRemotePasswordSignIn))
+          "
           class="text-button"
           type="button"
           @click="showAdvancedSetup = false"

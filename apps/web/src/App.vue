@@ -13,6 +13,9 @@ const AGENT_LAUNCHER_UI_ENABLED = false;
 
 const route = useRoute();
 const auth = useAuthStore();
+const remoteApiHost = import.meta.env.DEV
+  ? import.meta.env.VITE_REMOTE_API_HOST || ""
+  : "";
 const agentChatInstalled = ref(false);
 const soulinkModalOpen = ref(false);
 const soulinkStatusLoaded = ref(false);
@@ -222,6 +225,10 @@ watch(
     @dismiss-banner="dismissSoulinkBanner"
     @connection-active="handleSoulinkConnectionActive"
   />
+  <p v-if="remoteApiHost" class="remote-dev-banner" role="status">
+    <strong>Production data</strong>
+    <span>Local UI is connected to {{ remoteApiHost }}. Campaign delivery is blocked.</span>
+  </p>
   <Toaster
     position="bottom-center"
     theme="system"
@@ -258,5 +265,40 @@ watch(
 
 .app-root__mobile-page-controls:empty {
   display: none;
+}
+
+.remote-dev-banner {
+  position: fixed;
+  inset-inline-start: 50%;
+  inset-block-end: 12px;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  margin: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--ui-danger, #b42318);
+  border-radius: var(--ui-radius-sm, 6px);
+  background: var(--ui-danger-soft, #fff0ee);
+  box-shadow: var(--ui-shadow-sm, 0 4px 16px rgb(0 0 0 / 12%));
+  color: var(--ui-danger, #b42318);
+  font-size: 12px;
+  line-height: 1.25;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
+.remote-dev-banner strong,
+.remote-dev-banner span {
+  color: inherit;
+}
+
+@media (max-width: 640px) {
+  .remote-dev-banner {
+    align-items: flex-start;
+    width: calc(100vw - 24px);
+  }
 }
 </style>

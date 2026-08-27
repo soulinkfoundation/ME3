@@ -70,10 +70,10 @@ describe("fixed live model evaluation", () => {
     ).toBe(true);
   });
 
-  it("keeps one versioned 39-task suite across the required categories", () => {
-    expect(FIXED_MODEL_EVALUATION_SUITE_VERSION).toBe("me3-fixed-39-v4");
-    expect(FIXED_MODEL_EVALUATION_TASKS).toHaveLength(39);
-    expect(new Set(FIXED_MODEL_EVALUATION_TASKS.map((task) => task.id)).size).toBe(39);
+  it("keeps one versioned 40-task suite across the required categories", () => {
+    expect(FIXED_MODEL_EVALUATION_SUITE_VERSION).toBe("me3-fixed-40-v5");
+    expect(FIXED_MODEL_EVALUATION_TASKS).toHaveLength(40);
+    expect(new Set(FIXED_MODEL_EVALUATION_TASKS.map((task) => task.id)).size).toBe(40);
     expect(new Set(FIXED_MODEL_EVALUATION_TASKS.map((task) => task.category))).toEqual(
       new Set([
         "conversation",

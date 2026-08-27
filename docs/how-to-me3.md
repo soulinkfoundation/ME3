@@ -136,6 +136,25 @@ Rotating `SETUP_PASSWORD` does not change the owner account password. It only ch
 
 Use Account for owner-facing setup. Keep answers short and point owners back to the UI when it can do the work.
 
+### Local UI Against A Remote Installation
+
+For frontend work against an already-deployed Worker API, run only the web app
+locally and send its relative `/api` requests through Vite's local proxy:
+
+```bash
+ME3_DEV_API_TARGET=https://your-install.example.com pnpm dev:web
+```
+
+Open `http://localhost:4000` and choose **Use installation password**. This mode
+uses the remote installation's real data, so ME3 displays a persistent warning.
+Campaign send, test-send, and cancel requests are blocked by the local proxy;
+draft creation and editing still change the remote installation. The server is
+forced to `localhost` while this mode is active. Stop it when testing is done.
+
+This mode does not make newer Worker endpoints or migrations available. Use a
+managed sandbox or a stable deployment when the frontend depends on backend
+changes that are not yet installed remotely.
+
 ### Deploy Core
 
 Use `pnpm deploy:cloudflare` for manual Cloudflare deploys. It prepares D1 bindings, preserves any existing real `SITE_ASSETS` R2 binding, builds the app, applies D1 migrations, and runs `wrangler deploy`.

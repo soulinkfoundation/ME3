@@ -605,7 +605,19 @@ const RUNTIME_MIGRATIONS_EXCEPT_0023 = `
     ('0027_managed_runtime_lifecycle', '2026-07-18-managed-runtime-lifecycle-v2'),
     ('0028_journal_entry_revision', '2026-07-23-journal-entry-revision-v1'),
     ('0029_social_media_delivery', '2026-07-21-social-media-delivery-v1'),
-    ('0030_social_youtube_tiktok', '2026-07-21-social-youtube-tiktok-v2');
+    ('0030_social_youtube_tiktok', '2026-07-21-social-youtube-tiktok-v2'),
+    ('0031_social_publication_formats', '2026-07-25-social-publication-formats-v1'),
+    ('0032_social_version_publishing_settings', '2026-07-29-social-version-publishing-settings-v1'),
+    ('0033_manual_payments', '2026-07-31-manual-payments-v1'),
+    ('0034_owner_onboarding', '2026-07-31-owner-onboarding-v1'),
+    ('0035_calendar_source_event_dismissals', '2026-08-18-calendar-source-event-dismissals-v1'),
+    ('0036_calendar_push_notifications', '2026-08-19-calendar-push-notifications-v1'),
+    ('0037_event_booking_capacity', '2026-08-21-event-booking-capacity-v1'),
+    ('0038_site_roles', '2026-08-24-site-roles-v1'),
+    ('0040_remove_mission_task_review', '2026-08-26-remove-mission-task-review-v1'),
+    ('0041_email_campaign_foundations', '2026-08-26-email-campaign-foundations-v1'),
+    ('0042_email_campaign_assets', '2026-08-26-email-campaign-assets-v1'),
+    ('0043_email_campaign_delivery', '2026-08-26-email-campaign-delivery-v1');
 `;
 
 const CANONICAL_SOCIAL_SCHEMA = `
