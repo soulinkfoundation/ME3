@@ -88,9 +88,9 @@ describe("AppSideNav optional plugin links", () => {
         .findAll("nav .app-side-nav__row")
         .map((link) => link.attributes("aria-label")),
     ).toEqual([
-      "Journal",
       "Assistant",
       "Calendar",
+      "Journal",
       "Tasks",
       "Email",
       "Sites",

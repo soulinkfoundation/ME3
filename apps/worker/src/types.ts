@@ -37,6 +37,7 @@ export interface Env {
   ME3_AI_MODEL?: string;
   ME3_AI_DEFAULT_PROVIDER?: string;
   ME3_AI_DEFAULT_MODEL?: string;
+  ME3_WEB_SEARCH_MODEL?: string;
   ME3_AI_CHAT_PROVIDER?: string;
   ME3_AI_CHAT_MODEL?: string;
   ME3_AI_CHAT_BACKUP_MODEL?: string;

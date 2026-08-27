@@ -177,21 +177,6 @@ watch(navDrawerOpen, (isOpen) => {
     >
       <nav class="app-side-nav__links" aria-label="Primary">
         <RouterLink
-          v-if="journalInstalled"
-          to="/journal"
-          class="app-side-nav__row app-side-nav-control"
-          :class="{ 'app-side-nav__row--active': rowActive('journal') }"
-          aria-label="Journal"
-          title="Journal"
-          @click="closeNavDrawer"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS.journal
-          }}</span>
-          <span class="sr-only">Journal</span>
-        </RouterLink>
-
-        <RouterLink
           to="/assistant"
           class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('assistant') }"
@@ -221,6 +206,21 @@ watch(navDrawerOpen, (isOpen) => {
             APP_FEATURE_ICONS.calendar
           }}</span>
           <span class="sr-only">Calendar</span>
+        </RouterLink>
+
+        <RouterLink
+          v-if="journalInstalled"
+          to="/journal"
+          class="app-side-nav__row app-side-nav-control"
+          :class="{ 'app-side-nav__row--active': rowActive('journal') }"
+          aria-label="Journal"
+          title="Journal"
+          @click="closeNavDrawer"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.journal
+          }}</span>
+          <span class="sr-only">Journal</span>
         </RouterLink>
 
         <RouterLink

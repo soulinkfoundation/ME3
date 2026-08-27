@@ -78,6 +78,7 @@ import {
   runCoreAgentToolTurn,
   type CoreNetworkDirectoryToolServices,
   type CoreSchedulingToolServices,
+  type CoreWebResearchToolServices,
 } from "./core-agent-runtime";
 import { loadOwnerSnapshotContext } from "./owner-snapshot";
 import type { AgentModelUsage } from "./tool-runtime";
@@ -88,6 +89,7 @@ export {
   type CoreNetworkDirectoryOffering,
   type CoreNetworkDirectoryResult,
   type CoreNetworkDirectoryToolServices,
+  type CoreWebResearchToolServices,
   type CoreSchedulingContact,
   type CoreSchedulingOption,
   type CoreSchedulingToolServices,
@@ -2095,6 +2097,7 @@ export async function dispatchAgentSandboxTurn(
   streamOptions?: AgentChatRuntimeStreamOptions,
   schedulingServices?: CoreSchedulingToolServices,
   networkDirectoryServices?: CoreNetworkDirectoryToolServices,
+  webResearchServices?: CoreWebResearchToolServices,
 ): Promise<AgentSandboxDispatchResponse> {
   const dispatchStartedAt = performance.now();
   const turnPerformance = createAgentChatPerformanceMetrics();
@@ -2409,6 +2412,7 @@ export async function dispatchAgentSandboxTurn(
           },
           schedulingServices,
           networkDirectoryServices,
+          webResearchServices,
           streamOptions,
         })
       : await runModelTurn(route, messages, input.turnId, imageInputs);

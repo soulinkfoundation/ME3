@@ -55,6 +55,112 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.web.search",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Search the public web",
+    summary:
+      "Search current public web sources and return grounded answers with source links.",
+    category: "web",
+    handler: {
+      surface: "chat",
+      route: "core.web.search",
+    },
+    sideEffect: "read_external",
+    approvalMode: "none",
+    requiresSetup: [],
+    inputSchema: {
+      type: "object",
+      required: ["query"],
+      properties: {
+        query: {
+          type: "string",
+          description: "The current public-web question or topic to research.",
+        },
+        resultLimit: {
+          type: "integer",
+          description: "Maximum sources to return, from 1 to 10. Defaults to 5.",
+        },
+        freshnessMaxAgeSeconds: {
+          type: "integer",
+          description: "Optional maximum source age in seconds for time-sensitive research.",
+        },
+        allowedDomains: {
+          type: "array",
+          description: "Optional bare domains to restrict the search to.",
+          items: { type: "string" },
+        },
+        blockedDomains: {
+          type: "array",
+          description: "Optional bare domains to exclude from the search.",
+          items: { type: "string" },
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_web_searched",
+    examples: {
+      positive: [
+        "What changed in Cloudflare Agents this week?",
+        "Research the latest battery recycling regulations in Ireland.",
+      ],
+      negative: ["Search my mailbox for Cloudflare."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.web.open",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Open a public web page",
+    summary:
+      "Open a selected public web page and return bounded readable content for research.",
+    category: "web",
+    handler: {
+      surface: "chat",
+      route: "core.web.open",
+    },
+    sideEffect: "read_external",
+    approvalMode: "none",
+    requiresSetup: [],
+    inputSchema: {
+      type: "object",
+      required: ["url"],
+      properties: {
+        url: {
+          type: "string",
+          description: "An absolute public HTTP or HTTPS URL from the owner or search results.",
+          format: "uri",
+        },
+        retrievalMode: {
+          type: "string",
+          description: "Use auto unless the owner explicitly asks for static page content.",
+          enum: ["auto", "static"],
+        },
+        maxCharacters: {
+          type: "integer",
+          description: "Maximum readable characters to return, from 1,000 to 50,000.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_web_opened",
+    examples: {
+      positive: [
+        "Open the Cloudflare Agents documentation page I linked.",
+        "Read the source you found about Browser Run.",
+      ],
+      negative: ["Search the web for Browser Run."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.mailbox.search",
     owner: "core",
     pluginId: null,

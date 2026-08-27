@@ -617,7 +617,8 @@ const RUNTIME_MIGRATIONS_EXCEPT_0023 = `
     ('0040_remove_mission_task_review', '2026-08-26-remove-mission-task-review-v1'),
     ('0041_email_campaign_foundations', '2026-08-26-email-campaign-foundations-v1'),
     ('0042_email_campaign_assets', '2026-08-26-email-campaign-assets-v1'),
-    ('0043_email_campaign_delivery', '2026-08-26-email-campaign-delivery-v1');
+    ('0043_email_campaign_delivery', '2026-08-26-email-campaign-delivery-v1'),
+    ('0044_site_branding', '2026-08-27-site-branding-v1');
 `;
 
 const CANONICAL_SOCIAL_SCHEMA = `

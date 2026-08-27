@@ -37,8 +37,8 @@ const props = withDefaults(
   defineProps<{
     modelValue: string;
     placeholder?: string;
-    /** Full-bleed toolbar and borderless content for narrow writing surfaces (e.g. journal). */
-    variant?: "default" | "workspace";
+    /** Tailors the shared editor to a full site, narrow workspace, or email campaign. */
+    variant?: "default" | "workspace" | "campaign";
     /** Optional title shown below the toolbar (e.g. journal entry title). */
     showTitleField?: boolean;
     title?: string;
@@ -478,6 +478,7 @@ const CtaButtonBlock = Node.create({
       url: { default: "", renderHTML: () => ({}) },
       style: { default: "primary", renderHTML: () => ({}) },
       icon: { default: "", renderHTML: () => ({}) },
+      context: { default: "site", renderHTML: () => ({}) },
     };
   },
   parseHTML() {
@@ -496,6 +497,9 @@ const CtaButtonBlock = Node.create({
             url: element.getAttribute("data-url") || "",
             style,
             icon: element.getAttribute("data-icon") || "",
+            context: element.getAttribute("data-context") === "campaign"
+              ? "campaign"
+              : "site",
           };
         },
       },
@@ -514,6 +518,7 @@ const CtaButtonBlock = Node.create({
         "data-url": String(node.attrs.url || ""),
         "data-style": style,
         "data-icon": String(node.attrs.icon || ""),
+        "data-context": node.attrs.context === "campaign" ? "campaign" : "site",
       }),
       "\u200b",
     ];
@@ -796,11 +801,16 @@ const editor = useEditor({
   content: props.modelValue,
   extensions: [
     StarterKit.configure({
-      heading: { levels: [1, 2, 3] },
+      heading: { levels: props.variant === "campaign" ? [1, 2] : [1, 2, 3] },
       bulletList: {},
-      orderedList: {},
-      blockquote: {},
+      orderedList: props.variant === "campaign" ? false : {},
+      blockquote: props.variant === "campaign" ? false : {},
+      code: props.variant === "campaign" ? false : {},
+      codeBlock: props.variant === "campaign" ? false : {},
+      strike: props.variant === "campaign" ? false : {},
       horizontalRule: false,
+      link: false,
+      underline: false,
     }),
     Placeholder.configure({
       placeholder: props.placeholder ?? "Start writing...",
@@ -913,6 +923,28 @@ async function prepareImageAsset(
 ): Promise<CarouselImageResult> {
   if (blob.type && !allowedImageTypes.has(blob.type)) {
     throw new Error("Please upload a JPEG, PNG, WebP, or GIF image.");
+  }
+
+  if (props.variant === "campaign") {
+    if (!["image/jpeg", "image/png", "image/gif"].includes(blob.type)) {
+      throw new Error("Campaigns support JPEG, PNG, or GIF images.");
+    }
+    if (blob.size > 5 * 1024 * 1024) {
+      throw new Error("Campaign images must be 5 MB or smaller.");
+    }
+    const imageId = makeImageId();
+    const ext = extForMime(blob.type);
+    const uploadFilename = ensureImageFilename(filename, ext);
+    if (props.uploadImage) {
+      const uploaded = await props.uploadImage({
+        blob,
+        id: imageId,
+        filename: uploadFilename,
+        mimeType: blob.type,
+        ext,
+      });
+      return { id: uploaded.id || imageId, dataUrl: uploaded.src };
+    }
   }
 
   const resized = await resizeImage(blob, 1600);
@@ -1063,6 +1095,7 @@ function insertCtaButton() {
         url: "",
         style: "primary",
         icon: "",
+        context: props.variant === "campaign" ? "campaign" : "site",
       },
     })
     .run();
@@ -1301,11 +1334,17 @@ async function handleImageSelected(event: Event) {
 
   imageError.value = null;
 
-  const validFiles = files.filter((file) => allowedImageTypes.has(file.type));
+  const validFiles = files.filter(
+    (file) =>
+      allowedImageTypes.has(file.type) &&
+      (props.variant !== "campaign" || file.type !== "image/webp"),
+  );
   const skippedCount = files.length - validFiles.length;
 
   if (validFiles.length === 0) {
-    imageError.value = "Please upload a JPEG, PNG, WebP, or GIF image.";
+    imageError.value = props.variant === "campaign"
+      ? "Campaigns support JPEG, PNG, or GIF images."
+      : "Please upload a JPEG, PNG, WebP, or GIF image.";
     return;
   }
 
@@ -1427,7 +1466,10 @@ defineExpose({
 <template>
   <div
     class="tiptap-editor"
-    :class="{ 'tiptap-editor--workspace': variant === 'workspace' }"
+    :class="{
+      'tiptap-editor--workspace': variant === 'workspace',
+      'tiptap-editor--campaign': variant === 'campaign',
+    }"
   >
     <!-- Toolbar -->
     <div class="editor-toolbar" @mousedown.prevent>
@@ -1478,6 +1520,7 @@ defineExpose({
         <span class="toolbar-underline">U</span>
       </button>
       <button
+        v-if="variant !== 'campaign'"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('strike') }"
@@ -1487,6 +1530,7 @@ defineExpose({
         <s>S</s>
       </button>
       <button
+        v-if="variant !== 'campaign'"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('code') }"
@@ -1515,6 +1559,7 @@ defineExpose({
         H2
       </button>
       <button
+        v-if="variant !== 'campaign'"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('heading', { level: 3 }) }"
@@ -1534,6 +1579,7 @@ defineExpose({
         •
       </button>
       <button
+        v-if="variant !== 'campaign'"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('orderedList') }"
@@ -1543,6 +1589,7 @@ defineExpose({
         1.
       </button>
       <button
+        v-if="variant !== 'campaign'"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('taskList') }"
@@ -1552,8 +1599,9 @@ defineExpose({
       >
         <UiIcon name="CircleCheckBig" :size="16" aria-hidden="true" />
       </button>
-      <span class="toolbar-divider"></span>
+      <span v-if="variant !== 'campaign'" class="toolbar-divider"></span>
       <button
+        v-if="variant !== 'campaign'"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('blockquote') }"
@@ -1581,6 +1629,7 @@ defineExpose({
         <UiIcon name="Link" :size="16" aria-hidden="true" />
       </button>
       <button
+        v-if="variant !== 'campaign'"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('youtubeEmbed') }"
@@ -1601,6 +1650,7 @@ defineExpose({
         <UiIcon v-else name="Image" :size="16" aria-hidden="true" />
       </button>
       <button
+        v-if="variant !== 'campaign'"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('gallery') }"
@@ -1610,7 +1660,7 @@ defineExpose({
       >
         <UiIcon name="Images" :size="16" aria-hidden="true" />
       </button>
-      <template v-if="variant !== 'workspace'">
+      <template v-if="variant === 'default'">
         <span class="toolbar-divider"></span>
         <button
           type="button"
@@ -1642,16 +1692,20 @@ defineExpose({
         >
           <UiIcon name="LayoutGrid" :size="16" aria-hidden="true" />
         </button>
-        <button
-          type="button"
-          class="toolbar-btn"
-          :class="{ active: editor?.isActive('ctaButtonBlock') }"
-          @click="insertCtaButton"
-          title="Insert call-to-action button"
-          aria-label="Insert call-to-action button"
-        >
-          <UiIcon name="ExternalLink" :size="16" aria-hidden="true" />
-        </button>
+      </template>
+      <span v-if="variant !== 'workspace'" class="toolbar-divider"></span>
+      <button
+        v-if="variant !== 'workspace'"
+        type="button"
+        class="toolbar-btn"
+        :class="{ active: editor?.isActive('ctaButtonBlock') }"
+        @click="insertCtaButton"
+        title="Insert call-to-action button"
+        aria-label="Insert call-to-action button"
+      >
+        <UiIcon name="ExternalLink" :size="16" aria-hidden="true" />
+      </button>
+      <template v-if="variant === 'default'">
         <button
           type="button"
           class="toolbar-btn"
@@ -1707,11 +1761,11 @@ defineExpose({
       class="image-input"
       type="file"
       :multiple="imageInsertMode === 'gallery'"
-      accept="image/jpeg,image/png,image/webp,image/gif"
+      :accept="variant === 'campaign' ? 'image/jpeg,image/png,image/gif' : 'image/jpeg,image/png,image/webp,image/gif'"
       @change="handleImageSelected"
     />
     <input
-      v-if="variant !== 'workspace'"
+      v-if="variant === 'default'"
       ref="audioInputRef"
       class="image-input"
       type="file"

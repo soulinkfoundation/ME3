@@ -1315,7 +1315,7 @@ async function loadAssistantProjects() {
   assistantProjectsError.value = "";
   try {
     const response = await api.get<MissionProjectsResponse>(
-      "/tasks",
+      "/mission-control/projects",
     );
     assistantProjects.value = response.projects || [];
   } catch (err) {

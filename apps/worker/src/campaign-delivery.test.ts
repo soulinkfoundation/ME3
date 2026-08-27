@@ -20,6 +20,7 @@ const migrationFiles = [
   "../migrations/0041_email_campaign_foundations.sql",
   "../migrations/0042_email_campaign_assets.sql",
   "../migrations/0043_email_campaign_delivery.sql",
+  "../migrations/0044_site_branding.sql",
 ];
 const migrations = migrationFiles.map((path) =>
   readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8"),
@@ -124,6 +125,13 @@ describe("campaign delivery lifecycle", () => {
         ('ME3_CLOUD_CORE_TOKEN', 'managed-core-token');
     `);
     for (const migration of migrations) database.exec(migration);
+    database.exec(`
+      INSERT INTO site_branding
+        (site_id, display_name, logo_ref, accent_color, background_color,
+         surface_color, text_color)
+      VALUES
+        ('site-1', 'Publisher brand', NULL, '#226644', '#f5f5f0', '#ffffff', '#18201d');
+    `);
     env = {
       DB: new SqliteD1Database(database) as unknown as D1Database,
       ME3_DEPLOYMENT_MODE: "managed",
@@ -169,6 +177,11 @@ describe("campaign delivery lifecycle", () => {
     }) as typeof fetch;
 
     const created = await createCampaign(env, "owner", { siteId: "site-1" });
+    expect(created?.revision.document.brand).toMatchObject({
+      name: "Publisher brand",
+      accentColor: "#226644",
+      backgroundColor: "#f5f5f0",
+    });
     campaignId = String(created?.id);
     const document = created?.revision.document;
     await saveCampaignDraft(env, "owner", campaignId, {

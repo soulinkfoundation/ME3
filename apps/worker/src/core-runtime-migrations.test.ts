@@ -46,6 +46,7 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("email_campaign_events")).toBe(true);
     expect(db.tables.has("email_campaign_transport_state")).toBe(true);
     expect(db.tables.has("email_campaign_revision_assets")).toBe(true);
+    expect(db.tables.has("site_branding")).toBe(true);
     expect(db.columns.get("bookings")?.has("page_id")).toBe(true);
     expect(db.columns.get("bookings")?.has("action_id")).toBe(true);
     expect(db.columns.get("bookings")?.has("campaign")).toBe(true);
@@ -179,6 +180,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0043_email_campaign_delivery")).toBe(
       "2026-08-26-email-campaign-delivery-v1",
+    );
+    expect(db.migrations.get("0044_site_branding")).toBe(
+      "2026-08-27-site-branding-v1",
     );
     expect(
       db.statements.some(

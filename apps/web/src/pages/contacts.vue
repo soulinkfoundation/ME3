@@ -33,6 +33,7 @@ const contactMailboxTabs: Array<{
   { id: "archive", label: "Archive", icon: "Archive" },
   { id: "trash", label: "Trash", icon: "Trash2" },
   { id: "contacts", label: "Contacts", icon: "UsersRound" },
+  { id: "campaigns", label: "Campaigns", icon: "Send" },
 ];
 
 function openContactModal() {
@@ -41,6 +42,10 @@ function openContactModal() {
 
 function switchContactMailboxTab(tabId: string) {
   if (tabId === "contacts") return;
+  if (tabId === "campaigns") {
+    void router.push("/email/campaigns");
+    return;
+  }
   void router.push({
     path: "/email",
     query: tabId === "inbox" ? {} : { tab: tabId },

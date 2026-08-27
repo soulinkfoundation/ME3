@@ -52,10 +52,123 @@ export type CampaignDocument = {
 };
 
 export function campaignDocumentToEditorHtml(document: CampaignDocument): string {
-  const text = document.blocks.find(
+  const html = document.blocks.map((block) => blockToEditorHtml(block)).join("");
+  return html || "<p></p>";
+}
+
+export function campaignEditorHtmlToBlocks(
+  html: string,
+): Array<CampaignTextBlock | CampaignExtraBlock> {
+  const parsed = new DOMParser().parseFromString(html || "<p></p>", "text/html");
+  const blocks: Array<CampaignTextBlock | CampaignExtraBlock> = [];
+  let paragraphs: CampaignTextParagraph[] = [];
+
+  const flushText = () => {
+    if (!paragraphs.length) return;
+    blocks.push({
+      id: `campaign-copy-${blocks.length + 1}`,
+      type: "text",
+      paragraphs,
+    });
+    paragraphs = [];
+  };
+
+  for (const element of Array.from(parsed.body.children)) {
+    if (["P", "H1", "H2"].includes(element.tagName)) {
+      paragraphs.push(paragraphFromElement(element));
+      continue;
+    }
+    if (element.tagName === "UL") {
+      for (const item of Array.from(element.children)) {
+        if (item.tagName === "LI") {
+          paragraphs.push({ style: "bullet", spans: spansFromNode(item) });
+        }
+      }
+      continue;
+    }
+
+    flushText();
+    if (element.tagName === "HR") {
+      blocks.push({
+        id: `campaign-divider-${blocks.length + 1}`,
+        type: "divider",
+      });
+      continue;
+    }
+
+    const image = element.tagName === "IMG"
+      ? element
+      : element.matches("figure[data-tiptap-image]")
+        ? element.querySelector("img")
+        : null;
+    if (image instanceof HTMLImageElement) {
+      const assetId = image.getAttribute("data-image-id")?.trim() || "";
+      const src = image.getAttribute("src")?.trim() || "";
+      if (!assetId || !isAbsoluteHttpUrl(src)) continue;
+      const caption = element.tagName === "FIGURE"
+        ? element.querySelector("figcaption")?.textContent?.trim() || ""
+        : "";
+      blocks.push({
+        id: `campaign-image-${blocks.length + 1}`,
+        type: "image",
+        assetId,
+        src,
+        alt: image.getAttribute("alt")?.trim() || "",
+        ...(caption ? { caption } : {}),
+      });
+      continue;
+    }
+
+    if (element.matches("[data-me3-cta-button]")) {
+      const label = element.getAttribute("data-text")?.trim() || "";
+      const href = element.getAttribute("data-url")?.trim() || "";
+      if (!label || !isAbsoluteHttpUrl(href)) continue;
+      blocks.push({
+        id: `campaign-button-${blocks.length + 1}`,
+        type: "button",
+        label,
+        href,
+        alignment: "center",
+      });
+    }
+  }
+  flushText();
+
+  return blocks.length
+    ? blocks
+    : [{
+        id: "campaign-copy-1",
+        type: "text",
+        paragraphs: [{ style: "body", spans: [{ text: "" }] }],
+      }];
+}
+
+export function campaignEditorHtmlToTextBlock(html: string): CampaignTextBlock {
+  return campaignEditorHtmlToBlocks(html).find(
     (block): block is CampaignTextBlock => block.type === "text",
-  );
-  if (!text) return "<p></p>";
+  ) || {
+    id: "campaign-copy-1",
+    type: "text",
+    paragraphs: [{ style: "body", spans: [{ text: "" }] }],
+  };
+}
+
+function blockToEditorHtml(block: CampaignTextBlock | CampaignExtraBlock): string {
+  if (block.type === "text") return textBlockToEditorHtml(block);
+  if (block.type === "image") {
+    const image = `<img src="${escapeHtml(block.src)}" alt="${escapeHtml(block.alt)}" data-image-id="${escapeHtml(block.assetId)}">`;
+    return block.caption
+      ? `<figure data-tiptap-image="true">${image}<figcaption>${escapeHtml(block.caption)}</figcaption></figure>`
+      : image;
+  }
+  if (block.type === "button") {
+    return `<div data-me3-cta-button="true" data-text="${escapeHtml(block.label)}" data-url="${escapeHtml(block.href)}" data-style="primary" data-icon="" data-context="campaign">&#8203;</div>`;
+  }
+  if (block.type === "divider") return '<hr class="tiptap-divider">';
+  return "<p><br></p>";
+}
+
+function textBlockToEditorHtml(text: CampaignTextBlock): string {
   const html: string[] = [];
   let inList = false;
   for (const paragraph of text.paragraphs) {
@@ -81,26 +194,14 @@ export function campaignDocumentToEditorHtml(document: CampaignDocument): string
   return html.join("");
 }
 
-export function campaignEditorHtmlToTextBlock(html: string): CampaignTextBlock {
-  const parsed = new DOMParser().parseFromString(html || "<p></p>", "text/html");
-  const paragraphs: CampaignTextParagraph[] = [];
-  for (const element of parsed.body.querySelectorAll(":scope > p, :scope > h1, :scope > h2, :scope > ul > li")) {
-    const style =
-      element.tagName === "H1"
-        ? "heading1"
-        : element.tagName === "H2"
-          ? "heading2"
-          : element.tagName === "LI"
-            ? "bullet"
-            : "body";
-    paragraphs.push({ style, spans: spansFromNode(element) });
-  }
+function paragraphFromElement(element: Element): CampaignTextParagraph {
   return {
-    id: "campaign-copy",
-    type: "text",
-    paragraphs: paragraphs.length
-      ? paragraphs
-      : [{ style: "body", spans: [{ text: "" }] }],
+    style: element.tagName === "H1"
+      ? "heading1"
+      : element.tagName === "H2"
+        ? "heading2"
+        : "body",
+    spans: spansFromNode(element),
   };
 }
 
@@ -169,4 +270,13 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function isAbsoluteHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }

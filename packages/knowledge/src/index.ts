@@ -204,6 +204,7 @@ export type Me3AgentCapabilityCategory =
   | "local"
   | "content"
   | "sites"
+  | "web"
   | "accounts"
   | "provider";
 
@@ -213,10 +214,14 @@ export type Me3AgentCapabilitySchemaProperty = {
     | "number"
     | "integer"
     | "boolean"
-    | readonly ("string" | "number" | "integer" | "boolean" | "null")[];
+    | "array"
+    | readonly ("string" | "number" | "integer" | "boolean" | "array" | "null")[];
   description: string;
   enum?: readonly (string | number | boolean | null)[];
   format?: string;
+  items?: {
+    type: "string" | "number" | "integer" | "boolean" | "null";
+  };
 };
 
 export type Me3AgentCapabilitySchema = {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   campaignDocumentToEditorHtml,
+  campaignEditorHtmlToBlocks,
   campaignEditorHtmlToTextBlock,
   type CampaignDocument,
 } from "./campaignDocument";
@@ -57,5 +58,53 @@ describe("campaign document editor conversion", () => {
     expect(campaignDocumentToEditorHtml(document)).toBe(
       '<p><a href="https://example.com/?q=&quot;x&quot;">&lt;script&gt;alert(&quot;no&quot;)&lt;/script&gt;</a></p>',
     );
+  });
+
+  it("round-trips campaign images, dividers, and CTA buttons in editor order", () => {
+    const blocks = campaignEditorHtmlToBlocks(
+      '<p>Opening</p><hr><img src="https://example.com/photo.jpg" alt="A view" data-image-id="asset-1"><div data-me3-cta-button="true" data-text="Read more" data-url="https://example.com/read"></div><p>Closing</p>',
+    );
+
+    expect(blocks).toEqual([
+      {
+        id: "campaign-copy-1",
+        type: "text",
+        paragraphs: [{ style: "body", spans: [{ text: "Opening" }] }],
+      },
+      { id: "campaign-divider-2", type: "divider" },
+      {
+        id: "campaign-image-3",
+        type: "image",
+        assetId: "asset-1",
+        src: "https://example.com/photo.jpg",
+        alt: "A view",
+      },
+      {
+        id: "campaign-button-4",
+        type: "button",
+        label: "Read more",
+        href: "https://example.com/read",
+        alignment: "center",
+      },
+      {
+        id: "campaign-copy-5",
+        type: "text",
+        paragraphs: [{ style: "body", spans: [{ text: "Closing" }] }],
+      },
+    ]);
+  });
+
+  it("does not save an unfinished CTA button", () => {
+    expect(
+      campaignEditorHtmlToBlocks(
+        '<p>Hello</p><div data-me3-cta-button="true" data-text="Learn more" data-url=""></div>',
+      ),
+    ).toEqual([
+      {
+        id: "campaign-copy-1",
+        type: "text",
+        paragraphs: [{ style: "body", spans: [{ text: "Hello" }] }],
+      },
+    ]);
   });
 });

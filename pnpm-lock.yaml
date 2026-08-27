@@ -186,6 +186,9 @@ importers:
       '@me3-core/site-renderer':
         specifier: workspace:*
         version: link:../../packages/site-renderer
+      '@me3-core/web-research':
+        specifier: workspace:*
+        version: link:../../packages/web-research
       '@me3/knowledge':
         specifier: workspace:*
         version: link:../../packages/knowledge
@@ -232,6 +235,9 @@ importers:
       '@me3-core/plugin-social-publishing':
         specifier: workspace:*
         version: link:../social-publishing
+      '@me3-core/web-research':
+        specifier: workspace:*
+        version: link:../web-research
       '@me3/knowledge':
         specifier: workspace:*
         version: link:../knowledge

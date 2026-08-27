@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
+import { useRouter } from "vue-router";
 import { api } from "../../../api";
 import Button from "../../../components/Button.vue";
 import PageLoading from "../../../components/PageLoading.vue";
 import UiIcon from "../../../components/UiIcon.vue";
+import WorkspaceTabs from "../../../components/WorkspaceTabs.vue";
+import type { UiIconName } from "../../../utils/icons";
 
 definePage({
   meta: {
@@ -21,7 +24,6 @@ type CampaignSummary = {
   id: string;
   siteId: string;
   siteUsername: string;
-  name: string;
   subject: string;
   status: CampaignStatus;
   scheduledFor: string | null;
@@ -46,11 +48,44 @@ const error = ref("");
 const campaigns = ref<CampaignSummary[]>([]);
 const transport = ref<TransportStatus | null>(null);
 const cancellingId = ref<string | null>(null);
+const router = useRouter();
+const remoteApiHost = import.meta.env.DEV
+  ? import.meta.env.VITE_REMOTE_API_HOST || ""
+  : "";
 let refreshTimer: number | null = null;
+
+const campaignMailboxTabs: Array<{
+  id: string;
+  label: string;
+  icon: UiIconName;
+}> = [
+  { id: "inbox", label: "Inbox", icon: "Inbox" },
+  { id: "drafts", label: "Drafts", icon: "FileText" },
+  { id: "sent", label: "Sent", icon: "Send" },
+  { id: "archive", label: "Archive", icon: "Archive" },
+  { id: "trash", label: "Trash", icon: "Trash2" },
+  { id: "contacts", label: "Contacts", icon: "UsersRound" },
+  { id: "campaigns", label: "Campaigns", icon: "Send" },
+];
 
 const hasActiveCampaigns = computed(() =>
   campaigns.value.some((campaign) => ["scheduled", "sending"].includes(campaign.status)),
 );
+const canCreateCampaign = computed(() =>
+  Boolean(transport.value?.ready || remoteApiHost),
+);
+
+function switchCampaignMailboxTab(tabId: string) {
+  if (tabId === "campaigns") return;
+  if (tabId === "contacts") {
+    void router.push("/contacts");
+    return;
+  }
+  void router.push({
+    path: "/email",
+    query: tabId === "inbox" ? {} : { tab: tabId },
+  });
+}
 
 async function loadCampaigns(silent = false) {
   if (silent) refreshing.value = true;
@@ -80,7 +115,11 @@ function scheduleRefresh() {
 }
 
 async function cancelCampaign(campaign: CampaignSummary) {
-  if (!window.confirm(`Cancel “${campaign.name}”? Unsent recipients will not be emailed.`)) return;
+  const subject = campaign.subject.trim();
+  const prompt = subject
+    ? `Cancel “${subject}”? Unsent recipients will not be emailed.`
+    : "Cancel this campaign? Unsent recipients will not be emailed.";
+  if (!window.confirm(prompt)) return;
   cancellingId.value = campaign.id;
   try {
     await api.post(`/email/campaigns/${encodeURIComponent(campaign.id)}/cancel`);
@@ -104,7 +143,7 @@ function statusLabel(status: CampaignStatus) {
 }
 
 function statusDetail(campaign: CampaignSummary) {
-  if (campaign.status === "draft") return campaign.subject || "Not ready to send";
+  if (campaign.status === "draft") return "Not sent yet";
   if (campaign.status === "scheduled" && campaign.scheduledFor) {
     return `Scheduled ${formatDate(campaign.scheduledFor)}`;
   }
@@ -131,27 +170,47 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="campaigns-page">
-    <main class="campaigns-shell">
-      <header class="campaigns-header">
-        <div>
-          <router-link class="back-link" to="/email">
-            <UiIcon name="ArrowLeft" :size="16" aria-hidden="true" />
-            Email
-          </router-link>
-          <h1>Campaigns</h1>
-          <p>Simple updates for people who asked to hear from your Site.</p>
-        </div>
-        <div class="campaigns-header__actions">
-          <Button color="ghost" shape="soft" size="compact" icon-only :disabled="refreshing" aria-label="Refresh campaigns" title="Refresh" @click="loadCampaigns(true)">
-            <UiIcon name="RefreshCw" :size="18" aria-hidden="true" />
-          </Button>
-          <Button v-if="transport?.ready" color="primary" shape="soft" size="compact" to="/email/campaigns/create">
-            <template #icon><UiIcon name="Plus" :size="16" aria-hidden="true" /></template>
-            New campaign
-          </Button>
-        </div>
-      </header>
+  <main class="agent-page campaigns-page">
+    <Teleport to="#app-side-nav-mobile-page-controls" defer>
+      <div class="campaigns-mobile-nav">
+        <h1>Campaigns</h1>
+        <Button
+          v-if="canCreateCampaign"
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          to="/email/campaigns/create"
+          aria-label="Create campaign"
+          title="Create campaign"
+        >
+          <UiIcon name="SquarePen" :size="18" aria-hidden="true" />
+        </Button>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          to="/email"
+          aria-label="Close campaigns and return to Inbox"
+          title="Close"
+        >
+          <UiIcon name="X" :size="18" aria-hidden="true" />
+        </Button>
+      </div>
+    </Teleport>
+
+    <div class="campaigns-mail-tabs">
+      <WorkspaceTabs
+        :tabs="campaignMailboxTabs"
+        model-value="campaigns"
+        aria-label="Mailbox folders"
+        semantics="navigation"
+        @change="switchCampaignMailboxTab"
+      />
+    </div>
+
+    <div class="campaigns-shell">
 
       <PageLoading v-if="loading" label="Loading campaigns…" />
       <p v-else-if="error" class="notice notice--error" role="alert">{{ error }}</p>
@@ -162,7 +221,8 @@ onBeforeUnmount(() => {
             <strong id="campaign-availability-title">
               {{ transport.managed ? "Campaign sending is not ready" : "Campaign sending needs managed ME3" }}
             </strong>
-            <p v-if="transport.instructions[0]">{{ transport.instructions[0] }}</p>
+            <p v-if="remoteApiHost">You can create and edit drafts locally. Test and live delivery still need the managed sender.</p>
+            <p v-else-if="transport.instructions[0]">{{ transport.instructions[0] }}</p>
             <p v-else>Your campaign history remains available here; sending will resume only after a managed sender is ready.</p>
           </div>
         </section>
@@ -173,7 +233,7 @@ onBeforeUnmount(() => {
               <div class="campaign-card__title-row">
                 <div>
                   <span class="campaign-card__site">@{{ campaign.siteUsername }}</span>
-                  <h2>{{ campaign.name }}</h2>
+                  <h2 v-if="campaign.subject">{{ campaign.subject }}</h2>
                 </div>
                 <span class="status-pill" :class="`status-pill--${campaign.status}`">{{ statusLabel(campaign.status) }}</span>
               </div>
@@ -193,22 +253,22 @@ onBeforeUnmount(() => {
           <span aria-hidden="true"><UiIcon name="Send" :size="28" /></span>
           <h2>No campaigns yet</h2>
           <p>Create a focused update, review the eligible audience, then send now or schedule it.</p>
-          <Button v-if="transport?.ready" color="primary" shape="soft" to="/email/campaigns/create">Create campaign</Button>
+          <Button v-if="canCreateCampaign" color="primary" shape="soft" to="/email/campaigns/create">Create campaign</Button>
         </section>
       </template>
-    </main>
-  </div>
+    </div>
+  </main>
 </template>
 
 <style scoped>
-.campaigns-page { min-height: 100vh; padding: calc(var(--workspace-topbar-height) + 24px) 24px 72px; background: var(--ui-bg, var(--color-bg)); color: var(--ui-text, var(--color-text)); }
-.campaigns-shell { width: min(100%, 900px); margin: 0 auto; }
-.campaigns-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
-.campaigns-header h1 { margin: 10px 0 4px; font-size: clamp(1.8rem, 4vw, 2.4rem); letter-spacing: -0.04em; }
-.campaigns-header p { margin: 0; color: var(--ui-text-muted, var(--color-text-muted)); }
-.campaigns-header__actions, .campaign-card__actions { display: flex; align-items: center; gap: 8px; }
-.back-link { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-text-muted, var(--color-text-muted)); font-size: .86rem; font-weight: 700; text-decoration: none; }
-.back-link:hover { color: var(--ui-text, var(--color-text)); }
+.campaigns-page { display: flex; flex-direction: column; min-height: 100%; background: var(--ui-bg, var(--color-bg)); color: var(--ui-text, var(--color-text)); }
+.campaigns-mobile-nav { display: flex; align-items: center; gap: 10px; width: 100%; }
+.campaigns-mobile-nav h1 { flex: 1 1 auto; min-width: 0; overflow: hidden; margin: 0; color: var(--ui-text, var(--color-text)); font-size: 16px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.campaigns-mobile-nav :deep(.me3-btn) { flex: 0 0 36px; width: 36px; height: 36px; }
+.campaigns-mail-tabs { display: flex; justify-content: flex-start; width: 100%; padding: 4px 8px 0; border-bottom: 1px solid var(--ui-border, var(--color-border)); background: var(--ui-bg, var(--color-bg)); overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scroll-padding-inline: 8px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.campaigns-mail-tabs::-webkit-scrollbar { display: none; }
+.campaigns-shell { width: min(100%, 900px); margin: 0 auto; padding: 24px 24px 72px; box-sizing: border-box; }
+.campaign-card__actions { display: flex; align-items: center; gap: 8px; }
 .notice { display: flex; gap: 12px; margin-bottom: 20px; padding: 15px 16px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface-muted, var(--color-bg-subtle)); }
 .notice strong, .notice p { display: block; margin: 0; }
 .notice p { margin-top: 3px; color: var(--ui-text-muted, var(--color-text-muted)); line-height: 1.45; }
@@ -228,10 +288,11 @@ onBeforeUnmount(() => {
 .empty-campaigns > span { display: grid; width: 58px; height: 58px; place-items: center; border-radius: 16px; background: var(--ui-surface-muted, var(--color-bg-subtle)); color: var(--ui-accent, var(--color-accent)); }
 .empty-campaigns h2, .empty-campaigns p { margin: 0; }
 .empty-campaigns p { margin-bottom: 8px; color: var(--ui-text-muted, var(--color-text-muted)); line-height: 1.55; }
+@media (min-width: 768px) {
+  .campaigns-mail-tabs { justify-content: center; }
+}
 @media (max-width: 640px) {
-  .campaigns-page { padding-inline: 16px; }
-  .campaigns-header { align-items: flex-start; flex-direction: column; }
-  .campaigns-header__actions { width: 100%; justify-content: flex-end; }
+  .campaigns-shell { padding: 16px 16px 72px; }
   .campaign-card { align-items: stretch; flex-direction: column; }
   .campaign-card__actions { justify-content: flex-end; }
 }

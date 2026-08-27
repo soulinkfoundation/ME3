@@ -261,6 +261,24 @@ describe("EmailPage", () => {
     expect(routerPush).toHaveBeenCalledWith("/email/campaigns");
   });
 
+  it("keeps every mailbox folder in one tab list at mobile widths", async () => {
+    const wrapper = mountEmailPage();
+    await flushPromises();
+
+    expect(
+      wrapper.findAll("[data-folder]").map((tab) => tab.attributes("data-folder")),
+    ).toEqual([
+      "inbox",
+      "drafts",
+      "sent",
+      "archive",
+      "trash",
+      "contacts",
+      "campaigns",
+    ]);
+    expect(wrapper.text()).not.toContain("More");
+  });
+
   it("renders a nested Campaigns route instead of leaving the inbox visible", async () => {
     routePath = "/email/campaigns";
 

@@ -314,7 +314,6 @@ const isNestedEmailTool = computed(() =>
 );
 const contactsStore = useContactsStore();
 const { contacts } = storeToRefs(contactsStore);
-const mobileFolderMore = ref<HTMLDetailsElement | null>(null);
 let contactsRequested = contacts.value.length > 0;
 let providerSettingsRequested = false;
 let telegramHealthRequested = false;
@@ -502,16 +501,6 @@ const mailFolderTabs = computed(() => {
   });
   return tabs;
 });
-const primaryMailFolderTabs = computed(() =>
-  mailFolderTabs.value.filter((tab) =>
-    ["inbox", "drafts", "sent"].includes(tab.id),
-  ),
-);
-const overflowMailFolderTabs = computed(() =>
-  mailFolderTabs.value.filter((tab) =>
-    ["archive", "trash", "contacts", "campaigns"].includes(tab.id),
-  ),
-);
 
 function isEmailTab(tab: Tab | "contacts" | "campaigns"): tab is EmailTab {
   return tab !== "telegram" && tab !== "contacts" && tab !== "campaigns";
@@ -1754,7 +1743,6 @@ function switchTab(tab: Tab) {
 }
 
 function switchMailFolderTab(tabId: string) {
-  if (mobileFolderMore.value) mobileFolderMore.value.open = false;
   if (tabId === "contacts") {
     void router.push("/contacts");
     return;
@@ -3303,7 +3291,7 @@ onBeforeUnmount(() => {
             >
               <aside class="mail-rail">
                 <WorkspaceTabs
-                  class="mail-folder-tabs mail-folder-tabs--desktop"
+                  class="mail-folder-tabs"
                   :tabs="mailFolderTabs"
                   :model-value="activeTab"
                   aria-label="Mailbox folders"
@@ -3311,49 +3299,6 @@ onBeforeUnmount(() => {
                   @update:model-value="switchMailFolderTab"
                   @change="switchMailFolderTab"
                 />
-                <div class="mail-folder-tabs--mobile">
-                  <WorkspaceTabs
-                    class="mail-folder-tabs"
-                    :tabs="primaryMailFolderTabs"
-                    :model-value="activeTab"
-                    aria-label="Primary mailbox folders"
-                    semantics="navigation"
-                    @update:model-value="switchMailFolderTab"
-                    @change="switchMailFolderTab"
-                  />
-                  <details ref="mobileFolderMore" class="mail-folder-more">
-                    <summary
-                      :class="{
-                        'mail-folder-more__summary--active': [
-                          'archive',
-                          'trash',
-                        ].includes(activeTab),
-                      }"
-                    >
-                      <UiIcon name="Ellipsis" :size="16" aria-hidden="true" />
-                      <span>
-                        {{
-                          ['archive', 'trash'].includes(activeTab)
-                            ? activeFolderLabel
-                            : 'More'
-                        }}
-                      </span>
-                    </summary>
-                    <div class="mail-folder-more__menu">
-                      <button
-                        v-for="tab in overflowMailFolderTabs"
-                        :key="tab.id"
-                        type="button"
-                        :aria-current="activeTab === tab.id ? 'page' : undefined"
-                        @click="switchMailFolderTab(tab.id)"
-                      >
-                        <UiIcon :name="tab.icon" :size="16" aria-hidden="true" />
-                        <span>{{ tab.label }}</span>
-                        <small v-if="tab.count">{{ tab.count }}</small>
-                      </button>
-                    </div>
-                  </details>
-                </div>
               </aside>
 
               <section
@@ -4992,10 +4937,6 @@ onBeforeUnmount(() => {
   display: none;
 }
 
-.mail-folder-tabs--mobile {
-  display: none;
-}
-
 .conversation-list.conversation-list--mobile-hidden {
   display: none;
 }
@@ -6526,109 +6467,8 @@ onBeforeUnmount(() => {
   .mail-rail {
     align-items: stretch;
     padding: 4px 8px 0;
-    overflow: visible;
-  }
-
-  .mail-folder-tabs--desktop {
-    display: none;
-  }
-
-  .mail-folder-tabs--mobile {
-    display: flex;
-    align-items: flex-end;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .mail-folder-tabs--mobile .mail-folder-tabs {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .mail-folder-tabs--mobile :deep(.workspace-tabs__tab) {
-    min-height: 44px;
-  }
-
-  .mail-folder-more {
-    position: relative;
-    flex: 0 0 auto;
-  }
-
-  .mail-folder-more > summary {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 44px;
-    box-sizing: border-box;
-    margin: 0 0 -1px 3px;
-    padding: 5px 10px;
-    list-style: none;
-    border: 1px solid var(--ui-border, var(--color-border));
-    border-radius: var(--ui-radius-sm, 6px) var(--ui-radius-sm, 6px) 0 0;
-    background: var(--ui-bg, var(--color-bg));
-    color: var(--ui-text-muted, var(--color-text-muted));
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .mail-folder-more > summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .mail-folder-more > summary:focus-visible {
-    outline: 2px solid var(--ui-accent, var(--color-text));
-    outline-offset: 2px;
-  }
-
-  .mail-folder-more > .mail-folder-more__summary--active,
-  .mail-folder-more[open] > summary {
-    border-bottom-color: transparent;
-    background: var(--ui-surface-muted, var(--color-bg-subtle));
-    color: var(--ui-text, var(--color-text));
-    font-weight: 750;
-  }
-
-  .mail-folder-more__menu {
-    position: absolute;
-    z-index: 20;
-    top: calc(100% + 6px);
-    right: 0;
-    display: grid;
-    width: 190px;
-    padding: 5px;
-    border: 1px solid var(--ui-border, var(--color-border));
-    border-radius: var(--ui-radius-md, 8px);
-    background: var(--ui-surface, var(--color-bg));
-    box-shadow: var(--ui-shadow-md, 0 12px 32px rgba(0, 0, 0, 0.16));
-  }
-
-  .mail-folder-more__menu button {
-    display: grid;
-    grid-template-columns: 20px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 8px;
-    min-height: 44px;
-    padding: 0 10px;
-    border: 0;
-    border-radius: var(--ui-radius-sm, 6px);
-    background: transparent;
-    color: var(--ui-text, var(--color-text));
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .mail-folder-more__menu button:hover,
-  .mail-folder-more__menu button:focus-visible,
-  .mail-folder-more__menu button[aria-current="page"] {
-    background: var(--ui-surface-muted, var(--color-bg-subtle));
-    outline: none;
-  }
-
-  .mail-folder-more__menu small {
-    color: var(--ui-text-muted, var(--color-text-muted));
-    font-size: 11px;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 
   .conversation-list__head {

@@ -10,8 +10,9 @@ import {
   type CampaignAudienceSubscriber,
 } from "./campaign-audience";
 import { renderCampaign } from "./campaign-renderer";
+import { getSiteBranding } from "./site-branding";
 import { getOwnerProfile, getPublicSiteOrigin } from "./sites";
-import type { Env } from "./types";
+import type { DbSite, Env } from "./types";
 
 export class CampaignInputError extends Error {
   constructor(
@@ -67,12 +68,10 @@ export type OwnedCampaign = {
   revision: CampaignRevisionRow;
 };
 
-type SiteRow = {
-  id: string;
-  username: string;
-  custom_domain: string | null;
-  custom_domain_status: string | null;
-};
+type SiteRow = Pick<
+  DbSite,
+  "id" | "username" | "custom_domain" | "custom_domain_status"
+>;
 
 export async function listCampaigns(env: Env, ownerId: string) {
   const rows = await env.DB.prepare(
@@ -145,17 +144,21 @@ export async function createCampaign(
   const site = await getOwnedSite(env, ownerId, siteId);
   if (!site) throw new CampaignInputError("Site not found", 404, "site_not_found");
 
-  const owner = await getOwnerProfile(env, ownerId);
+  const branding = await getSiteBranding(env, site, true);
   const campaignId = newId("campaign");
   const revisionId = newId("campaign-revision");
   const name = normalizeText(input.name, 160) || "Untitled campaign";
   const document = createEmptyCampaignDocument({
-    name: owner?.name || site.username,
+    name: branding.displayName,
     homeUrl: getPublicSiteOrigin(env, {
       custom_domain:
         site.custom_domain_status === "active" ? site.custom_domain : null,
     }) || "https://me3.app/",
-    logoUrl: owner?.avatar_url || null,
+    logoUrl: branding.logoUrl,
+    accentColor: branding.accentColor,
+    backgroundColor: branding.backgroundColor,
+    surfaceColor: branding.surfaceColor,
+    textColor: branding.textColor,
   });
   document.blocks.push({
     id: "intro",

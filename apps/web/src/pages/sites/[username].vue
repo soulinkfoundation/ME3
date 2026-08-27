@@ -103,16 +103,33 @@ const isDeleting = ref(false);
 const publishBusy = ref(false);
 const publishError = ref("");
 type SiteProfile = NonNullable<SiteContent["profile"]>;
+type SiteBranding = {
+  siteId: string;
+  siteUsername: string;
+  displayName: string;
+  logoRef: string | null;
+  logoUrl: string | null;
+  accentColor: string;
+  backgroundColor: string;
+  surfaceColor: string;
+  textColor: string;
+  updatedAt: string | null;
+  persisted: boolean;
+};
 const siteProfile = ref<SiteProfile | null>(null);
+const siteBranding = ref<SiteBranding | null>(null);
 const siteLogoFileInput = ref<HTMLInputElement | null>(null);
 const siteLogoLoading = ref(false);
 const siteLogoSaving = ref(false);
+const siteBrandingLoading = ref(false);
+const siteBrandingSaving = ref(false);
 const siteLogoError = ref("");
 const siteLogoStatus = ref("");
 const siteLogoRevision = ref(0);
 const hasSiteLogo = computed(() => Boolean(siteProfile.value?.logo));
 const siteLogoPreview = computed(() => {
   const source =
+    siteBranding.value?.logoUrl ||
     siteProfile.value?.logo ||
     siteProfile.value?.avatar ||
     site.value?.avatar;
@@ -132,6 +149,82 @@ const siteLogoPreview = computed(() => {
     return source;
   }
 });
+
+function fallbackSiteBranding(): SiteBranding {
+  const profile = siteProfile.value;
+  const links = profile?.links as Record<string, unknown> | null | undefined;
+  const accent = typeof links?._accent === "string" && /^#[0-9a-f]{6}$/i.test(links._accent)
+    ? links._accent
+    : "#147d64";
+  return {
+    siteId: site.value?.id || "",
+    siteUsername: username.value,
+    displayName: profile?.name?.trim() || username.value,
+    logoRef: profile?.logo || profile?.avatar || null,
+    logoUrl: null,
+    accentColor: accent,
+    backgroundColor: "#f4f5f4",
+    surfaceColor: "#ffffff",
+    textColor: "#18201d",
+    updatedAt: null,
+    persisted: false,
+  };
+}
+
+async function loadSiteBranding(): Promise<SiteBranding | null> {
+  if (!isPersistentSite.value) return null;
+  siteBrandingLoading.value = true;
+  try {
+    const response = await api.get<{ branding: SiteBranding }>(
+      `/sites/${encodeURIComponent(username.value)}/branding`,
+    );
+    if (!response.branding) throw new Error("Site branding is unavailable");
+    siteBranding.value = response.branding;
+  } catch {
+    // Keeps local UI development usable against a Worker that predates Site branding.
+    siteBranding.value = fallbackSiteBranding();
+  } finally {
+    siteBrandingLoading.value = false;
+  }
+  return siteBranding.value;
+}
+
+async function saveSiteBranding(
+  overrides: Partial<SiteBranding> = {},
+  successMessage = "Site branding saved.",
+): Promise<boolean> {
+  const current = siteBranding.value || fallbackSiteBranding();
+  const next = { ...current, ...overrides };
+  siteBrandingSaving.value = true;
+  siteLogoError.value = "";
+  siteLogoStatus.value = "";
+  try {
+    const response = await api.put<{ branding: SiteBranding }>(
+      `/sites/${encodeURIComponent(username.value)}/branding`,
+      {
+        displayName: next.displayName,
+        logoRef: next.logoRef,
+        accentColor: next.accentColor,
+        backgroundColor: next.backgroundColor,
+        surfaceColor: next.surfaceColor,
+        textColor: next.textColor,
+      },
+    );
+    siteBranding.value = response.branding;
+    siteLogoRevision.value = Date.now();
+    siteLogoStatus.value = successMessage;
+    toastSuccess(successMessage);
+    return true;
+  } catch (caught) {
+    siteLogoError.value = caught instanceof Error
+      ? caught.message
+      : "Could not save Site branding.";
+    toastError(siteLogoError.value);
+    return false;
+  } finally {
+    siteBrandingSaving.value = false;
+  }
+}
 
 async function loadSiteProfile(): Promise<SiteProfile | null> {
   if (!isPersistentSite.value) return null;
@@ -155,10 +248,7 @@ function openSiteLogoPicker() {
   if (!siteLogoSaving.value) siteLogoFileInput.value?.click();
 }
 
-async function saveSiteProfile(
-  nextProfile: SiteProfile,
-  successMessage: string,
-): Promise<boolean> {
+async function saveSiteProfile(nextProfile: SiteProfile): Promise<boolean> {
   const sourceFile = new File(
     [JSON.stringify(nextProfile, null, 2)],
     "me.json",
@@ -172,8 +262,6 @@ async function saveSiteProfile(
 
   siteProfile.value = nextProfile;
   siteLogoRevision.value = Date.now();
-  siteLogoStatus.value = successMessage;
-  toastSuccess(successMessage);
   return true;
 }
 
@@ -207,7 +295,12 @@ async function handleSiteLogoSelect(event: Event) {
 
     const nextProfile = structuredClone(currentProfile);
     nextProfile.logo = `./${uploaded.path}`;
-    await saveSiteProfile(nextProfile, "Site logo updated.");
+    if (await saveSiteProfile(nextProfile)) {
+      await saveSiteBranding(
+        { logoRef: nextProfile.logo },
+        "Site logo updated.",
+      );
+    }
   } finally {
     siteLogoSaving.value = false;
   }
@@ -225,7 +318,12 @@ async function removeSiteLogo() {
 
     const nextProfile = structuredClone(currentProfile);
     delete nextProfile.logo;
-    await saveSiteProfile(nextProfile, "The site avatar is now used as the logo.");
+    if (await saveSiteProfile(nextProfile)) {
+      await saveSiteBranding(
+        { logoRef: nextProfile.avatar || null },
+        "The site avatar is now used as the logo.",
+      );
+    }
   } finally {
     siteLogoSaving.value = false;
   }
@@ -272,6 +370,7 @@ onMounted(async () => {
 
   if (isPersistentSite.value) {
     await loadSiteProfile();
+    await loadSiteBranding();
   }
 
   if (typeof route.query.edit === "string") {
@@ -850,74 +949,115 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         v-if="isPersistentSite"
         class="site-logo-section"
         aria-labelledby="site-logo-title"
-        :aria-busy="siteLogoLoading || siteLogoSaving"
+        :aria-busy="siteLogoLoading || siteLogoSaving || siteBrandingLoading || siteBrandingSaving"
       >
         <div class="section-heading">
           <div>
-            <h2 id="site-logo-title">Site logo</h2>
+            <h2 id="site-logo-title">Site branding</h2>
             <p>
-              Used in browser tabs and bookmarks. If you don’t add one, the site
-              avatar is used automatically.
+              Your logo, name, and colours are used for campaign emails. The logo
+              also appears in browser tabs and bookmarks.
             </p>
           </div>
         </div>
 
         <p
-          v-if="siteLogoLoading"
+          v-if="siteLogoLoading || siteBrandingLoading"
           class="site-logo-loading"
           role="status"
           aria-live="polite"
         >
-          Loading site logo…
+          Loading Site branding…
         </p>
-        <div v-else class="site-logo-control">
-          <div class="site-logo-preview" aria-hidden="true">
-            <img v-if="siteLogoPreview" :src="siteLogoPreview" alt="" />
-            <UiIcon v-else name="Image" :size="24" />
+        <template v-else>
+          <div class="site-logo-control">
+            <div class="site-logo-preview" aria-hidden="true">
+              <img v-if="siteLogoPreview" :src="siteLogoPreview" alt="" />
+              <UiIcon v-else name="Image" :size="24" />
+            </div>
+            <div class="site-logo-actions">
+              <Button
+                color="neutral"
+                shape="soft"
+                size="compact"
+                type="button"
+                :disabled="siteLogoSaving || siteBrandingSaving"
+                @click="openSiteLogoPicker"
+              >
+                {{
+                  siteLogoSaving
+                    ? "Saving…"
+                    : hasSiteLogo
+                      ? "Change logo"
+                      : "Upload logo"
+                }}
+              </Button>
+              <Button
+                v-if="hasSiteLogo"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                type="button"
+                :disabled="siteLogoSaving || siteBrandingSaving"
+                @click="removeSiteLogo"
+              >
+                Use avatar
+              </Button>
+              <input
+                ref="siteLogoFileInput"
+                class="site-logo-input"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                aria-label="Choose site logo"
+                aria-describedby="site-logo-hint"
+                :disabled="siteLogoSaving || siteBrandingSaving"
+                @change="handleSiteLogoSelect"
+              />
+              <span id="site-logo-hint" class="site-logo-hint">
+                Square PNG, JPEG, or WebP · 1.9 MB max
+              </span>
+            </div>
           </div>
-          <div class="site-logo-actions">
+
+          <div v-if="siteBranding" class="site-branding-fields">
+            <label class="site-branding-field site-branding-field--wide">
+              <span>Brand name</span>
+              <input
+                v-model="siteBranding.displayName"
+                type="text"
+                maxlength="120"
+                autocomplete="organization"
+              />
+            </label>
+            <label class="site-branding-field">
+              <span>Accent</span>
+              <input v-model="siteBranding.accentColor" type="color" />
+            </label>
+            <label class="site-branding-field">
+              <span>Background</span>
+              <input v-model="siteBranding.backgroundColor" type="color" />
+            </label>
+            <label class="site-branding-field">
+              <span>Surface</span>
+              <input v-model="siteBranding.surfaceColor" type="color" />
+            </label>
+            <label class="site-branding-field">
+              <span>Text</span>
+              <input v-model="siteBranding.textColor" type="color" />
+            </label>
             <Button
               color="neutral"
               shape="soft"
-              size="compact"
+              size="large"
               type="button"
-              :disabled="siteLogoSaving"
-              @click="openSiteLogoPicker"
+              class="site-branding-save"
+              :disabled="siteLogoSaving || siteBrandingSaving || !siteBranding.displayName.trim()"
+              @click="saveSiteBranding()"
             >
-              {{
-                siteLogoSaving
-                  ? "Saving…"
-                  : hasSiteLogo
-                    ? "Change logo"
-                    : "Upload logo"
-              }}
+              {{ siteBrandingSaving ? "Saving…" : "Save branding" }}
             </Button>
-            <Button
-              v-if="hasSiteLogo"
-              color="ghost"
-              shape="soft"
-              size="compact"
-              type="button"
-              :disabled="siteLogoSaving"
-              @click="removeSiteLogo"
-            >
-              Use avatar
-            </Button>
-            <input
-              ref="siteLogoFileInput"
-              class="site-logo-input"
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              aria-label="Choose site logo"
-              aria-describedby="site-logo-hint"
-              :disabled="siteLogoSaving"
-              @change="handleSiteLogoSelect"
-            />
-            <span id="site-logo-hint" class="site-logo-hint">
-              Square PNG, JPEG, or WebP · 1.9 MB max
-            </span>
           </div>
-        </div>
+        </template>
         <p v-if="siteLogoError" class="site-logo-error" role="alert">
           {{ siteLogoError }}
         </p>
@@ -1493,6 +1633,57 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   min-height: 44px;
 }
 
+.site-branding-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ui-border, var(--color-border));
+}
+
+.site-branding-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.site-branding-field--wide,
+.site-branding-save {
+  grid-column: 1 / -1;
+}
+
+.site-branding-field > span {
+  color: var(--ui-text, var(--color-text));
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.site-branding-field input {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+}
+
+.site-branding-field input[type="color"] {
+  padding: 4px;
+  cursor: pointer;
+}
+
+.site-branding-field input:focus-visible {
+  outline: 2px solid var(--ui-focus, var(--ui-accent));
+  outline-offset: 1px;
+}
+
+.site-branding-save {
+  width: 100%;
+}
+
 .site-logo-input {
   position: absolute;
   width: 1px;
@@ -1529,6 +1720,12 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 
 .site-logo-status {
   color: var(--ui-success, #15803d);
+}
+
+@media (max-width: 560px) {
+  .site-branding-fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 .domain-section :deep(.custom-domain-section) {

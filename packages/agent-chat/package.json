@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@me3/knowledge": "workspace:*",
+    "@me3-core/web-research": "workspace:*",
     "@me3-core/plugin-calendar": "workspace:*",
     "@me3-core/plugin-journal": "workspace:*",
     "@me3-core/plugin-landing-pages": "workspace:*",

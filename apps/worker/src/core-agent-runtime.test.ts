@@ -4,6 +4,7 @@ import {
   type AgentChatRuntimeStreamEvent,
   type AgentToolMessage,
 } from "@me3-core/plugin-agent-chat";
+import type { WebResearchResult } from "@me3-core/web-research";
 
 type ReminderRow = {
   id: string;
@@ -635,6 +636,116 @@ describe("Core Agent Runtime v2 reminders", () => {
     expect(secondRequest.messages.at(-1)?.content).toContain(
       "Reminder time must be in the future",
     );
+  });
+});
+
+describe("Core Agent Runtime public web tools", () => {
+  it("forces public web search and preserves the normalized source reply", async () => {
+    const database = createReminderDb();
+    const searchResult: WebResearchResult = {
+      status: "success",
+      query: "latest Cloudflare public web updates",
+      answer: "Cloudflare published a new update [1].",
+      sources: [
+        {
+          id: "web-source-1",
+          url: "https://example.com/cloudflare-update",
+          canonicalUrl: null,
+          title: "Cloudflare update",
+          publisher: "example.com",
+          publishedAt: null,
+          retrievedAt: "2026-08-27T00:00:00.000Z",
+        },
+      ],
+      evidence: [
+        {
+          id: "web-evidence-1",
+          sourceId: "web-source-1",
+          text: "The update is described on the source page.",
+          relevanceScore: null,
+        },
+      ],
+      citations: [
+        {
+          id: "web-citation-1",
+          sourceId: "web-source-1",
+          evidenceIds: ["web-evidence-1"],
+          label: "1",
+          answerSpan: { start: 34, end: 37 },
+        },
+      ],
+      searchedAt: "2026-08-27T00:00:00.000Z",
+      usage: {
+        requests: 1,
+        searchQueries: 1,
+        pagesOpened: 0,
+        inputTokens: null,
+        outputTokens: null,
+        bytesReceived: null,
+        cost: null,
+      },
+      trace: {
+        providerId: "test-web",
+        adapterId: "test-web-v1",
+        operation: "search",
+        providerRequestId: null,
+        model: null,
+        startedAt: "2026-08-27T00:00:00.000Z",
+        durationMs: 1,
+        attempts: 1,
+      },
+    };
+    const search = vi.fn().mockResolvedValue(searchResult);
+    const aiRun = vi.fn(
+      async (_model: string, _input: unknown, _options?: unknown): Promise<unknown> => ({
+        response: "A model summary that should be replaced.",
+      }),
+    );
+    aiRun
+      .mockResolvedValueOnce({
+        tool_calls: [
+          {
+            id: "web-search-1",
+            name: "core_web_search",
+            arguments: { query: "latest Cloudflare public web updates" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ response: "A model summary that should be replaced." });
+
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "web-search-request",
+      turnId: "web-search-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute(aiRun) as never,
+      messages: baseMessages("What are the latest public web updates about Cloudflare?"),
+      webResearchServices: {
+        search,
+        open: vi.fn(),
+      },
+    });
+
+    expect(response).toMatchObject({
+      specialist: "core.web.search",
+      replyText: expect.stringContaining("https://example.com/cloudflare-update"),
+    });
+    expect(response.replyText).not.toContain("A model summary that should be replaced.");
+    expect(search).toHaveBeenCalledWith(
+      {
+        query: "latest Cloudflare public web updates",
+        domainPolicy: { allowedDomains: [], blockedDomains: [] },
+      },
+      { requestId: "web-search-request", signal: undefined },
+    );
+    expect(database.executions[0]?.tool_name).toBe("core_web_search");
+    expect(aiRun.mock.calls[0]?.[1]).toMatchObject({
+      tool_choice: {
+        type: "function",
+        function: { name: "core_web_search" },
+      },
+    });
   });
 });
 

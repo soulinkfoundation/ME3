@@ -265,6 +265,41 @@ describe("TiptapEditor", () => {
     expect(wrapper.find('[title="Insert testimonials"]').exists()).toBe(false);
   });
 
+  it("shows only email-safe rich content controls in the campaign variant", async () => {
+    const wrapper = mount(TiptapEditor, {
+      props: {
+        modelValue: "",
+        variant: "campaign",
+      },
+    });
+
+    expect(wrapper.find('[title="Divider"]').exists()).toBe(true);
+    expect(wrapper.find('[title="Insert image"]').exists()).toBe(true);
+    expect(wrapper.find('[title="Insert call-to-action button"]').exists()).toBe(true);
+    expect(wrapper.find('[title="Heading 3"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Numbered list"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Task list"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Quote"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Embed YouTube video"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Insert gallery"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Insert audio"]').exists()).toBe(false);
+    expect(wrapper.find('.image-input').attributes('accept')).toBe(
+      'image/jpeg,image/png,image/gif',
+    );
+
+    await wrapper.find('[title="Insert call-to-action button"]').trigger("click");
+    expect(mockInsertContent).toHaveBeenLastCalledWith({
+      type: "ctaButtonBlock",
+      attrs: {
+        text: "Learn more",
+        url: "",
+        style: "primary",
+        icon: "",
+        context: "campaign",
+      },
+    });
+  });
+
   it("should insert reusable site and call-to-action blocks", async () => {
     const wrapper = mount(TiptapEditor, {
       props: { modelValue: "" },
@@ -290,6 +325,7 @@ describe("TiptapEditor", () => {
         url: "",
         style: "primary",
         icon: "",
+        context: "site",
       },
     });
   });

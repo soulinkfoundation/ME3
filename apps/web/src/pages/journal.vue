@@ -470,7 +470,7 @@ async function loadDay(date: string) {
 async function loadProjects() {
   if (projects.value.length > 0) return;
   const response = await api.get<{ projects: MissionProject[] }>(
-    "/tasks",
+    "/mission-control/projects",
   );
   projects.value = response.projects || [];
   if (!captureProjectId.value) captureProjectId.value = projects.value[0]?.id || "";

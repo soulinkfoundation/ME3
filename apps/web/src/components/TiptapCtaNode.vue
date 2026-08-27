@@ -18,6 +18,7 @@ const urlError = ref("");
 const text = computed(() => String(props.node?.attrs?.text || ""));
 const url = computed(() => String(props.node?.attrs?.url || ""));
 const icon = computed(() => String(props.node?.attrs?.icon || ""));
+const campaignContext = computed(() => props.node?.attrs?.context === "campaign");
 const style = computed<CtaStyle>(() => {
   const value = props.node?.attrs?.style;
   return value === "secondary" || value === "outline" ? value : "primary";
@@ -39,10 +40,13 @@ function normalizeUrl() {
     urlError.value = "Add a destination for this button.";
     return;
   }
-  const normalized = normalizeCtaUrl(url.value);
+  const normalized = campaignContext.value
+    ? normalizeCampaignUrl(url.value)
+    : normalizeCtaUrl(url.value);
   if (!normalized) {
-    urlError.value =
-      "Use an https:// URL, /page path, #section, mailto:, or tel: link.";
+    urlError.value = campaignContext.value
+      ? "Use a full http:// or https:// URL."
+      : "Use an https:// URL, /page path, #section, mailto:, or tel: link.";
     return;
   }
   urlError.value = "";
@@ -56,6 +60,17 @@ function updateIcon(value: string) {
 function updateStyle(value: CtaStyle) {
   props.updateAttributes({ style: value });
 }
+
+function normalizeCampaignUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value.trim());
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
 </script>
 
 <template>
@@ -63,7 +78,7 @@ function updateStyle(value: CtaStyle) {
     <div class="cta-node-header">
       <div>
         <strong>Call-to-action button</strong>
-        <span>Uses your published site button styles</span>
+        <span>{{ campaignContext ? "Uses your campaign accent colour" : "Uses your published site button styles" }}</span>
       </div>
       <button
         class="cta-node-remove"
@@ -94,7 +109,7 @@ function updateStyle(value: CtaStyle) {
           :value="url"
           type="text"
           inputmode="url"
-          placeholder="/services or https://example.com"
+          :placeholder="campaignContext ? 'https://example.com' : '/services or https://example.com'"
           :aria-invalid="Boolean(urlError)"
           @input="updateUrl"
           @blur="normalizeUrl"
@@ -102,7 +117,7 @@ function updateStyle(value: CtaStyle) {
       </label>
       <p v-if="urlError" class="cta-node-error" role="alert">{{ urlError }}</p>
 
-      <div class="cta-node-options">
+      <div v-if="!campaignContext" class="cta-node-options">
         <div class="cta-node-icon">
           <span>Icon <small>(optional)</small></span>
           <IconPicker

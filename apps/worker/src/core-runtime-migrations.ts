@@ -191,6 +191,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-08-26-email-campaign-delivery-v1",
     apply: applyEmailCampaignDeliveryMigration,
   },
+  {
+    id: "0044_site_branding",
+    checksum: "2026-08-27-site-branding-v1",
+    apply: applySiteBrandingMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -2722,6 +2727,26 @@ async function applyEmailCampaignDeliveryMigration(db: D1Database): Promise<void
   } else {
     for (const statement of statements) await statement.run();
   }
+}
+
+async function applySiteBrandingMigration(db: D1Database): Promise<void> {
+  if (!(await tableExists(db, "sites"))) {
+    throw new Error("Cannot apply 0044_site_branding: sites is missing");
+  }
+  await db.prepare(
+    `CREATE TABLE IF NOT EXISTS site_branding (
+      site_id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      logo_ref TEXT,
+      accent_color TEXT NOT NULL DEFAULT '#147d64',
+      background_color TEXT NOT NULL DEFAULT '#f4f5f4',
+      surface_color TEXT NOT NULL DEFAULT '#ffffff',
+      text_color TEXT NOT NULL DEFAULT '#18201d',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+    )`,
+  ).run();
 }
 
 async function tableExists(db: D1Database, tableName: string): Promise<boolean> {

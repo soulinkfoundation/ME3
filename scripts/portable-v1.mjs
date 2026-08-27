@@ -66,6 +66,7 @@ export const RUNTIME_MIGRATIONS = [
   ["0041_email_campaign_foundations", "2026-08-26-email-campaign-foundations-v1"],
   ["0042_email_campaign_assets", "2026-08-26-email-campaign-assets-v1"],
   ["0043_email_campaign_delivery", "2026-08-26-email-campaign-delivery-v1"],
+  ["0044_site_branding", "2026-08-27-site-branding-v1"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];
@@ -184,6 +185,7 @@ const COPIED_TABLES = [
   "scheduling_requests",
   "scheduling_time_types",
   "site_files",
+  "site_branding",
   "site_page_revisions",
   "site_pages",
   "social_carousel_media",
