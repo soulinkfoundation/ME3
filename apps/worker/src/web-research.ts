@@ -18,6 +18,14 @@ const SEARCH_ADAPTER_ID = "me3-web-search-v1";
 const CONTENT_PROVIDER_ID = "direct-http";
 const CONTENT_ADAPTER_ID = "direct-http-v1";
 const DEFAULT_SEARCH_MODEL = "openai/gpt-4o-mini";
+const DEFAULT_MANAGED_SEARCH_MODEL = "openai/gpt-5.4-mini";
+const MANAGED_SEARCH_MODELS = new Set([
+  "openai/gpt-4o-mini",
+  "openai/gpt-5.4-mini",
+  "openai/gpt-5.4-nano",
+  "openai/gpt-5.5",
+  "anthropic/claude-sonnet-4.6",
+]);
 const MAX_SEARCH_OUTPUT_TOKENS = 1_200;
 const FETCH_TIMEOUT_MS = 12_000;
 const MAX_FETCH_BYTES = 5 * 1024 * 1024;
@@ -76,18 +84,20 @@ async function runWebSearch(
 ): Promise<WebResearchResult> {
   const startedAt = performance.now();
   const model = configuredSearchModel(env);
+  const managed = isManagedInstallation(env);
   const gateway = env.AI
     ? await getAiGatewayRuntimeConfig(env, userId).catch(() => null)
     : null;
+  const gatewayId = gateway?.gatewayId || (managed && env.AI ? "default" : null);
   const gatewayReady = Boolean(
-    env.AI && gateway?.gatewayId && gateway.routeWorkersAi,
+    env.AI && gatewayId && (gateway?.routeWorkersAi || managed),
   );
 
   try {
     if (gatewayReady) {
       const payload = await runGatewaySearch(
         env,
-        gateway!.gatewayId!,
+        gatewayId!,
         model,
         request,
         context,
@@ -794,7 +804,15 @@ function classifyUpstreamError(error: unknown):
 }
 
 function configuredSearchModel(env: Env): string {
-  return env.ME3_WEB_SEARCH_MODEL?.trim() || DEFAULT_SEARCH_MODEL;
+  const configured = env.ME3_WEB_SEARCH_MODEL?.trim();
+  if (!isManagedInstallation(env)) return configured || DEFAULT_SEARCH_MODEL;
+  return configured && MANAGED_SEARCH_MODELS.has(configured)
+    ? configured
+    : DEFAULT_MANAGED_SEARCH_MODEL;
+}
+
+function isManagedInstallation(env: Env): boolean {
+  return env.ME3_DEPLOYMENT_MODE?.trim().toLowerCase() === "managed";
 }
 
 function searchProviderForModel(model: string, env: Env): "openai" | "anthropic" {

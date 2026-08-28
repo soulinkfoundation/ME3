@@ -62,8 +62,10 @@ export async function getSiteBranding(
   persistDefaults = false,
 ): Promise<SiteBranding> {
   const existing = await readSiteBranding(env, site.id);
-  if (existing) return serializeSiteBranding(env, site, existing, true);
-
+  if (existing) {
+    const seed = await deriveSiteBranding(env, site, existing.display_name);
+    return serializeSiteBranding(env, site, existing, seed.displayName, true);
+  }
   const seed = await deriveSiteBranding(env, site);
   if (!persistDefaults) return seed;
 
@@ -86,7 +88,7 @@ export async function getSiteBranding(
     .run();
   const persisted = await readSiteBranding(env, site.id);
   return persisted
-    ? serializeSiteBranding(env, site, persisted, true)
+    ? serializeSiteBranding(env, site, persisted, seed.displayName, true)
     : seed;
 }
 
@@ -95,13 +97,10 @@ export async function updateSiteBranding(
   site: SiteBrandingSite,
   input: Record<string, unknown>,
 ): Promise<SiteBranding> {
-  const displayName = normalizeText(input.displayName, 120);
-  if (!displayName) throw new SiteBrandingInputError("Site branding needs a display name");
-
+  const existing = await readSiteBranding(env, site.id);
+  const seed = await deriveSiteBranding(env, site, existing?.display_name);
   const logoRef = normalizeLogoRef(input.logoRef);
   const accentColor = requireColor(input.accentColor, "Accent colour");
-  const backgroundColor = requireColor(input.backgroundColor, "Background colour");
-  const surfaceColor = requireColor(input.surfaceColor, "Surface colour");
   const textColor = requireColor(input.textColor, "Text colour");
 
   await env.DB.prepare(
@@ -120,26 +119,28 @@ export async function updateSiteBranding(
   )
     .bind(
       site.id,
-      displayName,
+      seed.displayName,
       logoRef,
       accentColor,
-      backgroundColor,
-      surfaceColor,
+      DEFAULT_COLORS.backgroundColor,
+      DEFAULT_COLORS.surfaceColor,
       textColor,
     )
     .run();
 
   const updated = await readSiteBranding(env, site.id);
   if (!updated) throw new SiteBrandingInputError("Site branding could not be saved");
-  return serializeSiteBranding(env, site, updated, true);
+  return serializeSiteBranding(env, site, updated, seed.displayName, true);
 }
 
 async function deriveSiteBranding(
   env: Env,
   site: SiteBrandingSite,
+  fallbackDisplayName?: string,
 ): Promise<SiteBranding> {
   const profile = await readSiteProfileSeed(env, site.id);
-  const displayName = normalizeText(profile?.name, 120) || site.username;
+  const displayName =
+    normalizeText(profile?.name, 120) || fallbackDisplayName || site.username;
   const logoRef = tryNormalizeLogoRef(profile?.logo ?? profile?.avatar ?? null);
   const accentColor = normalizeColor(profile?.links?._accent, DEFAULT_COLORS.accentColor);
   return {
@@ -161,9 +162,14 @@ async function readSiteProfileSeed(
   env: Env,
   siteId: string,
 ): Promise<SiteProfileBrandSeed | null> {
-  const source =
-    (await getSiteFileText(env, siteId, "src/me.json")) ||
-    (await getSiteFileText(env, siteId, "public/me.json"));
+  let source: string | null;
+  try {
+    source =
+      (await getSiteFileText(env, siteId, "src/me.json")) ||
+      (await getSiteFileText(env, siteId, "public/me.json"));
+  } catch {
+    return null;
+  }
   if (!source) return null;
   try {
     const parsed = JSON.parse(source);
@@ -187,17 +193,18 @@ function serializeSiteBranding(
   env: Env,
   site: SiteBrandingSite,
   row: SiteBrandingRow,
+  displayName: string,
   persisted: boolean,
 ): SiteBranding {
   return {
     siteId: row.site_id,
     siteUsername: site.username,
-    displayName: row.display_name,
+    displayName,
     logoRef: row.logo_ref,
     logoUrl: resolveLogoUrl(env, site, row.logo_ref),
     accentColor: row.accent_color,
-    backgroundColor: row.background_color,
-    surfaceColor: row.surface_color,
+    backgroundColor: DEFAULT_COLORS.backgroundColor,
+    surfaceColor: DEFAULT_COLORS.surfaceColor,
     textColor: row.text_color,
     updatedAt: row.updated_at,
     persisted,

@@ -55,6 +55,10 @@ export default defineConfig({
                 }
               : undefined,
           },
+          '/preview': {
+            target: remoteApiUrl?.origin || 'http://127.0.0.1:8787',
+            changeOrigin: true,
+          },
         },
   },
 })

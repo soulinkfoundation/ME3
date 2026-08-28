@@ -139,6 +139,7 @@ import {
   createImportAttestationEvidence,
   createSiteFormPermissionEvidence,
 } from "../campaign-audience";
+import { listLatestSiteBuilderThreads } from "../site-builder-threads";
 
 type LandingPageGenerateBody = {
   username?: string;
@@ -167,11 +168,19 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       listSiteProfileMetadata(c.env, ownerId),
     ]);
 
+    const sites = result.results || [];
+    const builderThreads = await listLatestSiteBuilderThreads(
+      c.env.DB,
+      ownerId,
+      sites.map((site) => site.username),
+    );
+
     return c.json({
-      sites: (result.results || []).map((site) => ({
+      sites: sites.map((site) => ({
         ...site,
         bookings_enabled: profileMetadata.bookingEnabledSiteIds.has(site.id),
         avatar: profileMetadata.avatarBySiteId.get(site.id) || null,
+        builder_thread_id: builderThreads.get(site.username) || null,
       })),
     });
   });
@@ -1594,12 +1603,17 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const page = await getSitePage(c.env, site.id, c.req.param("pageId"));
     const document = page ? parsePageDocument(page.draft_json) : null;
     if (!page || !document) return c.json({ error: "Page not found" }, 404);
+    c.header("X-Frame-Options", "SAMEORIGIN");
+    c.header("Content-Security-Policy", "frame-ancestors 'self'");
     return c.html(
-      renderLandingPageHtml(document, site.username, {
-        pageId: page.id,
-        slug: page.slug,
-        campaign: page.slug,
-      }),
+      injectBaseHref(
+        renderLandingPageHtml(document, site.username, {
+          pageId: page.id,
+          slug: page.slug,
+          campaign: page.slug,
+        }),
+        `/preview/${site.username}/`,
+      ),
     );
   });
 

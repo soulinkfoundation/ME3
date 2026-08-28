@@ -3,7 +3,10 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { ref, computed, onBeforeUnmount, onMounted } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
 import { useSitesStore, type SiteContent } from "../../stores/sites";
-import { LANDING_PAGES_PLUGIN_ID } from "@me3-core/plugin-landing-pages";
+import {
+  AGENT_LANDING_PAGE_SITE_TEMPLATE_ID,
+  LANDING_PAGES_PLUGIN_ID,
+} from "@me3-core/plugin-landing-pages";
 import { api } from "../../api";
 import { useWizardStore } from "../../stores/wizard";
 import NewsletterSubscribers from "../../components/NewsletterSubscribers.vue";
@@ -61,6 +64,9 @@ const isPersistentSite = computed(
   () =>
     site.value?.site_role === "profile" ||
     site.value?.site_role === "organization",
+);
+const isAgentBuiltSite = computed(
+  () => site.value?.template_id === AGENT_LANDING_PAGE_SITE_TEMPLATE_ID,
 );
 const landingPagesFeatureEnabled = ref(false);
 const showLandingPageControls = computed(
@@ -178,10 +184,10 @@ async function loadSiteBranding(): Promise<SiteBranding | null> {
     const response = await api.get<{ branding: SiteBranding }>(
       `/sites/${encodeURIComponent(username.value)}/branding`,
     );
-    if (!response.branding) throw new Error("Site branding is unavailable");
+    if (!response.branding) throw new Error("Branding is unavailable");
     siteBranding.value = response.branding;
   } catch {
-    // Keeps local UI development usable against a Worker that predates Site branding.
+    // Keeps local UI development usable against a Worker that predates branding.
     siteBranding.value = fallbackSiteBranding();
   } finally {
     siteBrandingLoading.value = false;
@@ -191,7 +197,7 @@ async function loadSiteBranding(): Promise<SiteBranding | null> {
 
 async function saveSiteBranding(
   overrides: Partial<SiteBranding> = {},
-  successMessage = "Site branding saved.",
+  successMessage = "Branding saved.",
 ): Promise<boolean> {
   const current = siteBranding.value || fallbackSiteBranding();
   const next = { ...current, ...overrides };
@@ -202,11 +208,8 @@ async function saveSiteBranding(
     const response = await api.put<{ branding: SiteBranding }>(
       `/sites/${encodeURIComponent(username.value)}/branding`,
       {
-        displayName: next.displayName,
         logoRef: next.logoRef,
         accentColor: next.accentColor,
-        backgroundColor: next.backgroundColor,
-        surfaceColor: next.surfaceColor,
         textColor: next.textColor,
       },
     );
@@ -218,7 +221,7 @@ async function saveSiteBranding(
   } catch (caught) {
     siteLogoError.value = caught instanceof Error
       ? caught.message
-      : "Could not save Site branding.";
+      : "Could not save branding.";
     toastError(siteLogoError.value);
     return false;
   } finally {
@@ -390,7 +393,20 @@ function wizardSiteQuery() {
   };
 }
 
-function editInWizard() {
+function editSite() {
+  if (isAgentBuiltSite.value) {
+    router.push({
+      path: "/assistant",
+      query: {
+        mode: "site-builder",
+        ...(site.value?.builder_thread_id
+          ? { thread: site.value.builder_thread_id }
+          : { prompt: `Update the @${username.value} site: ` }),
+      },
+    });
+    return;
+  }
+
   router.push({
     path: "/create",
     query: wizardSiteQuery(),
@@ -863,18 +879,28 @@ Note: Opening index.html directly (file://) won't work due to browser security.
           <button
             v-if="isPersistentSite"
             class="action-card primary"
-            @click="editInWizard"
+            @click="editSite"
           >
             <span class="action-icon">
-              <UiIcon name="Pencil" :size="24" />
+              <UiIcon :name="isAgentBuiltSite ? 'Sparkles' : 'Pencil'" :size="24" />
             </span>
             <div class="action-content">
-              <strong>Edit Site</strong>
-              <p>Update your site using the wizard</p>
+              <strong>{{ isAgentBuiltSite ? "Continue building" : "Edit Site" }}</strong>
+              <p>
+                {{
+                  isAgentBuiltSite
+                    ? "Edit with ME3 in site builder"
+                    : "Update your site using the wizard"
+                }}
+              </p>
             </div>
           </button>
 
-          <button v-if="isPersistentSite" class="action-card" @click="writePost">
+          <button
+            v-if="isPersistentSite && !isAgentBuiltSite"
+            class="action-card"
+            @click="writePost"
+          >
             <span class="action-icon">
               <UiIcon name="Pencil" :size="24" />
             </span>
@@ -953,11 +979,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
       >
         <div class="section-heading">
           <div>
-            <h2 id="site-logo-title">Site branding</h2>
-            <p>
-              Your logo, name, and colours are used for campaign emails. The logo
-              also appears in browser tabs and bookmarks.
-            </p>
+            <h2 id="site-logo-title">Branding</h2>
           </div>
         </div>
 
@@ -967,91 +989,76 @@ Note: Opening index.html directly (file://) won't work due to browser security.
           role="status"
           aria-live="polite"
         >
-          Loading Site branding…
+          Loading branding…
         </p>
         <template v-else>
-          <div class="site-logo-control">
-            <div class="site-logo-preview" aria-hidden="true">
-              <img v-if="siteLogoPreview" :src="siteLogoPreview" alt="" />
-              <UiIcon v-else name="Image" :size="24" />
+          <div class="site-branding-controls">
+            <div class="site-logo-control">
+              <div class="site-logo-preview" aria-hidden="true">
+                <img v-if="siteLogoPreview" :src="siteLogoPreview" alt="" />
+                <UiIcon v-else name="Image" :size="24" />
+              </div>
+              <div class="site-logo-actions">
+                <Button
+                  color="neutral"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="siteLogoSaving || siteBrandingSaving"
+                  @click="openSiteLogoPicker"
+                >
+                  {{
+                    siteLogoSaving
+                      ? "Saving…"
+                      : hasSiteLogo
+                        ? "Change logo"
+                        : "Upload logo"
+                  }}
+                </Button>
+                <Button
+                  v-if="hasSiteLogo"
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="siteLogoSaving || siteBrandingSaving"
+                  @click="removeSiteLogo"
+                >
+                  Use avatar
+                </Button>
+                <input
+                  ref="siteLogoFileInput"
+                  class="site-logo-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  aria-label="Choose site logo"
+                  aria-describedby="site-logo-hint"
+                  :disabled="siteLogoSaving || siteBrandingSaving"
+                  @change="handleSiteLogoSelect"
+                />
+                <span id="site-logo-hint" class="site-logo-hint">
+                  1.9 MB max
+                </span>
+              </div>
             </div>
-            <div class="site-logo-actions">
-              <Button
-                color="neutral"
-                shape="soft"
-                size="compact"
-                type="button"
-                :disabled="siteLogoSaving || siteBrandingSaving"
-                @click="openSiteLogoPicker"
-              >
-                {{
-                  siteLogoSaving
-                    ? "Saving…"
-                    : hasSiteLogo
-                      ? "Change logo"
-                      : "Upload logo"
-                }}
-              </Button>
-              <Button
-                v-if="hasSiteLogo"
-                color="ghost"
-                shape="soft"
-                size="compact"
-                type="button"
-                :disabled="siteLogoSaving || siteBrandingSaving"
-                @click="removeSiteLogo"
-              >
-                Use avatar
-              </Button>
-              <input
-                ref="siteLogoFileInput"
-                class="site-logo-input"
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                aria-label="Choose site logo"
-                aria-describedby="site-logo-hint"
-                :disabled="siteLogoSaving || siteBrandingSaving"
-                @change="handleSiteLogoSelect"
-              />
-              <span id="site-logo-hint" class="site-logo-hint">
-                Square PNG, JPEG, or WebP · 1.9 MB max
-              </span>
-            </div>
-          </div>
 
-          <div v-if="siteBranding" class="site-branding-fields">
-            <label class="site-branding-field site-branding-field--wide">
-              <span>Brand name</span>
-              <input
-                v-model="siteBranding.displayName"
-                type="text"
-                maxlength="120"
-                autocomplete="organization"
-              />
-            </label>
-            <label class="site-branding-field">
-              <span>Accent</span>
+            <label v-if="siteBranding" class="site-branding-field">
+              <span>Primary</span>
               <input v-model="siteBranding.accentColor" type="color" />
             </label>
-            <label class="site-branding-field">
-              <span>Background</span>
-              <input v-model="siteBranding.backgroundColor" type="color" />
-            </label>
-            <label class="site-branding-field">
-              <span>Surface</span>
-              <input v-model="siteBranding.surfaceColor" type="color" />
-            </label>
-            <label class="site-branding-field">
+            <label v-if="siteBranding" class="site-branding-field">
               <span>Text</span>
               <input v-model="siteBranding.textColor" type="color" />
             </label>
+          </div>
+          <div v-if="siteBranding" class="site-branding-actions">
             <Button
               color="neutral"
               shape="soft"
               size="large"
               type="button"
               class="site-branding-save"
-              :disabled="siteLogoSaving || siteBrandingSaving || !siteBranding.displayName.trim()"
+              :disabled="siteLogoSaving || siteBrandingSaving"
               @click="saveSiteBranding()"
             >
               {{ siteBrandingSaving ? "Saving…" : "Save branding" }}
@@ -1599,6 +1606,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   display: flex;
   align-items: center;
   gap: 16px;
+  min-width: 0;
 }
 
 .site-logo-preview {
@@ -1633,23 +1641,17 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   min-height: 44px;
 }
 
-.site-branding-fields {
+.site-branding-controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(210px, 1.4fr) repeat(2, minmax(92px, 0.6fr));
+  align-items: end;
   gap: 14px;
-  padding-top: 16px;
-  border-top: 1px solid var(--ui-border, var(--color-border));
 }
 
 .site-branding-field {
   display: grid;
   gap: 6px;
   min-width: 0;
-}
-
-.site-branding-field--wide,
-.site-branding-save {
-  grid-column: 1 / -1;
 }
 
 .site-branding-field > span {
@@ -1682,6 +1684,11 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 
 .site-branding-save {
   width: 100%;
+}
+
+.site-branding-actions {
+  padding-top: 14px;
+  border-top: 1px solid var(--ui-border, var(--color-border));
 }
 
 .site-logo-input {
@@ -1723,8 +1730,12 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 }
 
 @media (max-width: 560px) {
-  .site-branding-fields {
-    grid-template-columns: 1fr;
+  .site-branding-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .site-logo-control {
+    grid-column: 1 / -1;
   }
 }
 

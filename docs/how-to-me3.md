@@ -82,6 +82,22 @@ pnpm setup:dev-vars
 
 This creates ignored local values in `apps/worker/.dev.vars`.
 
+To add relevant stock photography to Assistant-built landing pages, put a
+Pexels API key in that ignored file:
+
+```text
+PEXELS_API_KEY=your-key-here
+```
+
+Without the key, site creation still succeeds and uses the selected design's
+built-in visual treatment.
+
+For the managed fleet, store the shared provider key once as the GitHub Actions
+secret `ME3_MANAGED_PEXELS_API_KEY`. Managed provisioning copies it into new
+Workers as the encrypted `PEXELS_API_KEY` binding, and managed upgrades refresh
+that binding for existing installs. Local `.dev.vars` values never propagate to
+deployed Workers.
+
 ### Bootstrap The First Owner
 
 1. Deploy or run ME3.

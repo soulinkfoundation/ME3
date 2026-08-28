@@ -21,6 +21,15 @@ type PageRow = {
   published_at: string | null;
 };
 
+type SiteRow = {
+  id: string;
+  username: string;
+  site_role: "profile" | "organization";
+  template_id: string | null;
+  custom_domain: string | null;
+  updated_at: string;
+};
+
 describe("landing-page Agent runtime", () => {
   it("creates, lists, and revises a versioned draft without publishing it", async () => {
     const database = createLandingPageAgentDb();
@@ -28,6 +37,7 @@ describe("landing-page Agent runtime", () => {
       { DB: database.db },
       "owner",
       {
+        site: "owner-site",
         purpose: "service",
         brief: "A focused positioning sprint for independent consultants.",
         headline: "Make the offer obvious",
@@ -40,6 +50,7 @@ describe("landing-page Agent runtime", () => {
       { DB: database.db },
       "owner",
       {
+        site: "owner-site",
         purpose: "service",
         brief: "A focused positioning sprint for independent consultants.",
         headline: "Make the offer obvious",
@@ -68,7 +79,11 @@ describe("landing-page Agent runtime", () => {
       {
         pageId: first.id,
         headline: "A clearer offer in one focused sprint",
-        ctaLabel: "Start a conversation",
+        accentColor: "#7c3aed",
+        backgroundColor: "#fffaf2",
+        textColor: "#211a2c",
+        fontPreset: "editorial",
+        actionType: "subscribe",
       },
     );
     expect(updated).toMatchObject({
@@ -81,7 +96,17 @@ describe("landing-page Agent runtime", () => {
       JSON.parse(database.pages.find((page) => page.id === first.id)!.draft_json),
     ) as LandingPageDocumentV3;
     expect(document.hero.headline).toBe("A clearer offer in one focused sprint");
-    expect(document.actions[0]?.label).toBe("Start a conversation");
+    expect(document.actions[0]?.label).toBe("Join the list");
+    expect(document.actions[0]).toMatchObject({
+      kind: "subscribe",
+    });
+    expect(document.actions[0]).not.toHaveProperty("href");
+    expect(document.design.customization).toEqual({
+      accentColor: "#7c3aed",
+      backgroundColor: "#fffaf2",
+      textColor: "#211a2c",
+      fontPreset: "editorial",
+    });
     expect(document.content.sections.find((section) => section.type === "feature-list"))
       .toMatchObject({
         items: [
@@ -98,6 +123,7 @@ describe("landing-page Agent runtime", () => {
         { DB: database.db },
         "owner",
         {
+          site: "owner-site",
           purpose: "event",
           designPackId: "starter-waitlist-01",
           brief: "A small Saturday workshop.",
@@ -106,10 +132,130 @@ describe("landing-page Agent runtime", () => {
     ).rejects.toThrow(/does not support event pages/);
     expect(database.pages).toHaveLength(0);
   });
+
+  it("creates a new organization-site homepage and stores a relevant Pexels image", async () => {
+    const database = createLandingPageAgentDb({ pluginEnabled: false });
+    const fetcher = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://api.pexels.com/v1/search")) {
+        return new Response(
+          JSON.stringify({
+            photos: [
+              {
+                id: 42,
+                url: "https://www.pexels.com/photo/bright-studio-42/",
+                photographer: "Ada Camera",
+                photographer_url: "https://www.pexels.com/@ada-camera/",
+                src: {
+                  landscape:
+                    "https://images.pexels.com/photos/42/pexels-photo-42.jpeg",
+                },
+              },
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(new Uint8Array([1, 2, 3, 4]), {
+        headers: { "Content-Type": "image/jpeg" },
+      });
+    };
+
+    const created = await createAgentLandingPageDraft(
+      {
+        DB: database.db,
+        PEXELS_API_KEY: "test-key",
+        fetch: fetcher as typeof fetch,
+      },
+      "owner",
+      {
+        siteName: "Bright Ideas",
+        purpose: "service",
+        brief: "A product studio helping small teams turn bright ideas into useful software.",
+        headline: "Make bright ideas real",
+        imageQuery: "creative product studio natural light",
+      },
+    );
+
+    expect(created).toMatchObject({
+      siteUsername: "bright-ideas",
+      slug: "home",
+      siteCreated: true,
+      isSiteHomepage: true,
+      imageProvider: "pexels",
+      publicPath: "/site/bright-ideas/",
+      published: false,
+    });
+    expect(database.sites).toContainEqual(
+      expect.objectContaining({
+        username: "bright-ideas",
+        site_role: "organization",
+        template_id: "agent-landing-page",
+      }),
+    );
+    expect(database.files).toHaveLength(1);
+    const document = normalizeLandingPageDocument(
+      JSON.parse(database.pages[0]!.draft_json),
+    ) as LandingPageDocumentV3;
+    expect(document.hero.image).toMatch(/^files\/.+-hero\.jpg$/);
+    expect(document.actions[0]).toMatchObject({
+      kind: "link",
+      href: "/me",
+    });
+    expect(document.assets.heroImageAttribution).toMatchObject({
+      provider: "pexels",
+      photographer: "Ada Camera",
+    });
+
+    const originalImage = document.hero.image;
+    const updated = await updateAgentLandingPageDraft(
+      {
+        DB: database.db,
+        PEXELS_API_KEY: "test-key",
+        fetch: fetcher as typeof fetch,
+      },
+      "owner",
+      {
+        site: "bright-ideas",
+        pageId: created.id,
+        imageQuery: "Mallorca yoga retreat by the sea",
+        actionType: "subscribe",
+        ctaLabel: "Join the retreat list",
+        fontPreset: "modern",
+      },
+    );
+    expect(updated.imageProvider).toBe("pexels");
+    const updatedDocument = normalizeLandingPageDocument(
+      JSON.parse(database.pages[0]!.draft_json),
+    ) as LandingPageDocumentV3;
+    expect(updatedDocument.hero.image).not.toBe(originalImage);
+    expect(updatedDocument.actions[0]).toMatchObject({
+      kind: "subscribe",
+      label: "Join the retreat list",
+    });
+    expect(updatedDocument.design.customization?.fontPreset).toBe("modern");
+    expect(updatedDocument.assets.heroImageAttribution).toMatchObject({
+      provider: "pexels",
+      photographer: "Ada Camera",
+    });
+    expect(database.pluginEnabled()).toBe(true);
+  });
 });
 
-function createLandingPageAgentDb() {
+function createLandingPageAgentDb(options: { pluginEnabled?: boolean } = {}) {
   const pages: PageRow[] = [];
+  const sites: SiteRow[] = [
+    {
+      id: "site-1",
+      username: "owner-site",
+      site_role: "profile",
+      template_id: "me3",
+      custom_domain: null,
+      updated_at: "2026-07-20T12:00:00.000Z",
+    },
+  ];
+  const files: Array<{ siteId: string; path: string; bytes: ArrayBuffer }> = [];
+  let pluginEnabled = options.pluginEnabled !== false;
   const db = {
     prepare(sql: string) {
       return {
@@ -117,7 +263,10 @@ function createLandingPageAgentDb() {
           return {
             async first<T>() {
               if (sql.includes("FROM plugin_installations")) {
-                return { enabled: 1, status: "installed" } as T;
+                return {
+                  enabled: pluginEnabled ? 1 : 0,
+                  status: pluginEnabled ? "installed" : "disabled",
+                } as T;
               }
               if (sql.includes("FROM owner_profile")) {
                 return {
@@ -137,14 +286,7 @@ function createLandingPageAgentDb() {
             async all<T>() {
               if (sql.includes("FROM sites")) {
                 return {
-                  results: [
-                    {
-                      id: "site-1",
-                      username: "owner-site",
-                      custom_domain: null,
-                      updated_at: "2026-07-20T12:00:00.000Z",
-                    },
-                  ] as T[],
+                  results: sites as T[],
                 };
               }
               if (sql.includes("SELECT slug FROM site_pages")) {
@@ -158,6 +300,35 @@ function createLandingPageAgentDb() {
               return { results: [] as T[] };
             },
             async run() {
+              if (sql.includes("INSERT INTO plugin_installations")) {
+                pluginEnabled = true;
+                return { meta: { changes: 1 } };
+              }
+              if (sql.includes("INSERT INTO sites")) {
+                const [id, _userId, username, templateId] = values as [
+                  string,
+                  string,
+                  string,
+                  string,
+                ];
+                sites.push({
+                  id,
+                  username,
+                  site_role: "organization",
+                  template_id: templateId,
+                  custom_domain: null,
+                  updated_at: "2026-07-20T12:00:00.000Z",
+                });
+                return { meta: { changes: 1 } };
+              }
+              if (sql.includes("INSERT INTO site_files")) {
+                files.push({
+                  siteId: String(values[0]),
+                  path: String(values[1]),
+                  bytes: values[2] as ArrayBuffer,
+                });
+                return { meta: { changes: 1 } };
+              }
               if (sql.includes("INSERT INTO site_pages")) {
                 const [id, siteId, slug, title, templateId, draftJson] =
                   values as [string, string, string, string, string, string];
@@ -194,5 +365,11 @@ function createLandingPageAgentDb() {
       };
     },
   };
-  return { db, pages };
+  return {
+    db,
+    pages,
+    sites,
+    files,
+    pluginEnabled: () => pluginEnabled,
+  };
 }

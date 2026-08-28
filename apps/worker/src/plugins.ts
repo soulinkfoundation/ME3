@@ -3,7 +3,16 @@ import { AGENT_CHAT_RUNTIME } from "./agent-chat";
 import { CALENDAR_RUNTIME } from "./calendar";
 import { ACCOUNTS_PLUGIN_ID } from "./accounts";
 import { JOURNAL_PLUGIN_ID, JOURNAL_RUNTIME } from "@me3-core/plugin-journal";
-import { LANDING_PAGES_RUNTIME } from "@me3-core/plugin-landing-pages";
+import {
+  EMAIL_CAMPAIGNS_PLUGIN_ID,
+  EMAIL_CAMPAIGNS_PLUGIN_VERSION,
+  EMAIL_CAMPAIGNS_RUNTIME,
+} from "@me3-core/plugin-email-campaigns";
+import {
+  LANDING_PAGES_PLUGIN_ID,
+  LANDING_PAGES_PLUGIN_VERSION,
+  LANDING_PAGES_RUNTIME,
+} from "@me3-core/plugin-landing-pages";
 import { LOCAL_EXECUTOR_PLUGIN_ID, LOCAL_EXECUTOR_RUNTIME } from "@me3-core/plugin-local-executor";
 import { MISSION_CONTROL_RUNTIME } from "@me3-core/plugin-mission-control";
 import { SOCIAL_PUBLISHING_RUNTIME } from "./social-publishing";
@@ -17,7 +26,7 @@ import {
   type Me3AgentCapabilitySideEffect,
 } from "@me3/knowledge";
 
-export const CORE_PLUGIN_CATALOG_VERSION = "2026-07-10.v1";
+export const CORE_PLUGIN_CATALOG_VERSION = "2026-08-28.v1";
 const PUBLIC_BASELINE_MIGRATION_PATH =
   "./apps/worker/migrations/0001_initial_public_schema.sql";
 
@@ -1134,11 +1143,84 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
   ],
 };
 
+const EMAIL_CAMPAIGNS_PLUGIN: CorePluginManifestSummary = {
+  schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
+  id: EMAIL_CAMPAIGNS_PLUGIN_ID,
+  name: "Email Campaigns",
+  version: EMAIL_CAMPAIGNS_PLUGIN_VERSION,
+  description:
+    "Create, schedule, and review permission-based email campaigns for Site newsletter lists.",
+  trustTier: "first_party",
+  distribution: "workspace_package",
+  installMode: "enabled_by_owner_config",
+  showInPluginList: true,
+  defaultEnabled: false,
+  releaseStage: "available",
+  activationAllowed: true,
+  implementationStatus: EMAIL_CAMPAIGNS_RUNTIME.bundled ? "bundled" : "catalog_only",
+  capabilityIds: ["email.campaigns"],
+  permissions: [
+    {
+      id: "email.campaigns.manage",
+      label: "Manage campaign drafts, audiences, and schedules",
+    },
+    {
+      id: "email.campaigns.send",
+      label: "Send approved campaigns through a configured provider",
+    },
+  ],
+  routes: [
+    {
+      id: "email.campaigns.ui",
+      path: "/email/campaigns",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "email.campaigns.api",
+      path: "/api/email/campaigns/*",
+      methods: ["GET", "POST", "PUT"],
+      auth: "owner",
+    },
+  ],
+  uiSlots: [
+    {
+      id: "email.campaigns.workspace",
+      slot: "email.nav",
+      label: "Campaigns",
+    },
+  ],
+  agentTools: [],
+  secrets: [],
+  migrations: [
+    {
+      id: "email-campaigns.foundations-v1",
+      path: "./apps/worker/migrations/0041_email_campaign_foundations.sql",
+      destructive: false,
+      description: "Campaign drafts, immutable revisions, consent, and audience snapshots.",
+    },
+    {
+      id: "email-campaigns.assets-v1",
+      path: "./apps/worker/migrations/0042_email_campaign_assets.sql",
+      destructive: false,
+      description: "Portable campaign image metadata and content-addressed storage.",
+    },
+    {
+      id: "email-campaigns.delivery-v1",
+      path: "./apps/worker/migrations/0043_email_campaign_delivery.sql",
+      destructive: false,
+      description: "Durable recipient jobs, delivery events, and transport state.",
+    },
+  ],
+  queuesAndCrons: [],
+  notes: [...EMAIL_CAMPAIGNS_RUNTIME.notes],
+};
+
 const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
   schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
-  id: "me3.landing-pages",
+  id: LANDING_PAGES_PLUGIN_ID,
   name: "ME3 Landing Pages",
-  version: "0.2.0",
+  version: LANDING_PAGES_PLUGIN_VERSION,
   description: "Create custom landing pages for offerings, events, and more.",
   trustTier: "first_party",
   distribution: "workspace_package",
@@ -1463,6 +1545,7 @@ export const CORE_PLUGIN_CATALOG: readonly CorePluginManifestSummary[] = [
   CALENDAR_PLUGIN,
   LOCAL_EXECUTOR_PLUGIN,
   LANDING_PAGES_PLUGIN,
+  EMAIL_CAMPAIGNS_PLUGIN,
   SOCIAL_PUBLISHING_PLUGIN,
 ];
 
@@ -1513,6 +1596,7 @@ function categoryForPlugin(pluginId: string): Me3AgentCapabilityCategory {
   if (pluginId === "me3.mission-control") return "mission_control";
   if (pluginId === "me3.calendar") return "calendar";
   if (pluginId === "me3.social-publishing") return "content";
+  if (pluginId === EMAIL_CAMPAIGNS_PLUGIN_ID) return "content";
   if (pluginId === "me3.accounts") return "accounts";
   if (pluginId === "me3.landing-pages") return "sites";
   if (pluginId === "me3.local-executor") return "local";

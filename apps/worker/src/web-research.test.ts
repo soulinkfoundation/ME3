@@ -121,6 +121,46 @@ describe("Worker public web research adapter", () => {
     expect(result.status).toBe("success");
   });
 
+  it("uses the managed AI binding with the default gateway and curated search model", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      id: "managed-response-1",
+      output_text: "The managed answer is [1].",
+      output: [
+        {
+          type: "url_citation",
+          url: "https://example.com/managed-source",
+          title: "Managed source",
+        },
+      ],
+    });
+    const db = {
+      prepare() {
+        return {
+          bind() {
+            return { first: async () => null };
+          },
+        };
+      },
+    } as unknown as D1Database;
+
+    const service = createWebResearchToolServices(
+      {
+        DB: db,
+        AI: { run: aiRun } as unknown as Ai,
+        ME3_DEPLOYMENT_MODE: "managed",
+      } as Env,
+      "owner",
+    );
+    const result = await service.search({ query: "managed current web question" });
+
+    expect(aiRun).toHaveBeenCalledWith(
+      "openai/gpt-5.4-mini",
+      expect.objectContaining({ tools: [{ type: "web_search_preview" }] }),
+      { gateway: { id: "default" } },
+    );
+    expect(result.status).toBe("success");
+  });
+
   it("opens a public page with bounded readable content", async () => {
     vi.stubGlobal(
       "fetch",

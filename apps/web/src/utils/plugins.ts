@@ -64,6 +64,7 @@ const pluginDisplayOrder = [
   "me3.accounts",
   "me3.local-executor",
   "me3.landing-pages",
+  "me3.email-campaigns",
   "me3.social-publishing",
 ];
 
@@ -86,11 +87,15 @@ const pluginNavEmojis: Record<string, string> = {
   "me3.social-publishing": "📣",
   "me3.accounts": "💰",
   "me3.landing-pages": "🌐",
+  "me3.email-campaigns": "✉️",
 };
 
 export function pluginInfoText(plugin: PluginRecord) {
   if (plugin.id === "me3.social-publishing") {
     return "Adds social account connection and approval-first publishing.";
+  }
+  if (plugin.id === "me3.email-campaigns") {
+    return "Adds campaign drafting, consent-aware audiences, scheduling, and delivery history.";
   }
   return plugin.description;
 }

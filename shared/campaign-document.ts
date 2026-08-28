@@ -259,7 +259,7 @@ function parseParagraph(
 }
 
 function validateBrandInput(brand: Record<string, unknown>, issues: string[]) {
-  if (!normalizeText(brand.name, 120)) issues.push("Campaign brand needs a name");
+  if (!normalizeText(brand.name, 120)) issues.push("Campaign needs a sender name");
   if (!normalizeHttpUrl(brand.homeUrl)) issues.push("Campaign brand needs an absolute home URL");
   if (brand.logoUrl !== null && brand.logoUrl !== undefined && !normalizeHttpUrl(brand.logoUrl)) {
     issues.push("Campaign brand logo must use an absolute HTTP(S) URL");

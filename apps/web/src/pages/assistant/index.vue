@@ -23,6 +23,7 @@ import { useAppToast } from "../../composables/useAppToast";
 import { useInboxDraftCount } from "../../composables/useInboxDraftCount";
 import { useVoiceDictation } from "../../composables/useVoiceDictation";
 import { useContactsStore, type Contact } from "../../stores/contacts";
+import { useSitesStore } from "../../stores/sites";
 import {
   formatAgentTraceRows,
   formatAgentRuntimeDetail,
@@ -38,6 +39,12 @@ import {
   type AgentChatTurnTrace,
 } from "../../utils/agentChat";
 import { renderAssistantMarkdown } from "../../utils/assistantMarkdown";
+import {
+  ASSISTANT_SITE_BUILDER_STARTER_PROMPT,
+  assistantSitePageHasUnpublishedChanges,
+  findLatestAssistantSitePreview,
+  isAssistantSiteBuilderThread,
+} from "../../utils/assistantSiteBuilder";
 import {
   AI_AGENT_MODEL_OPTIONS,
   aiAgentModelOptionIsAvailable,
@@ -625,14 +632,24 @@ const { toastSuccess, toastFromUnknown } = useAppToast();
 const agentChat = useAgentChat();
 const assistantDisplayName = agentChat.assistantDisplayName;
 const contactsStore = useContactsStore();
+const sitesStore = useSitesStore();
 const { refreshInboxDraftCount } = useInboxDraftCount();
 const route = useRoute();
 const router = useRouter();
+const siteBuilderMode = computed(() => {
+  const value = route.query.mode;
+  return (Array.isArray(value) ? value[0] : value) === "site-builder";
+});
 
 function routeAssistantPrompt() {
   const value = route.query.prompt;
-  if (Array.isArray(value)) return value[0]?.trim() || "";
-  return typeof value === "string" ? value.trim() : "";
+  const prompt = Array.isArray(value) ? value[0] : value;
+  return typeof prompt === "string" && prompt.trim() ? prompt.trimStart() : "";
+}
+
+function routeAssistantPromptShouldSend() {
+  const value = route.query.send;
+  return (Array.isArray(value) ? value[0] : value) === "1";
 }
 
 const jobs = ref<AssistantJob[]>([]);
@@ -792,8 +809,16 @@ type StarterPrompt = {
   label: string;
   icon: string;
   prompt: string;
+  mode?: "site-builder";
 };
+const siteBuilderStarterPrompt = ASSISTANT_SITE_BUILDER_STARTER_PROMPT;
 const starterPrompts: StarterPrompt[] = [
+  {
+    label: "Build a site",
+    icon: "✨",
+    prompt: siteBuilderStarterPrompt,
+    mode: "site-builder",
+  },
   {
     label: "Configure",
     icon: "⚙️",
@@ -1028,9 +1053,11 @@ const showConfigureStarterPrompt = computed(() => {
 });
 
 const visibleStarterPrompts = computed(() =>
-  showConfigureStarterPrompt.value
-    ? starterPrompts
-    : starterPrompts.filter((prompt) => prompt.label !== "Configure"),
+  siteBuilderMode.value
+    ? []
+    : showConfigureStarterPrompt.value
+      ? starterPrompts
+      : starterPrompts.filter((prompt) => prompt.label !== "Configure"),
 );
 const assistantMessageLabel = computed(
   () => `Message ${assistantDisplayName.value}`,
@@ -1062,6 +1089,85 @@ const selectedModelTitle = computed(() => {
 const assistantConsoleMessages = computed(() =>
   chatMessages.value.filter((message) => message.id !== "assistant-ready"),
 );
+const assistantSitePreview = computed(() =>
+  findLatestAssistantSitePreview(assistantConsoleMessages.value),
+);
+const assistantSitePagePublished = ref(false);
+const assistantSitePageHasDraftChanges = ref(false);
+const assistantSitePageLoading = ref(false);
+const assistantSitePageBusy = ref(false);
+const assistantSitePreviewRefresh = ref(0);
+const assistantSitePageStatus = ref("");
+
+watch(
+  assistantSitePreview,
+  async (preview) => {
+    assistantSitePageStatus.value = "";
+    if (!preview) {
+      assistantSitePagePublished.value = false;
+      assistantSitePageHasDraftChanges.value = false;
+      return;
+    }
+
+    assistantSitePagePublished.value = preview.statusLabel
+      .toLowerCase()
+      .includes("published");
+    assistantSitePageLoading.value = true;
+    const page = await sitesStore.getSitePage(
+      preview.siteUsername,
+      preview.pageId,
+    );
+    if (
+      assistantSitePreview.value?.siteUsername === preview.siteUsername &&
+      assistantSitePreview.value?.pageId === preview.pageId
+    ) {
+      assistantSitePagePublished.value = Boolean(page?.publishedAt);
+      assistantSitePageHasDraftChanges.value = page
+        ? assistantSitePageHasUnpublishedChanges(page)
+        : false;
+      assistantSitePageLoading.value = false;
+    }
+  },
+  { immediate: true },
+);
+
+async function toggleAssistantSitePagePublished(): Promise<void> {
+  const preview = assistantSitePreview.value;
+  if (!preview || assistantSitePageBusy.value) return;
+
+  assistantSitePageBusy.value = true;
+  const shouldUnpublish = assistantSitePagePublished.value &&
+    !assistantSitePageHasDraftChanges.value;
+  assistantSitePageStatus.value = shouldUnpublish
+    ? "Unpublishing site…"
+    : "Publishing site…";
+  try {
+    const page = shouldUnpublish
+      ? await sitesStore.unpublishSitePage(preview.siteUsername, preview.pageId)
+      : await sitesStore.publishSitePage(preview.siteUsername, preview.pageId);
+    if (!page) {
+      throw new Error(
+        sitesStore.error ||
+          (shouldUnpublish
+            ? "Could not unpublish the site."
+            : "Could not publish the site."),
+      );
+    }
+    assistantSitePagePublished.value = Boolean(page.publishedAt);
+    assistantSitePageHasDraftChanges.value = false;
+    assistantSitePreviewRefresh.value += 1;
+    assistantSitePageStatus.value = assistantSitePagePublished.value
+      ? "Site published."
+      : "Site moved back to draft.";
+    toastSuccess(assistantSitePageStatus.value);
+    void sitesStore.fetchSites();
+  } catch (error) {
+    assistantSitePageStatus.value = "Site status could not be changed.";
+    toastFromUnknown(error, assistantSitePageStatus.value);
+  } finally {
+    assistantSitePageBusy.value = false;
+  }
+}
 const assistantAttachmentsReady = computed(() =>
   assistantAttachments.value.every(
     (attachment) => attachment.status !== "uploading",
@@ -1233,18 +1339,39 @@ const canSendAssistantMessage = computed(
     !assistantAttachmentIssue.value,
 );
 onMounted(() => {
-  void loadPage();
+  void initializeAssistantPage();
   void syncAssistantSettingsFromRoute();
-  if (routeAssistantPrompt()) {
-    const { prompt: _prompt, ...query } = route.query;
-    void router.replace({ query });
-    void nextTick(() => {
-      autosizeAssistantComposer();
-      assistantComposerRef.value?.focus();
-    });
-  }
   window.addEventListener("keydown", handleWindowKeydown);
 });
+
+async function initializeAssistantPage() {
+  const routePrompt = routeAssistantPrompt();
+  const prompt =
+    routePrompt ||
+    (siteBuilderMode.value && !routeThreadId()
+      ? ASSISTANT_SITE_BUILDER_STARTER_PROMPT
+      : "");
+  const shouldSendPrompt = Boolean(routePrompt) && routeAssistantPromptShouldSend();
+  if (routePrompt) {
+    const { prompt: _prompt, send: _send, ...query } = route.query;
+    await router.replace({ query });
+  }
+
+  if (prompt && assistantDraft.value !== prompt) {
+    assistantDraft.value = prompt;
+  }
+
+  await loadPage();
+  if (!prompt) return;
+
+  await nextTick();
+  autosizeAssistantComposer();
+  if (shouldSendPrompt) {
+    await sendAssistantMessage();
+    return;
+  }
+  assistantComposerRef.value?.focus();
+}
 
 onBeforeUnmount(() => {
   clearAssistantAttachments();
@@ -1368,6 +1495,7 @@ async function startNewAssistantChat(
       thread: undefined,
       project: projectId || undefined,
       prompt: undefined,
+      send: undefined,
     },
   });
   await nextTick();
@@ -2017,6 +2145,7 @@ async function loadAssistantThreadFromRoute() {
       return mappedMessage;
     });
     agentChat.replaceMessages(mappedMessages);
+    await syncAssistantModeForThread(mappedMessages);
     chatMessages.value.forEach((message) => {
       hydrateAssistantEmailDraftMessage(message);
     });
@@ -2032,6 +2161,23 @@ async function loadAssistantThreadFromRoute() {
       assistantThreadLoading.value = false;
     }
   }
+}
+
+async function syncAssistantModeForThread(
+  messages: Array<{
+    role: "user" | "assistant";
+    text: string;
+    actionCards: AgentChatActionCard[];
+  }>,
+) {
+  const shouldUseSiteBuilder = isAssistantSiteBuilderThread(messages);
+  if (shouldUseSiteBuilder === siteBuilderMode.value) return;
+  await router.replace({
+    query: {
+      ...route.query,
+      mode: shouldUseSiteBuilder ? "site-builder" : undefined,
+    },
+  });
 }
 
 const COMPOSER_MAX_HEIGHT_PX = 160;
@@ -2074,6 +2220,19 @@ async function useStarterPrompt(prompt: string) {
   assistantError.value = null;
   autosizeAssistantComposer();
   await sendAssistantMessage();
+}
+
+async function startStarterPrompt(starter: StarterPrompt) {
+  if (starter.mode === "site-builder" && !siteBuilderMode.value) {
+    await router.push({ path: "/assistant", query: { mode: "site-builder" } });
+    assistantDraft.value = starter.prompt;
+    assistantError.value = null;
+    await nextTick();
+    autosizeAssistantComposer();
+    assistantComposerRef.value?.focus();
+    return;
+  }
+  await useStarterPrompt(starter.prompt);
 }
 
 function openAssistantAttachmentPicker() {
@@ -2670,6 +2829,7 @@ async function submitAssistantText(
         threadId: assistantThreadId.value,
         projectId: assistantThreadId.value ? undefined : routeProjectId(),
         attachments,
+        scopes: siteBuilderMode.value ? ["site"] : undefined,
         model: turnModel
           ? {
               providerId: turnModel.providerId,
@@ -2907,6 +3067,15 @@ function applyAssistantResultToMessage(
   message.detail = formatAgentRuntimeDetail(result);
   message.trace = result.trace || null;
   message.actionCards = normalizeAgentActionCards(result.actionCards);
+  if (
+    message.actionCards.some(
+      (card) =>
+        card.kind === "sites.landing_page_created" &&
+        card.records.some((record) => record.kind === "site"),
+    )
+  ) {
+    void sitesStore.fetchSites();
+  }
   message.imageAction = result.imageAction || null;
   message.emailDraftAction = createAgentChatEmailDraftAction(
     message,
@@ -3220,6 +3389,18 @@ function mailboxDraftIdForActionCard(card: AgentChatActionCard): string | null {
 function assistantActionCardBusyKey(card: AgentChatActionCard): string | null {
   const draftId = mailboxDraftIdForActionCard(card);
   return draftId ? `mailbox-draft-send:${draftId}` : null;
+}
+
+function displayedAssistantPrimaryAction(card: AgentChatActionCard) {
+  const action = card.primaryAction;
+  if (!action) return null;
+  const isLandingPage = card.records.some(
+    (record) => record.kind === "landing_page",
+  );
+  if (isLandingPage && action.label.trim().toLowerCase() === "open draft") {
+    return { label: "Continue building", href: "#assistant-console-input" };
+  }
+  return action;
 }
 
 async function sendMailboxDraftFromActionCard(card: AgentChatActionCard) {
@@ -4586,18 +4767,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
     :class="{
       'assistant-page--history-collapsed': assistantHistoryCollapsed,
       'assistant-page--history-open': assistantHistoryDrawerOpen,
+      'assistant-page--site-builder': siteBuilderMode,
     }"
   >
     <LandingGrids />
     <button
-      v-if="assistantHistoryDrawerOpen"
+      v-if="!siteBuilderMode && assistantHistoryDrawerOpen"
       type="button"
       class="assistant-history-backdrop"
       aria-label="Close chat history"
       @click="assistantHistoryDrawerOpen = false"
     />
     <Teleport
-      v-if="!assistantHistoryDrawerOpen"
+      v-if="!siteBuilderMode && !assistantHistoryDrawerOpen"
       to="#app-side-nav-mobile-page-controls"
       defer
     >
@@ -4632,7 +4814,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
         </div>
       </div>
     </Teleport>
-    <div class="assistant-page-tools" aria-label="Assistant tools">
+    <div
+      v-if="!siteBuilderMode"
+      class="assistant-page-tools"
+      aria-label="Assistant tools"
+    >
       <Button
         color="ghost"
         shape="soft"
@@ -4647,6 +4833,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
       </Button>
     </div>
     <aside
+      v-if="!siteBuilderMode"
       class="assistant-history"
       :class="{
         'assistant-history--collapsed': assistantHistoryCollapsed,
@@ -4936,6 +5123,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
       </div>
     </aside>
 
+    <div
+      class="assistant-workspace"
+      :class="{ 'assistant-workspace--site-builder': siteBuilderMode }"
+    >
     <main class="assistant-main" aria-label="Assistant console">
       <section v-if="pageError" class="notice notice--error" role="alert">
         {{ pageError }}
@@ -4969,13 +5160,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 aria-hidden="true"
               />
             </h2>
-            <div class="starter-prompt-list" aria-label="Starter prompts">
+            <div
+              v-if="visibleStarterPrompts.length"
+              class="starter-prompt-list"
+              aria-label="Starter prompts"
+            >
               <button
                 v-for="prompt in visibleStarterPrompts"
                 :key="prompt.label"
                 type="button"
                 class="starter-prompt"
-                @click="useStarterPrompt(prompt.prompt)"
+                @click="startStarterPrompt(prompt)"
               >
                 <span class="starter-prompt__icon" aria-hidden="true">
                   {{ prompt.icon }}
@@ -5362,7 +5557,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   <div
                     v-if="
                       mailboxDraftIdForActionCard(card) ||
-                      card.primaryAction ||
+                      displayedAssistantPrimaryAction(card) ||
                       card.secondaryActions.length > 0
                     "
                     class="assistant-action-card__actions"
@@ -5385,18 +5580,18 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       </span>
                     </button>
                     <a
-                      v-if="card.primaryAction"
+                      v-if="displayedAssistantPrimaryAction(card)"
                       class="assistant-action-card__button"
                       :class="{
                         'assistant-action-card__button--primary':
                           !mailboxDraftIdForActionCard(card),
                       }"
-                      :href="card.primaryAction.href"
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      :href="displayedAssistantPrimaryAction(card)!.href"
+                      :target="displayedAssistantPrimaryAction(card)!.href.startsWith('#') ? undefined : '_blank'"
+                      :rel="displayedAssistantPrimaryAction(card)!.href.startsWith('#') ? undefined : 'noopener noreferrer'"
                     >
                       <UiIcon name="ArrowRight" :size="15" aria-hidden="true" />
-                      <span>{{ card.primaryAction.label }}</span>
+                      <span>{{ displayedAssistantPrimaryAction(card)!.label }}</span>
                     </a>
                     <a
                       v-for="action in card.secondaryActions"
@@ -5673,6 +5868,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
           @dragleave="onAssistantComposerDragLeave"
           @drop="onAssistantComposerDrop"
         >
+          <p
+            v-if="siteBuilderMode && assistantConsoleMessages.length === 0"
+            class="site-builder-capability-hint"
+          >
+            Can include email signup, payments, bookings, or downloads.
+          </p>
           <label class="sr-only" for="assistant-console-input">
             {{ assistantMessageLabel }}
           </label>
@@ -5916,12 +6117,73 @@ function messageFromUnknown(err: unknown, fallback: string) {
               Activate storage
             </RouterLink>
           </p>
-          <p v-if="assistantError" class="assistant-error">
+          <p v-if="assistantError && !siteBuilderMode" class="assistant-error">
             {{ assistantError }}
           </p>
         </footer>
       </section>
     </main>
+
+      <aside
+        v-if="siteBuilderMode"
+        class="assistant-site-preview"
+        aria-label="Site preview"
+      >
+        <nav
+          v-if="assistantSitePreview"
+          class="assistant-site-preview__toolbar"
+          aria-label="Site actions"
+        >
+          <a
+            class="assistant-site-preview__action assistant-site-preview__action--icon"
+            :href="assistantSitePreview.href"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open site preview"
+            title="Open site preview"
+          >
+            <UiIcon name="Eye" :size="18" />
+          </a>
+          <button
+            class="assistant-site-preview__action assistant-site-preview__action--primary"
+            type="button"
+            :disabled="assistantSitePageLoading || assistantSitePageBusy"
+            @click="toggleAssistantSitePagePublished"
+          >
+            {{
+              assistantSitePageBusy
+                ? "Working…"
+                : assistantSitePagePublished &&
+                    !assistantSitePageHasDraftChanges
+                  ? "Unpublish"
+                  : assistantSitePagePublished
+                    ? "Publish changes"
+                    : "Publish"
+            }}
+          </button>
+        </nav>
+        <iframe
+          v-if="assistantSitePreview"
+          :key="`${assistantSitePreview.href}:${assistantSitePreview.revision}:${assistantSitePreviewRefresh}`"
+          class="assistant-site-preview__frame"
+          :src="assistantSitePreview.href"
+          :title="`Preview of ${assistantSitePreview.title}`"
+        />
+        <div v-else class="assistant-site-preview__empty" role="status">
+          <span class="assistant-site-preview__empty-icon" aria-hidden="true">
+            <UiIcon name="Monitor" :size="30" />
+          </span>
+          <strong>Your site will appear here</strong>
+          <p>
+            Describe the site in chat and attach any images or files you want
+            ME3 to use. The preview will refresh when a draft is ready.
+          </p>
+        </div>
+        <p class="sr-only" role="status" aria-live="polite">
+          {{ assistantSitePageStatus }}
+        </p>
+      </aside>
+    </div>
 
     <Teleport to="body">
       <div
@@ -7221,6 +7483,195 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-page--history-collapsed {
   display: block;
+}
+
+.assistant-workspace {
+  min-height: inherit;
+}
+
+.assistant-page--site-builder {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.assistant-workspace--site-builder {
+  display: grid;
+  grid-template-columns: minmax(290px, 42%) minmax(320px, 1fr);
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+}
+
+.assistant-page--site-builder .assistant-main {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  border-right: 1px solid var(--ui-border);
+  overflow: hidden;
+}
+
+.assistant-page--site-builder .assistant-console {
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  padding: 0 16px;
+  overflow: hidden;
+}
+
+.assistant-page--site-builder .assistant-timeline {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 18px 0 22px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.assistant-page--site-builder .assistant-empty-state {
+  padding: clamp(54px, 15vh, 140px) 0 10px;
+}
+
+.assistant-page--site-builder .assistant-composer {
+  position: static;
+  width: 100%;
+  max-width: none;
+  flex: 0 0 auto;
+  margin: 0 0 max(14px, env(safe-area-inset-bottom, 0px));
+  transform: none;
+}
+
+.site-builder-capability-hint {
+  margin: 0;
+  padding: 0 4px;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.assistant-site-preview {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  background: var(--ui-surface-muted);
+}
+
+.assistant-site-preview__toolbar {
+  position: absolute;
+  z-index: 2;
+  top: 22px;
+  right: 22px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: color-mix(in srgb, var(--ui-surface) 94%, transparent);
+  box-shadow: var(--ui-shadow-md);
+  backdrop-filter: blur(12px);
+}
+
+.assistant-site-preview__action {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  padding: 0 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.assistant-site-preview__action {
+  background: transparent;
+  color: var(--ui-text);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.assistant-site-preview__action--icon {
+  width: 44px;
+  padding: 0;
+}
+
+.assistant-site-preview__action:hover {
+  background: var(--ui-surface-muted);
+}
+
+.assistant-site-preview__action:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 1px;
+}
+
+.assistant-site-preview__action--primary {
+  background: var(--ui-accent);
+  color: var(--ui-on-accent, #fff);
+}
+
+.assistant-site-preview__action--primary:hover {
+  background: var(--ui-accent-strong, var(--ui-accent));
+}
+
+.assistant-site-preview__action:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.assistant-site-preview__frame,
+.assistant-site-preview__empty {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: #fff;
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.assistant-site-preview__frame {
+  display: block;
+}
+
+.assistant-site-preview__empty {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  padding: 28px;
+  color: var(--ui-text);
+  text-align: center;
+}
+
+.assistant-site-preview__empty-icon {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
+}
+
+.assistant-site-preview__empty strong,
+.assistant-site-preview__empty p {
+  margin: 0;
+}
+
+.assistant-site-preview__empty p {
+  max-width: 38ch;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .assistant-page-tools {
@@ -10461,6 +10912,36 @@ button:disabled {
 
   .assistant-settings-row__time {
     margin-left: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .assistant-page--site-builder {
+    height: auto;
+    min-height: 100dvh;
+    overflow: auto;
+  }
+
+  .assistant-workspace--site-builder {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  .assistant-page--site-builder .assistant-main {
+    height: 100dvh;
+    border-right: 0;
+    border-bottom: 1px solid var(--ui-border);
+  }
+
+  .assistant-site-preview {
+    min-height: 72dvh;
+  }
+
+  .assistant-site-preview__toolbar {
+    right: 18px;
+    max-width: calc(100% - 36px);
+    overflow-x: auto;
   }
 }
 

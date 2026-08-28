@@ -295,6 +295,12 @@ watch(
   color: inherit;
 }
 
+:global(body:has(.assistant-page--site-builder)) .remote-dev-banner {
+  inset-inline-start: auto;
+  inset-inline-end: 12px;
+  transform: none;
+}
+
 @media (max-width: 640px) {
   .remote-dev-banner {
     align-items: flex-start;

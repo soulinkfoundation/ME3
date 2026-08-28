@@ -479,25 +479,27 @@ const mailFolderTabs = computed(() => {
     icon: UiIconName;
     count?: number | null;
     ariaLabel?: string;
-  }> = emailTabOrder.map((key) => ({
-    id: key,
-    label: emailTabConfig[key].label,
-    icon: emailTabIcons[key],
-    count: getVisibleFolderCount(key),
-    ariaLabel: emailTabConfig[key].label,
-  }));
+  }> = [
+    {
+      id: "campaigns",
+      label: "Campaigns",
+      icon: "Send",
+      ariaLabel: "Campaigns",
+    },
+    ...emailTabOrder.map((key) => ({
+      id: key,
+      label: emailTabConfig[key].label,
+      icon: emailTabIcons[key],
+      count: getVisibleFolderCount(key),
+      ariaLabel: emailTabConfig[key].label,
+    })),
+  ];
   tabs.push({
     id: "contacts",
     label: "Contacts",
     icon: "UsersRound",
     count: contacts.value.length > 0 ? contacts.value.length : null,
     ariaLabel: "Contacts",
-  });
-  tabs.push({
-    id: "campaigns",
-    label: "Campaigns",
-    icon: "Send",
-    ariaLabel: "Campaigns",
   });
   return tabs;
 });

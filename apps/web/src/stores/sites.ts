@@ -16,7 +16,8 @@ export interface Site {
   user_id: string;
   site_type?: SiteType;
   site_role: "profile" | "organization" | null;
-  template_id?: LandingPageTemplateId | null;
+  template_id?: string | null;
+  builder_thread_id?: string | null;
   custom_domain: string | null;
   custom_domain_status: "pending" | "active" | "failed" | null;
   created_at: string;

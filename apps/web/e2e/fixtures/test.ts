@@ -31,8 +31,6 @@ export const test = base.extend({
             maxSites: 3,
             customDomain: false,
             footerCustomization: false,
-            emailSendQuota: 0,
-            emailOverageRate: 0,
             mailboxAlias: false,
             agentInbox: false,
             approvalFirstOutbound: false,

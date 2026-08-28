@@ -178,6 +178,9 @@ describe("Core chat tool contracts", () => {
       parameters: {
         required: ["purpose", "brief"],
         properties: {
+          site: { type: "string" },
+          siteName: { type: "string" },
+          siteHandle: { type: "string" },
           purpose: { enum: ["event", "service", "waitlist"] },
           designPackId: {
             enum: [
@@ -186,6 +189,7 @@ describe("Core chat tool contracts", () => {
               "starter-waitlist-01",
             ],
           },
+          imageQuery: { type: "string" },
         },
       },
     });
@@ -193,7 +197,14 @@ describe("Core chat tool contracts", () => {
       capabilityId: "core.sites.landing_page.update",
       approvalMode: "none",
       sideEffect: "write_internal_draft",
-      parameters: { required: ["pageId"] },
+      parameters: {
+        required: ["pageId"],
+        properties: {
+          imageQuery: { type: "string" },
+          actionType: { enum: ["link", "subscribe"] },
+          actionHref: { type: "string" },
+        },
+      },
     });
     expect(
       CORE_CHAT_CAPABILITIES.filter((capability) =>

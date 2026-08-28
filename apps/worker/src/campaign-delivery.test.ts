@@ -11,6 +11,7 @@ import {
   dispatchDueCampaignJobs,
   getCampaignTransportStatus,
   sendCampaignTest,
+  startCampaignAddOnCheckout,
   startCampaignDelivery,
 } from "./campaign-delivery";
 import { createCampaign, getCampaign, saveCampaignDraft } from "./campaigns";
@@ -85,6 +86,7 @@ describe("campaign delivery lifecycle", () => {
   let fetcher: typeof fetch;
   let transportSenderRef: string;
   let transportProvider: "aws_ses" | "postmark";
+  let transportRemaining: number;
 
   beforeEach(async () => {
     database = new DatabaseSync(":memory:");
@@ -142,8 +144,30 @@ describe("campaign delivery lifecycle", () => {
     requests = [];
     transportSenderRef = "sender-1";
     transportProvider = "aws_ses";
+    transportRemaining = 5_000;
     fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
+      if (url.pathname.endsWith("/managed-campaign/billing/status")) {
+        return Response.json({
+          addOn: {
+            available: true,
+            entitled: true,
+            status: "active",
+            planKey: "5k",
+            allowance: 5_000,
+            used: 0,
+            remaining: transportRemaining,
+            resetAt: "2026-09-01T00:00:00.000Z",
+            cancelAtPeriodEnd: false,
+            paidThroughAt: "2026-09-26T12:00:00.000Z",
+            plans: [
+              { key: "5k", allowance: 5_000, monthlyPriceUsd: 10, checkoutAvailable: true },
+              { key: "10k", allowance: 10_000, monthlyPriceUsd: 15, checkoutAvailable: true },
+              { key: "20k", allowance: 20_000, monthlyPriceUsd: 25, checkoutAvailable: true },
+            ],
+          },
+        });
+      }
       if (url.pathname.endsWith("/campaign-sender")) {
         return Response.json({
           connected: true,
@@ -180,9 +204,9 @@ describe("campaign delivery lifecycle", () => {
 
     const created = await createCampaign(env, "owner", { siteId: "site-1" });
     expect(created?.revision.document.brand).toMatchObject({
-      name: "Publisher brand",
+      name: "Publisher",
       accentColor: "#226644",
-      backgroundColor: "#f5f5f0",
+      backgroundColor: "#f4f5f4",
     });
     campaignId = String(created?.id);
     const document = created?.revision.document;
@@ -300,5 +324,25 @@ describe("campaign delivery lifecycle", () => {
       reason: "managed_installation_required",
     });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("never opens managed campaign billing from a self-hosted installation", async () => {
+    env.ME3_DEPLOYMENT_MODE = "self_hosted";
+
+    await expect(startCampaignAddOnCheckout(env, "5k", fetcher)).rejects.toMatchObject({
+      code: "managed_installation_required",
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps a campaign in draft when its audience exceeds the remaining allowance", async () => {
+    transportRemaining = 0;
+
+    await expect(
+      startCampaignDelivery(env, "owner", campaignId, {}, fetcher),
+    ).rejects.toMatchObject({ code: "campaign_allowance_insufficient" });
+    expect(
+      database.prepare("SELECT status FROM email_campaigns WHERE id = ?").get(campaignId),
+    ).toEqual({ status: "draft" });
   });
 });

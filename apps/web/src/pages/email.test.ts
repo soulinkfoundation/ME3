@@ -268,13 +268,13 @@ describe("EmailPage", () => {
     expect(
       wrapper.findAll("[data-folder]").map((tab) => tab.attributes("data-folder")),
     ).toEqual([
+      "campaigns",
       "inbox",
       "drafts",
       "sent",
       "archive",
       "trash",
       "contacts",
-      "campaigns",
     ]);
     expect(wrapper.text()).not.toContain("More");
   });

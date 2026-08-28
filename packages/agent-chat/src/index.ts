@@ -178,8 +178,10 @@ export { isContextFreeLiteralResponseRequest } from "./turn-policy";
 export {
   DEFAULT_OPENAI_IMAGE_GENERATION_MODEL,
   DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+  modelCapabilitiesFor,
   modelSupportsCapability,
   modelSupportsImageInput,
+  modelSupportsToolUse,
   type AiAgentModelCapability,
   type AiAgentModelProviderId,
   type AssistantImageCapability,
@@ -294,6 +296,7 @@ export type AgentChatActionCardRecord = {
     | "reminder"
     | "calendar_event"
     | "mission_task"
+    | "site"
     | "landing_page"
     | "social_post"
     | "social_suggestion"
@@ -673,6 +676,7 @@ type CoreAgentChatEnv = {
   ENVIRONMENT?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  PEXELS_API_KEY?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_AI_GATEWAY_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
@@ -752,6 +756,12 @@ type CoreChatToolTurnPlan = {
   decision: CoreChatToolPlannerDecision;
   recent: Array<{ role: "user" | "assistant"; content: string }>;
   sourceReference: AgentOwnerContentSourceReference | null;
+  landingPageReference: AgentLandingPageReference | null;
+};
+
+type AgentLandingPageReference = {
+  pageId: string;
+  siteUsername: string;
 };
 
 type OwnerProfileRow = {
@@ -2343,6 +2353,7 @@ export async function dispatchAgentSandboxTurn(
     agentContext?.prompt ?? null,
     buildCoreChatOrientationPrompt(toolPlan.decision, setupReadiness),
     contextFreeTurn ? null : toolPlan.sourceReference,
+    contextFreeTurn ? null : toolPlan.landingPageReference,
   );
   let imageInputs: AgentChatImageInput[] = [];
   let imageInputError: string | null = null;
@@ -2413,6 +2424,7 @@ export async function dispatchAgentSandboxTurn(
           schedulingServices,
           networkDirectoryServices,
           webResearchServices,
+          landingPageEnv: env,
           streamOptions,
         })
       : await runModelTurn(route, messages, input.turnId, imageInputs);
@@ -3148,6 +3160,7 @@ async function loadCoreChatToolTurnPlan(
   return {
     recent: recent.messages,
     sourceReference: recent.sourceReference,
+    landingPageReference: recent.landingPageReference,
     decision: buildCoreConversationDecision(input.messageText),
   };
 }
@@ -5055,6 +5068,7 @@ async function loadRecentMessages(
 ): Promise<{
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   sourceReference: AgentOwnerContentSourceReference | null;
+  landingPageReference: AgentLandingPageReference | null;
 }> {
   try {
     const hasThread = typeof threadId === "string" && threadId.trim().length > 0;
@@ -5082,14 +5096,19 @@ async function loadRecentMessages(
       .map((message) => assistantSourceReferenceFromMetadata(message.metadata_json))
       .filter((reference): reference is AgentOwnerContentSourceReference => Boolean(reference))
       .at(-1) || null;
+    const landingPageReference = recent
+      .map((message) => assistantLandingPageReferenceFromMetadata(message.metadata_json))
+      .filter((reference): reference is AgentLandingPageReference => Boolean(reference))
+      .at(-1) || null;
     return {
       messages: recent.filter(
         (message) => !isProviderSetupFallbackMessage(message.content),
       ).map(({ role, content }) => ({ role, content })),
       sourceReference,
+      landingPageReference,
     };
   } catch {
-    return { messages: [], sourceReference: null };
+    return { messages: [], sourceReference: null, landingPageReference: null };
   }
 }
 
@@ -5101,6 +5120,7 @@ function buildChatMessages(
   agentContextPrompt: string | null,
   orientationPrompt: string | null,
   sourceReference: AgentOwnerContentSourceReference | null,
+  landingPageReference: AgentLandingPageReference | null,
 ): Array<{ role: "system" | "user" | "assistant"; content: string }> {
   const ownerName = owner?.name?.trim() || owner?.username?.trim() || "the owner";
   const assistantName = normalizeAssistantDisplayName(owner?.assistant_name);
@@ -5116,6 +5136,9 @@ function buildChatMessages(
     orientationPrompt,
     sourceReference
       ? `Private runtime source selection for follow-up tool calls: sourceType=${sourceReference.sourceType}; sourceId=${sourceReference.sourceId}. Never show this source ID to the owner.`
+      : null,
+    landingPageReference
+      ? `Private landing-page follow-up context: site=${landingPageReference.siteUsername}; pageId=${landingPageReference.pageId}. Use these exact values for revisions in this thread. Never show the internal page ID to the owner.`
       : null,
     "Answer helpfully and plainly. Do not claim external actions are complete unless a tool result says they are.",
     "The ME3 owner snapshot contains all owner data available without a tool call. Never claim Journal-entry content, task details, or email content from memory or prior assistant replies. Use the relevant read tool in this turn.",
@@ -6453,6 +6476,51 @@ function assistantSourceReferenceFromMetadata(
     /[\u0000-\u001f\u007f]/.test(sourceId)
   ) return null;
   return { sourceType, sourceId };
+}
+
+function assistantLandingPageReferenceFromMetadata(
+  metadataJson: string | null | undefined,
+): AgentLandingPageReference | null {
+  const actionCards = parseJsonRecord(metadataJson || null).actionCards;
+  if (!Array.isArray(actionCards)) return null;
+  for (let index = actionCards.length - 1; index >= 0; index -= 1) {
+    const card = actionCards[index];
+    if (!card || typeof card !== "object" || Array.isArray(card)) continue;
+    const records = (card as Record<string, unknown>).records;
+    if (!Array.isArray(records)) continue;
+    const pageId = records.find(
+      (record) =>
+        record &&
+        typeof record === "object" &&
+        !Array.isArray(record) &&
+        (record as Record<string, unknown>).kind === "landing_page",
+    );
+    const site = records.find(
+      (record) =>
+        record &&
+        typeof record === "object" &&
+        !Array.isArray(record) &&
+        (record as Record<string, unknown>).kind === "site",
+    );
+    const pageIdValue = pageId && typeof pageId === "object"
+      ? (pageId as Record<string, unknown>).id
+      : null;
+    const siteUsernameValue = site && typeof site === "object"
+      ? (site as Record<string, unknown>).id
+      : null;
+    if (
+      typeof pageIdValue === "string" &&
+      pageIdValue.trim() &&
+      typeof siteUsernameValue === "string" &&
+      /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/.test(siteUsernameValue)
+    ) {
+      return {
+        pageId: pageIdValue.trim().slice(0, 160),
+        siteUsername: siteUsernameValue,
+      };
+    }
+  }
+  return null;
 }
 
 function withoutPrivateAgentResponseContext(

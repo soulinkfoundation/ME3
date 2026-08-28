@@ -1,4 +1,5 @@
 import {
+  AGENT_LANDING_PAGE_SITE_TEMPLATE_ID,
   buildLandingPageDocument,
   getDefaultLandingPageDesignPackId,
   getLandingPageDesignPack,
@@ -6,15 +7,25 @@ import {
   getLandingPageTemplateId,
   getLandingPageTitle,
   getSelectableLandingPageDesignPacks,
+  LANDING_PAGES_PLUGIN_ID,
+  LANDING_PAGES_PLUGIN_VERSION,
   landingPageDesignPackSupportsPurpose,
   normalizeLandingPageDesignPackId,
   normalizeLandingPageDocument,
+  normalizeLandingPageFontPreset,
   setLandingPageDesignPack,
   upgradeLandingPageDocument,
   type LandingPageDesignPackId,
   type LandingPageDocumentV3,
+  type LandingPageFontPreset,
   type LandingPageTemplateId,
 } from "@me3-core/plugin-landing-pages";
+import {
+  deleteAgentLandingPageHero,
+  findAndStoreAgentLandingPageHero,
+  type AgentLandingPageImageEnv,
+  type AgentLandingPageStoredImage,
+} from "./landing-page-images";
 
 type LandingPageD1Like = {
   prepare(sql: string): {
@@ -26,13 +37,15 @@ type LandingPageD1Like = {
   };
 };
 
-export type AgentLandingPageEnv = {
+export type AgentLandingPageEnv = AgentLandingPageImageEnv & {
   DB: LandingPageD1Like;
 };
 
 type DbAgentLandingSite = {
   id: string;
   username: string;
+  site_role: "profile" | "organization" | null;
+  template_id: string | null;
   custom_domain: string | null;
   updated_at: string;
 };
@@ -64,14 +77,20 @@ export type AgentLandingPageSummary = {
   purpose: LandingPageTemplateId;
   designPackId: LandingPageDesignPackId;
   designName: string;
+  siteCreated: boolean;
+  isSiteHomepage: boolean;
+  imageProvider: "pexels" | null;
   published: boolean;
   updatedAt: string;
   editorPath: string;
   previewPath: string;
+  publicPath: string;
 };
 
 export type AgentLandingPageDraftInput = {
   site?: string;
+  siteName?: string;
+  siteHandle?: string;
   slug?: string;
   purpose: LandingPageTemplateId;
   designPackId?: string;
@@ -80,6 +99,11 @@ export type AgentLandingPageDraftInput = {
   subheadline?: string;
   highlights?: string;
   ctaLabel?: string;
+  imageQuery?: string;
+  accentColor?: string;
+  backgroundColor?: string;
+  textColor?: string;
+  fontPreset?: string;
 };
 
 export type AgentLandingPageUpdateInput = {
@@ -90,6 +114,13 @@ export type AgentLandingPageUpdateInput = {
   subheadline?: string;
   highlights?: string;
   ctaLabel?: string;
+  imageQuery?: string;
+  actionType?: "link" | "subscribe";
+  actionHref?: string;
+  accentColor?: string;
+  backgroundColor?: string;
+  textColor?: string;
+  fontPreset?: string;
 };
 
 export function listAgentLandingPageDesigns() {
@@ -132,35 +163,65 @@ export async function createAgentLandingPageDraft(
   userId: string,
   input: AgentLandingPageDraftInput,
 ): Promise<AgentLandingPageSummary> {
-  await assertLandingPagesPluginEnabled(env);
-  const site = await resolveAgentLandingPageSite(env, userId, input.site);
+  const designPackId = resolveAgentDesignPack(input.designPackId, input.purpose);
+  await ensureLandingPagesPluginEnabled(env);
+  const target = input.site
+    ? {
+        site: await resolveAgentLandingPageSite(env, userId, input.site),
+        created: false,
+      }
+    : {
+        site: await createAgentLandingPageSite(env, userId, input),
+        created: true,
+      };
+  const site = target.site;
   const owner = await env.DB.prepare(
     `SELECT name, bio, avatar_url FROM owner_profile WHERE id = ? LIMIT 1`,
   )
     .bind(userId)
     .first<DbAgentLandingOwner>();
-  const designPackId = resolveAgentDesignPack(input.designPackId, input.purpose);
+  const id = crypto.randomUUID();
+  const image = await findAndStoreAgentLandingPageHero(env, {
+    siteId: site.id,
+    siteUsername: site.username,
+    pageId: id,
+    query: input.imageQuery || input.siteName || input.headline || input.brief,
+  });
   const document = upgradeLandingPageDocument(
     buildLandingPageDocument({
       username: site.username,
       brief: input.brief,
       template: input.purpose,
       designPackId,
+      heroImage: image?.path || null,
+      heroImageAttribution: image?.attribution || null,
       profile: {
         name: owner?.name || site.username,
         bio: owner?.bio || null,
         avatar: owner?.avatar_url || null,
-        profileUrl: `/sites/${encodeURIComponent(site.username)}`,
+        profileUrl: target.created ? "/me" : `/sites/${encodeURIComponent(site.username)}`,
       },
     }),
   );
   applyAgentLandingPageCopy(document, input);
-  const slug = await uniqueAgentLandingPageSlug(
-    env,
-    site.id,
-    input.slug || input.headline || document.seo.title,
-  );
-  const id = crypto.randomUUID();
+  applyAgentLandingPageStyle(document, input);
+  if (target.created && input.purpose !== "waitlist") {
+    const action = document.actions.find(
+      (candidate) => candidate.id === document.hero.primaryActionId,
+    );
+    if (action) {
+      action.kind = "link";
+      action.href = "/me";
+      delete action.resourceId;
+    }
+  }
+  const slug = target.created
+    ? "home"
+    : await uniqueAgentLandingPageSlug(
+        env,
+        site.id,
+        input.slug || input.headline || document.seo.title,
+      );
   try {
     await env.DB.prepare(
       `INSERT INTO site_pages
@@ -177,14 +238,21 @@ export async function createAgentLandingPageDraft(
       )
       .run();
   } catch (error) {
+    await rollbackAgentLandingPageCreation(env, userId, site, image, target.created);
     if (/unique|constraint/i.test(String(error))) {
       throw new Error(`The page path "${slug}" is already in use.`);
     }
     throw error;
   }
   const row = await loadAgentLandingPage(env, site.id, id);
-  if (!row) throw new Error("The landing-page draft could not be loaded after creation.");
-  return serializeAgentLandingPage(row, site, document);
+  if (!row) {
+    await rollbackAgentLandingPageCreation(env, userId, site, image, target.created);
+    throw new Error("The landing-page draft could not be loaded after creation.");
+  }
+  return serializeAgentLandingPage(row, site, document, {
+    siteCreated: target.created,
+    imageProvider: image?.provider || null,
+  });
 }
 
 export async function updateAgentLandingPageDraft(
@@ -208,23 +276,70 @@ export async function updateAgentLandingPageDraft(
     );
   }
   applyAgentLandingPageCopy(document, input);
-  document.updatedAt = new Date().toISOString();
-  await env.DB.prepare(
-    `UPDATE site_pages
-     SET title = ?, template_id = ?, draft_json = ?, updated_at = datetime('now')
-     WHERE id = ? AND site_id = ?`,
-  )
-    .bind(
-      getLandingPageTitle(document),
-      getLandingPageTemplateId(document),
-      JSON.stringify(document),
-      row.id,
-      site.id,
+  applyAgentLandingPageAction(document, input);
+  applyAgentLandingPageStyle(document, input);
+  const imageQuery = normalizeOptionalText(input.imageQuery);
+  const replacementImage = imageQuery
+    ? await findAndStoreAgentLandingPageHero(env, {
+        siteId: site.id,
+        siteUsername: site.username,
+        pageId: `${row.id}-${crypto.randomUUID()}`,
+        query: imageQuery,
+      })
+    : null;
+  if (imageQuery && !replacementImage) {
+    throw new Error("ME3 could not find and store a replacement image for that search.");
+  }
+  const previousImage = current.hero.image &&
+      current.assets.heroImageAttribution?.provider === "pexels"
+    ? {
+        path: current.hero.image,
+        provider: "pexels" as const,
+        storage: env.SITE_ASSETS ? "r2" as const : "d1" as const,
+        attribution: current.assets.heroImageAttribution,
+      }
+    : null;
+  try {
+    if (replacementImage) {
+      document.hero.image = replacementImage.path;
+      document.assets.heroImage = replacementImage.path;
+      document.assets.heroImageAttribution = replacementImage.attribution;
+      document.seo.socialImage = replacementImage.path;
+    }
+    document.updatedAt = new Date().toISOString();
+    await env.DB.prepare(
+      `UPDATE site_pages
+       SET title = ?, template_id = ?, draft_json = ?, updated_at = datetime('now')
+       WHERE id = ? AND site_id = ?`,
     )
-    .run();
+      .bind(
+        getLandingPageTitle(document),
+        getLandingPageTemplateId(document),
+        JSON.stringify(document),
+        row.id,
+        site.id,
+      )
+      .run();
+  } catch (error) {
+    await deleteAgentLandingPageHero(env, {
+      siteId: site.id,
+      siteUsername: site.username,
+      image: replacementImage,
+    }).catch(() => undefined);
+    throw error;
+  }
+  if (replacementImage && previousImage) {
+    await deleteAgentLandingPageHero(env, {
+      siteId: site.id,
+      siteUsername: site.username,
+      image: previousImage,
+    }).catch(() => undefined);
+  }
   const updated = await loadAgentLandingPage(env, site.id, row.id);
   if (!updated) throw new Error("The updated landing-page draft could not be loaded.");
-  return serializeAgentLandingPage(updated, site, document);
+  return serializeAgentLandingPage(updated, site, document, {
+    imageProvider: replacementImage?.provider || null,
+  });
 }
 
 function applyAgentLandingPageCopy(
@@ -260,6 +375,108 @@ function applyAgentLandingPageCopy(
     if (section?.type === "feature-list") section.items = highlights;
   }
   document.updatedAt = new Date().toISOString();
+}
+
+function applyAgentLandingPageStyle(
+  document: LandingPageDocumentV3,
+  input: Pick<
+    AgentLandingPageDraftInput,
+    "accentColor" | "backgroundColor" | "textColor" | "fontPreset"
+  >,
+): void {
+  const accentColor = normalizeAgentLandingPageColor(
+    input.accentColor,
+    "Accent color",
+  );
+  const backgroundColor = normalizeAgentLandingPageColor(
+    input.backgroundColor,
+    "Background color",
+  );
+  const textColor = normalizeAgentLandingPageColor(
+    input.textColor,
+    "Text color",
+  );
+  const fontPreset = normalizeAgentLandingPageFontPreset(input.fontPreset);
+  if (!accentColor && !backgroundColor && !textColor && !fontPreset) return;
+
+  document.design.customization = {
+    ...document.design.customization,
+    ...(accentColor ? { accentColor } : {}),
+    ...(backgroundColor ? { backgroundColor } : {}),
+    ...(textColor ? { textColor } : {}),
+    ...(fontPreset ? { fontPreset } : {}),
+  };
+}
+
+function applyAgentLandingPageAction(
+  document: LandingPageDocumentV3,
+  input: Pick<
+    AgentLandingPageUpdateInput,
+    "actionType" | "actionHref" | "ctaLabel"
+  >,
+): void {
+  if (input.actionType === undefined && input.actionHref === undefined) return;
+  const action = document.actions.find(
+    (candidate) => candidate.id === document.hero.primaryActionId,
+  );
+  if (!action) throw new Error("The landing page has no primary action to update.");
+  if (input.actionType !== undefined &&
+      input.actionType !== "link" &&
+      input.actionType !== "subscribe") {
+    throw new Error('Action type must be "link" or "subscribe".');
+  }
+  const actionType = input.actionType || action.kind;
+  if (actionType === "subscribe") {
+    if (action.kind !== "subscribe" && !normalizeOptionalText(input.ctaLabel)) {
+      action.label = "Join the list";
+    }
+    action.kind = "subscribe";
+    delete action.href;
+    delete action.resourceId;
+    return;
+  }
+  if (actionType !== "link") {
+    throw new Error("Only link and email-signup actions can be updated in chat for now.");
+  }
+  action.kind = "link";
+  action.href = normalizeAgentLandingPageHref(input.actionHref) || action.href || "/me";
+  delete action.resourceId;
+}
+
+function normalizeAgentLandingPageHref(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (normalized.startsWith("/") && !normalized.startsWith("//")) return normalized;
+  try {
+    const url = new URL(normalized);
+    if (url.protocol === "https:") return url.toString();
+  } catch {
+    // Fall through to the owner-facing validation error.
+  }
+  throw new Error("Action link must be an internal path or an HTTPS URL.");
+}
+
+function normalizeAgentLandingPageColor(
+  value: string | undefined,
+  label: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (!/^#[0-9a-f]{6}$/i.test(normalized)) {
+    throw new Error(`${label} must be a six-digit hex color such as #147d64.`);
+  }
+  return normalized.toLowerCase();
+}
+
+function normalizeAgentLandingPageFontPreset(
+  value: string | undefined,
+): LandingPageFontPreset | undefined {
+  if (value === undefined) return undefined;
+  const normalized = normalizeLandingPageFontPreset(value);
+  if (!normalized) {
+    throw new Error('Font preset must be "editorial", "bold", or "modern".');
+  }
+  return normalized;
 }
 
 function parseAgentLandingPageHighlights(
@@ -306,11 +523,144 @@ async function assertLandingPagesPluginEnabled(
   const plugin = await env.DB.prepare(
     `SELECT enabled, status FROM plugin_installations WHERE plugin_id = ? LIMIT 1`,
   )
-    .bind("me3.landing-pages")
+    .bind(LANDING_PAGES_PLUGIN_ID)
     .first<{ enabled: number; status: string }>();
   if (!plugin || plugin.enabled === 0 || plugin.status !== "installed") {
     throw new Error("Activate ME3 Landing Pages before creating or editing a page in chat.");
   }
+}
+
+async function ensureLandingPagesPluginEnabled(
+  env: AgentLandingPageEnv,
+): Promise<void> {
+  const plugin = await env.DB.prepare(
+    `SELECT enabled, status FROM plugin_installations WHERE plugin_id = ? LIMIT 1`,
+  )
+    .bind(LANDING_PAGES_PLUGIN_ID)
+    .first<{ enabled: number; status: string }>();
+  if (plugin?.enabled !== 0 && plugin?.status === "installed") return;
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO plugin_installations (
+       plugin_id, version, enabled, status, granted_permissions_json,
+       setup_state_json, installed_at, updated_at
+     )
+     VALUES (?, ?, 1, 'installed', ?, ?, ?, ?)
+     ON CONFLICT(plugin_id) DO UPDATE SET
+       version = excluded.version,
+       enabled = 1,
+       status = 'installed',
+       granted_permissions_json = excluded.granted_permissions_json,
+       setup_state_json = excluded.setup_state_json,
+       updated_at = excluded.updated_at`,
+  )
+    .bind(
+      LANDING_PAGES_PLUGIN_ID,
+      LANDING_PAGES_PLUGIN_VERSION,
+      JSON.stringify([
+        "sites.landing_pages.manage",
+        "agent.landing_pages.generate",
+      ]),
+      JSON.stringify({ activatedBy: "assistant-site-builder" }),
+      now,
+      now,
+    )
+    .run();
+}
+
+async function createAgentLandingPageSite(
+  env: AgentLandingPageEnv,
+  userId: string,
+  input: AgentLandingPageDraftInput,
+): Promise<DbAgentLandingSite> {
+  const result = await env.DB.prepare(
+    `SELECT id, username, site_role, template_id, custom_domain, updated_at
+     FROM sites
+     WHERE user_id = ? AND COALESCE(site_type, 'profile') = 'profile'
+     ORDER BY created_at ASC, username ASC
+     LIMIT 20`,
+  )
+    .bind(userId)
+    .all<DbAgentLandingSite>();
+  const sites = result.results || [];
+  if (!sites.some((site) => site.site_role === "profile")) {
+    throw new Error("Create your ME3 profile site before building an additional site.");
+  }
+  if (sites.filter((site) => site.site_role === "organization").length >= 3) {
+    throw new Error("You have used all three additional site slots.");
+  }
+
+  const requestedHandle =
+    normalizeOptionalText(input.siteHandle) ||
+    normalizeOptionalText(input.siteName) ||
+    normalizeOptionalText(input.headline) ||
+    input.brief;
+  const username = uniqueAgentSiteUsername(
+    requestedHandle,
+    new Set(sites.map((site) => site.username.toLowerCase())),
+  );
+  const id = crypto.randomUUID();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO sites (id, user_id, username, site_type, site_role, template_id)
+       VALUES (?, ?, ?, 'profile', 'organization', ?)`,
+    )
+      .bind(id, userId, username, AGENT_LANDING_PAGE_SITE_TEMPLATE_ID)
+      .run();
+  } catch (error) {
+    const message = String(error);
+    if (/ME3_SITE_ORGANIZATION_LIMIT/i.test(message)) {
+      throw new Error("You have used all three additional site slots.");
+    }
+    if (/unique|constraint/i.test(message)) {
+      throw new Error(`The working site handle @${username} is already in use.`);
+    }
+    throw error;
+  }
+
+  return {
+    id,
+    username,
+    site_role: "organization",
+    template_id: AGENT_LANDING_PAGE_SITE_TEMPLATE_ID,
+    custom_domain: null,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function uniqueAgentSiteUsername(value: string, existing: Set<string>): string {
+  let base = slugifyAgentLandingPage(value)
+    .replace(/-+/g, "-")
+    .slice(0, 30)
+    .replace(/-+$/g, "");
+  if (base.length < 3) base = `site-${base || "new"}`.slice(0, 30);
+  if (!existing.has(base)) return base;
+  for (let suffix = 2; suffix < 100; suffix += 1) {
+    const suffixText = `-${suffix}`;
+    const candidate = `${base.slice(0, 30 - suffixText.length)}${suffixText}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  throw new Error("I could not find an unused working handle for the new site.");
+}
+
+async function rollbackAgentLandingPageCreation(
+  env: AgentLandingPageEnv,
+  userId: string,
+  site: DbAgentLandingSite,
+  image: AgentLandingPageStoredImage | null,
+  deleteSite: boolean,
+): Promise<void> {
+  await deleteAgentLandingPageHero(env, {
+    siteId: site.id,
+    siteUsername: site.username,
+    image,
+  }).catch(() => undefined);
+  if (!deleteSite) return;
+  await env.DB.prepare("DELETE FROM sites WHERE id = ? AND user_id = ?")
+    .bind(site.id, userId)
+    .run()
+    .catch(() => undefined);
 }
 
 async function resolveAgentLandingPageSite(
@@ -319,7 +669,7 @@ async function resolveAgentLandingPageSite(
   siteReference?: string,
 ): Promise<DbAgentLandingSite> {
   const result = await env.DB.prepare(
-    `SELECT id, username, custom_domain, updated_at
+    `SELECT id, username, site_role, template_id, custom_domain, updated_at
      FROM sites
      WHERE user_id = ? AND COALESCE(site_type, 'profile') = 'profile'
      ORDER BY updated_at DESC, username ASC
@@ -405,8 +755,16 @@ function serializeAgentLandingPage(
   row: DbAgentLandingPage,
   site: DbAgentLandingSite,
   document: LandingPageDocumentV3,
+  options: {
+    siteCreated?: boolean;
+    imageProvider?: "pexels" | null;
+  } = {},
 ): AgentLandingPageSummary {
   const designPackId = getLandingPageDesignPackId(document);
+  const isSiteHomepage =
+    site.site_role === "organization" &&
+    site.template_id === AGENT_LANDING_PAGE_SITE_TEMPLATE_ID &&
+    row.slug === "home";
   return {
     id: row.id,
     siteId: row.site_id,
@@ -416,10 +774,20 @@ function serializeAgentLandingPage(
     purpose: getLandingPageTemplateId(document),
     designPackId,
     designName: getLandingPageDesignPack(designPackId).name,
+    siteCreated: options.siteCreated === true,
+    isSiteHomepage,
+    imageProvider:
+      options.imageProvider === "pexels" ||
+      document.assets.heroImageAttribution?.provider === "pexels"
+        ? "pexels"
+        : null,
     published: Boolean(row.published_revision_id || row.published_at),
     updatedAt: row.updated_at,
     editorPath: `/sites/${encodeURIComponent(site.username)}/pages/${encodeURIComponent(row.id)}`,
     previewPath: `/api/sites/${encodeURIComponent(site.username)}/pages/${encodeURIComponent(row.id)}/preview-html`,
+    publicPath: isSiteHomepage
+      ? `/site/${encodeURIComponent(site.username)}/`
+      : `/me/${encodeURIComponent(row.slug)}`,
   };
 }
 

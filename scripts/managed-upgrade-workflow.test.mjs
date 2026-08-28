@@ -74,12 +74,12 @@ test("reuses frozen resources and contains no first-install or destructive opera
   }
 });
 
-test("installs only the hosted OpenAI secret before deploying the target", () => {
-  const installSecret = getStep("Install the hosted image provider secret");
+test("installs hosted provider secrets before deploying the target", () => {
+  const installSecret = getStep("Install the hosted provider secrets");
   const deploy = getStep("Deploy the target to the existing Worker");
   const secretWrites = workflow.match(/wrangler secret put/g) || [];
 
-  assert.equal(secretWrites.length, 1);
+  assert.equal(secretWrites.length, 2);
   assert.match(
     installSecret,
     /ME3_MANAGED_OPENAI_API_KEY: \$\{\{ secrets\.ME3_MANAGED_OPENAI_API_KEY \}\}/,
@@ -87,6 +87,14 @@ test("installs only the hosted OpenAI secret before deploying the target", () =>
   assert.match(
     installSecret,
     /wrangler secret put OPENAI_API_KEY --config wrangler\.toml/,
+  );
+  assert.match(
+    installSecret,
+    /ME3_MANAGED_PEXELS_API_KEY: \$\{\{ secrets\.ME3_MANAGED_PEXELS_API_KEY \}\}/,
+  );
+  assert.match(
+    installSecret,
+    /wrangler secret put PEXELS_API_KEY --config wrangler\.toml/,
   );
   assert.match(
     installSecret,

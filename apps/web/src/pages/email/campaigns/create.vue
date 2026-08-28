@@ -47,6 +47,7 @@ type TransportStatus = {
   ready: boolean;
   reason: string | null;
   sender: { ref: string; fromAddress: string; domain: string } | null;
+  addOn: { allowance: number; remaining: number; entitled: boolean } | null;
   instructions: string[];
 };
 type Review = {
@@ -97,9 +98,11 @@ const sendMode = ref<"now" | "schedule">("now");
 const scheduledLocal = ref("");
 
 const ownerEmail = computed(() => auth.user?.email?.trim().toLowerCase() || "");
-const canDraftCampaign = computed(() => Boolean(transport.value?.ready || remoteApiHost));
+const canDraftCampaign = computed(() => Boolean(transport.value || remoteApiHost));
 const canCreate = computed(() => Boolean(selectedSiteId.value && canDraftCampaign.value));
-const canReview = computed(() => Boolean(subject.value.trim() && campaign.value));
+const canReview = computed(() =>
+  Boolean(brand.value.name.trim() && subject.value.trim() && campaign.value),
+);
 const stepName = computed(() => ({
   1: "Email list",
   2: "Compose",
@@ -236,7 +239,11 @@ function scheduleSave() {
 }
 
 async function continueToReview() {
-  if (!canReview.value) {
+  if (!brand.value.name.trim()) {
+    error.value = "Add a sender name before reviewing your campaign.";
+    return;
+  }
+  if (!subject.value.trim()) {
     error.value = "Add a subject before reviewing your campaign.";
     return;
   }
@@ -391,8 +398,8 @@ onBeforeUnmount(() => {
         <section v-if="!canDraftCampaign && !campaign" class="availability-card">
           <UiIcon name="Info" :size="22" aria-hidden="true" />
           <div>
-            <h1>Campaign sending is not ready</h1>
-            <p>{{ transport?.managed ? (transport.instructions[0] || "Finish setting up the managed campaign sender first.") : "Campaign sending is available only on managed ME3 installations." }}</p>
+            <h1>Campaign drafting is not ready</h1>
+            <p>Return to Campaigns and activate the Email Campaigns plugin first.</p>
             <Button color="outline" shape="soft" to="/email/campaigns">View campaign history</Button>
           </div>
         </section>
@@ -419,6 +426,14 @@ onBeforeUnmount(() => {
           <div class="compose-grid">
             <section class="campaign-form">
               <div class="field-grid">
+                <label class="field field--wide">
+                  <span>Sender name</span>
+                  <input
+                    v-model="brand.name"
+                    maxlength="120"
+                    placeholder="The name subscribers will see"
+                  />
+                </label>
                 <label class="field field--wide"><span>Subject</span><input v-model="subject" maxlength="200" placeholder="A useful update" /></label>
                 <label class="field field--wide"><span>Preview text</span><input v-model="previewText" maxlength="240" placeholder="A short line shown beside the subject" /></label>
                 <label class="field field--wide">
@@ -474,6 +489,13 @@ onBeforeUnmount(() => {
             />
 
             <section class="review-details">
+              <div v-if="review && !review.transport.ready" class="delivery-notice">
+                <div>
+                  <strong>Delivery is not active</strong>
+                  <p>You can keep this draft. Activate or configure delivery from the Campaigns page before sending.</p>
+                </div>
+                <Button color="outline" shape="soft" size="small" to="/email/campaigns">Manage delivery</Button>
+              </div>
               <div class="audience-count">
                 <strong>{{ review?.audience.eligibleCount || 0 }}</strong>
                 <span>
@@ -491,7 +513,7 @@ onBeforeUnmount(() => {
 
               <div class="test-send">
                 <div><strong>Send a test</strong><p>Send a test to {{ ownerEmail }}.</p></div>
-                <Button color="outline" shape="soft" size="small" :disabled="testing" @click="sendTest">{{ testing ? "Sending…" : "Send test" }}</Button>
+                <Button color="outline" shape="soft" size="small" :disabled="testing || !review?.transport.ready" @click="sendTest">{{ testing ? "Sending…" : "Send test" }}</Button>
               </div>
               <p v-if="testMessage" class="test-message" role="status">{{ testMessage }}</p>
 
@@ -578,6 +600,9 @@ details summary { cursor: pointer; font-weight: 700; }
 details ul { margin-bottom: 0; color: var(--ui-text-muted, var(--color-text-muted)); font-size: .82rem; }
 .test-send { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-top: 14px; border-top: 1px solid var(--ui-border, var(--color-border)); }
 .test-send p, .test-message { margin: 3px 0 0; color: var(--ui-text-muted, var(--color-text-muted)); font-size: .78rem; line-height: 1.4; }
+.delivery-notice { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface-muted, var(--color-bg-subtle)); }
+.delivery-notice strong, .delivery-notice p { margin: 0; }
+.delivery-notice p { margin-top: 3px; color: var(--ui-text-muted, var(--color-text-muted)); font-size: .8rem; line-height: 1.4; }
 .send-choice { display: grid; gap: 10px; padding: 16px 0 0; border: 0; border-top: 1px solid var(--ui-border, var(--color-border)); margin: 0; }
 .send-choice label { display: flex; align-items: center; gap: 8px; font-size: .86rem; }
 .send-choice .field { display: grid; align-items: stretch; }

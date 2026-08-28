@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CORE_CHAT_TOOLS,
   MAX_AGENT_TOOL_MODEL_STEPS,
   fromAnthropicToolResponse,
   fromOpenAiToolResponse,
@@ -150,6 +151,41 @@ describe("agent tool provider adapters", () => {
       isError: false,
     },
   ];
+
+  it("keeps the public URL web tool schema compatible across providers", () => {
+    const webOpen = CORE_CHAT_TOOLS.find((tool) => tool.name === "core_web_open");
+    expect(webOpen).toBeDefined();
+
+    const openAiRequest = toOpenAiToolRequest([], [webOpen!]) as {
+      tools: Array<{
+        function: {
+          parameters: { properties: { url: Record<string, unknown> } };
+        };
+      }>;
+    };
+    const anthropicRequest = toAnthropicToolRequest([], [webOpen!]) as {
+      tools: Array<{
+        input_schema: { properties: { url: Record<string, unknown> } };
+      }>;
+    };
+    const workersAiRequest = toWorkersAiToolRequest([], [webOpen!]) as {
+      tools: Array<{
+        function: {
+          parameters: { properties: { url: Record<string, unknown> } };
+        };
+      }>;
+    };
+
+    expect(openAiRequest.tools[0].function.parameters.properties.url).not.toHaveProperty(
+      "format",
+    );
+    expect(anthropicRequest.tools[0].input_schema.properties.url).not.toHaveProperty(
+      "format",
+    );
+    expect(workersAiRequest.tools[0].function.parameters.properties.url).not.toHaveProperty(
+      "format",
+    );
+  });
 
   it("maps OpenAI strict tools and tool messages", () => {
     const request = toOpenAiToolRequest(transcript, TOOLS) as {

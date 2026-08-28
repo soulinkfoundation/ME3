@@ -10,6 +10,12 @@ import {
   type ManagedCampaignSubmissionResponse,
 } from "../../../shared/managed-campaign-contract";
 import { parseCampaignDocument } from "../../../shared/campaign-document";
+import {
+  CAMPAIGN_ADD_ON_PLANS,
+  campaignAddOnPlan,
+  type CampaignAddOnPlanKey,
+  type CampaignAddOnStatus,
+} from "@me3-core/plugin-email-campaigns";
 import { evaluateCampaignAudience } from "./campaign-audience";
 import {
   CampaignInputError,
@@ -38,6 +44,7 @@ export type CampaignTransportStatus = {
     fromAddress: string;
     status: string;
   };
+  addOn: CampaignAddOnStatus | null;
   instructions: string[];
 };
 
@@ -82,7 +89,10 @@ export async function getCampaignTransportStatus(
       ready: false,
       reason: "managed_installation_required",
       sender: null,
-      instructions: ["Campaign sending is available on managed ME3 installations."],
+      addOn: null,
+      instructions: [
+        "Activate the plugin to create campaign drafts. Configure an owner-supplied campaign provider before sending from a self-hosted installation.",
+      ],
     };
   }
   const config = await getManagedCampaignConfig(env).catch(() => null);
@@ -91,7 +101,29 @@ export async function getCampaignTransportStatus(
     return unavailableTransport(true, "managed_transport_not_configured");
   }
 
+  let knownAddOn: CampaignAddOnStatus | null = null;
   try {
+    const addOnResponse = await managedFetch(
+      config,
+      "/v1/managed-campaign/billing/status",
+      { method: "GET" },
+      fetcher,
+    );
+    const addOnBody = await addOnResponse.json().catch(() => null) as
+      | { addOn?: unknown }
+      | null;
+    const addOn = normalizeCampaignAddOnStatus(addOnBody?.addOn);
+    if (!addOnResponse.ok || isRedirect(addOnResponse.status) || !addOn) {
+      return unavailableTransport(true, `campaign_billing_status_${addOnResponse.status}`);
+    }
+    knownAddOn = addOn;
+    if (!addOn.entitled) {
+      await storeTransportStatus(env, null, false, "campaign_add_on_required");
+      return unavailableTransport(true, "campaign_add_on_required", addOn, [
+        "Choose a monthly email capacity to activate ME3-managed campaign delivery.",
+      ]);
+    }
+
     const response = await managedFetch(
       config,
       `/v1/installs/${encodeURIComponent(config.coreInstallId)}/campaign-sender`,
@@ -100,7 +132,7 @@ export async function getCampaignTransportStatus(
     );
     if (!response.ok || isRedirect(response.status)) {
       await storeTransportStatus(env, null, false, `sender_status_${response.status}`);
-      return unavailableTransport(true, `sender_status_${response.status}`);
+      return unavailableTransport(true, `sender_status_${response.status}`, addOn);
     }
     const body = (await response.json().catch(() => null)) as ManagedCampaignSenderStatus | null;
     const sender = body?.sender;
@@ -111,7 +143,7 @@ export async function getCampaignTransportStatus(
       (sender && (!sender.ref || !sender.fromAddress || !sender.domain))
     ) {
       await storeTransportStatus(env, null, false, "sender_status_invalid");
-      return unavailableTransport(true, "sender_status_invalid");
+      return unavailableTransport(true, "sender_status_invalid", addOn);
     }
     const status: CampaignTransportStatus = {
       available: Boolean(body.connected),
@@ -126,6 +158,7 @@ export async function getCampaignTransportStatus(
             status: sender.status,
           }
         : null,
+      addOn,
       instructions: Array.isArray(body.instructions) ? body.instructions : [],
     };
     await storeTransportStatus(env, status.sender, status.ready, status.reason);
@@ -133,8 +166,66 @@ export async function getCampaignTransportStatus(
     return status;
   } catch {
     await storeTransportStatus(env, null, false, "managed_transport_unreachable");
-    return unavailableTransport(true, "managed_transport_unreachable");
+    return unavailableTransport(true, "managed_transport_unreachable", knownAddOn);
   }
+}
+
+export async function startCampaignAddOnCheckout(
+  env: Env,
+  planKey: CampaignAddOnPlanKey,
+  fetcher: typeof fetch = fetch,
+): Promise<{ url: string }> {
+  if (!campaignAddOnPlan(planKey)) {
+    throw new CampaignInputError("Choose a supported email capacity", 400, "campaign_plan_invalid");
+  }
+  return managedCampaignBillingAction(env, "/v1/managed-campaign/billing/checkout", {
+    plan: planKey,
+  }, fetcher);
+}
+
+export async function openCampaignAddOnPortal(
+  env: Env,
+  fetcher: typeof fetch = fetch,
+): Promise<{ url: string }> {
+  return managedCampaignBillingAction(
+    env,
+    "/v1/managed-campaign/billing/portal",
+    {},
+    fetcher,
+  );
+}
+
+export async function setupManagedCampaignSender(
+  env: Env,
+  fetcher: typeof fetch = fetch,
+): Promise<CampaignTransportStatus> {
+  const config = await getManagedCampaignConfig(env).catch(() => null);
+  if (!config) {
+    throw new CampaignInputError(
+      "Managed campaign delivery is not configured",
+      409,
+      "managed_transport_not_configured",
+    );
+  }
+  const response = await managedFetch(
+    config,
+    `/v1/installs/${encodeURIComponent(config.coreInstallId)}/campaign-sender`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    },
+    fetcher,
+  );
+  if (!response.ok || isRedirect(response.status)) {
+    const body = await response.json().catch(() => null) as { error?: unknown } | null;
+    throw new CampaignInputError(
+      typeof body?.error === "string" ? body.error : "Campaign sender setup failed",
+      409,
+      "campaign_sender_setup_failed",
+    );
+  }
+  return getCampaignTransportStatus(env, fetcher);
 }
 
 export async function startCampaignDelivery(
@@ -159,6 +250,13 @@ export async function startCampaignDelivery(
       "This Site has no eligible campaign subscribers",
       409,
       "audience_empty",
+    );
+  }
+  if (transport.addOn && audience.eligible.length > transport.addOn.remaining) {
+    throw new CampaignInputError(
+      `This campaign needs ${audience.eligible.length.toLocaleString()} deliveries, but ${transport.addOn.remaining.toLocaleString()} remain this month`,
+      409,
+      "campaign_allowance_insufficient",
     );
   }
 
@@ -335,8 +433,10 @@ export async function dispatchDueCampaignJobs(
      SET status = 'queued', provider_reason = NULL, updated_at = CURRENT_TIMESTAMP
      WHERE status = 'paused' AND provider_reason IN (
        'managed_transport_unavailable', 'managed_transport_unreachable',
-       'managed_transport_not_configured', 'sender_not_ready'
-     ) OR (status = 'paused' AND provider_reason LIKE 'sender_status_%')`,
+       'managed_transport_not_configured', 'sender_not_ready',
+       'campaign_add_on_required'
+     ) OR (status = 'paused' AND provider_reason LIKE 'sender_status_%')
+        OR (status = 'paused' AND provider_reason LIKE 'campaign_billing_status_%')`,
   ).run();
   await recoverStaleSubmittingJobs(env);
 
@@ -1185,15 +1285,85 @@ function normalizeEmail(value: unknown) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "";
 }
 
-function unavailableTransport(managed: boolean, reason: string): CampaignTransportStatus {
+function unavailableTransport(
+  managed: boolean,
+  reason: string,
+  addOn: CampaignAddOnStatus | null = null,
+  instructions: string[] = [],
+): CampaignTransportStatus {
   return {
     available: false,
     managed,
     ready: false,
     reason,
     sender: null,
-    instructions: [],
+    addOn,
+    instructions,
   };
+}
+
+async function managedCampaignBillingAction(
+  env: Env,
+  path: string,
+  body: Record<string, unknown>,
+  fetcher: typeof fetch,
+): Promise<{ url: string }> {
+  const config = await getManagedCampaignConfig(env).catch(() => null);
+  if (!config) {
+    throw new CampaignInputError(
+      "Managed campaign billing is available only on Hosted by ME3",
+      409,
+      "managed_installation_required",
+    );
+  }
+  const response = await managedFetch(
+    config,
+    path,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    fetcher,
+  );
+  const result = await response.json().catch(() => null) as
+    | { url?: unknown; error?: unknown; code?: unknown }
+    | null;
+  if (!response.ok || isRedirect(response.status) || typeof result?.url !== "string") {
+    throw new CampaignInputError(
+      typeof result?.error === "string" ? result.error : "Campaign billing is unavailable",
+      response.status === 400 ? 400 : 409,
+      typeof result?.code === "string" ? result.code : "campaign_billing_unavailable",
+    );
+  }
+  return { url: result.url };
+}
+
+function normalizeCampaignAddOnStatus(value: unknown): CampaignAddOnStatus | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<CampaignAddOnStatus>;
+  if (
+    typeof candidate.available !== "boolean" ||
+    typeof candidate.entitled !== "boolean" ||
+    typeof candidate.allowance !== "number" ||
+    typeof candidate.used !== "number" ||
+    typeof candidate.remaining !== "number" ||
+    typeof candidate.resetAt !== "string" ||
+    !Array.isArray(candidate.plans)
+  ) {
+    return null;
+  }
+  const plans = candidate.plans.filter((plan) =>
+    Boolean(
+      plan &&
+        CAMPAIGN_ADD_ON_PLANS.some((known) => known.key === plan.key) &&
+        typeof plan.allowance === "number" &&
+        typeof plan.monthlyPriceUsd === "number" &&
+        typeof plan.checkoutAvailable === "boolean",
+    ),
+  );
+  if (plans.length !== CAMPAIGN_ADD_ON_PLANS.length) return null;
+  return { ...candidate, plans } as CampaignAddOnStatus;
 }
 
 function safeJson(value: string): unknown {

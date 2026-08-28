@@ -27,13 +27,13 @@ const contactMailboxTabs: Array<{
   label: string;
   icon: UiIconName;
 }> = [
+  { id: "campaigns", label: "Campaigns", icon: "Send" },
   { id: "inbox", label: "Inbox", icon: "Inbox" },
   { id: "drafts", label: "Drafts", icon: "FileText" },
   { id: "sent", label: "Sent", icon: "Send" },
   { id: "archive", label: "Archive", icon: "Archive" },
   { id: "trash", label: "Trash", icon: "Trash2" },
   { id: "contacts", label: "Contacts", icon: "UsersRound" },
-  { id: "campaigns", label: "Campaigns", icon: "Send" },
 ];
 
 function openContactModal() {

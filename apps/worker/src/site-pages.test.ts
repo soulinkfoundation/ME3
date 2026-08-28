@@ -122,6 +122,38 @@ describe("site pages", () => {
     expect(state.files.has("site-1:public/private-launch/index.html")).toBe(false);
   });
 
+  it("publishes an Assistant-built organization homepage at the site root", async () => {
+    const { env, state } = createEnv();
+    const agentSite: DbSite = {
+      ...site,
+      id: "site-agent",
+      username: "bright-ideas",
+      site_role: "organization",
+      template_id: "agent-landing-page",
+      published_at: null,
+    };
+    const page = await createSitePage(env, agentSite, {
+      username: agentSite.username,
+      slug: "home",
+      brief: "A private launch for a focused product studio for early-stage teams.",
+      template: "waitlist",
+      profile: { name: "Owner", bio: null, avatar: null, profileUrl: null },
+    });
+
+    await publishSitePage(env, agentSite, page.id);
+
+    expect(state.files.get("site-agent:public/index.html")).toContain(
+      "A private launch",
+    );
+    expect(state.files.get("site-agent:public/home/index.html")).toContain(
+      "A private launch",
+    );
+
+    await unpublishSitePage(env, agentSite, page.id);
+    expect(state.files.has("site-agent:public/index.html")).toBe(false);
+    expect(state.files.has("site-agent:public/home/index.html")).toBe(false);
+  });
+
   it("fails closed when a booking action has no selected offer", async () => {
     const { env } = createEnv();
     const page = await createSitePage(env, site, {

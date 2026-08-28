@@ -1,4 +1,5 @@
 import {
+  AGENT_LANDING_PAGE_SITE_TEMPLATE_ID,
   buildLandingPageDocument,
   getLandingPageTemplateId,
   getLandingPageTitle,
@@ -241,6 +242,16 @@ export async function publishSitePage(
     renderedHtml,
     "text/html",
   );
+  const homepage = isAgentLandingPageHomepage(site, page);
+  if (homepage) {
+    await putSiteFile(
+      env,
+      site.id,
+      "public/index.html",
+      renderedHtml,
+      "text/html",
+    );
+  }
   await env.DB.prepare(
     `UPDATE site_pages
      SET published_revision_id = ?, published_at = datetime('now'), updated_at = datetime('now')
@@ -248,6 +259,13 @@ export async function publishSitePage(
   )
     .bind(revisionId, page.id, site.id)
     .run();
+  if (homepage) {
+    await env.DB.prepare(
+      "UPDATE sites SET published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+    )
+      .bind(site.id)
+      .run();
+  }
   const [updatedPage, revision] = await Promise.all([
     getSitePage(env, site.id, page.id),
     env.DB.prepare(
@@ -268,6 +286,7 @@ export async function unpublishSitePage(
 ): Promise<DbSitePage> {
   const page = await getSitePage(env, site.id, pageId);
   if (!page) throw new SitePageInputError("Page not found.", 404);
+  const homepage = isAgentLandingPageHomepage(site, page);
   await Promise.all([
     env.DB.prepare(
       `UPDATE site_pages
@@ -277,10 +296,28 @@ export async function unpublishSitePage(
       .bind(page.id, site.id)
       .run(),
     deleteSiteFile(env, site.id, `public/${page.slug}/index.html`),
+    ...(homepage
+      ? [
+          deleteSiteFile(env, site.id, "public/index.html"),
+          env.DB.prepare(
+            "UPDATE sites SET published_at = NULL, updated_at = datetime('now') WHERE id = ?",
+          )
+            .bind(site.id)
+            .run(),
+        ]
+      : []),
   ]);
   const updated = await getSitePage(env, site.id, page.id);
   if (!updated) throw new Error("Unpublished page could not be loaded");
   return updated;
+}
+
+function isAgentLandingPageHomepage(site: DbSite, page: DbSitePage): boolean {
+  return (
+    site.site_role === "organization" &&
+    site.template_id === AGENT_LANDING_PAGE_SITE_TEMPLATE_ID &&
+    page.slug === "home"
+  );
 }
 
 export async function deleteSitePage(

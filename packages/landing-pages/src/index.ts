@@ -21,6 +21,8 @@ export {
 } from "./design-packs";
 
 export const LANDING_PAGES_PLUGIN_ID = "me3.landing-pages";
+export const LANDING_PAGES_PLUGIN_VERSION = "0.2.0";
+export const AGENT_LANDING_PAGE_SITE_TEMPLATE_ID = "agent-landing-page";
 
 export const LANDING_PAGE_TEMPLATE_IDS = ["event", "service", "waitlist"] as const;
 export const LANDING_PAGE_RECIPE_IDS = [
@@ -36,6 +38,22 @@ export type LandingPageThemeId =
   | "quiet-service"
   | "editorial-event"
   | "signal-waitlist";
+export const LANDING_PAGE_FONT_PRESET_IDS = [
+  "editorial",
+  "bold",
+  "modern",
+] as const;
+export type LandingPageFontPreset =
+  (typeof LANDING_PAGE_FONT_PRESET_IDS)[number];
+
+export function normalizeLandingPageFontPreset(
+  value: unknown,
+): LandingPageFontPreset | null {
+  return typeof value === "string" &&
+    LANDING_PAGE_FONT_PRESET_IDS.includes(value as LandingPageFontPreset)
+    ? (value as LandingPageFontPreset)
+    : null;
+}
 
 export const LANDING_PAGES_RUNTIME = {
   id: LANDING_PAGES_PLUGIN_ID,
@@ -321,10 +339,25 @@ export interface LandingPageDocumentV3 {
     /** Missing on older v3 documents, which intentionally retain the legacy renderer. */
     packId?: LandingPageDesignPackId;
     packVersion?: 1;
+    customization?: {
+      accentColor?: string;
+      backgroundColor?: string;
+      textColor?: string;
+      fontPreset?: LandingPageFontPreset;
+    };
   };
-  assets: LandingPageDocumentV2["assets"];
+  assets: LandingPageDocumentV2["assets"] & {
+    heroImageAttribution?: LandingPageImageAttribution | null;
+  };
   updatedAt?: string;
 }
+
+export type LandingPageImageAttribution = {
+  provider: "pexels";
+  photographer: string;
+  photographerUrl: string;
+  sourceUrl: string;
+};
 
 export type LandingPageDocument =
   | LandingPageDocumentV1
@@ -379,6 +412,7 @@ export interface LandingPageBuildInput {
   template: LandingPageTemplateId;
   designPackId?: LandingPageDesignPackId | null;
   heroImage?: string | null;
+  heroImageAttribution?: LandingPageImageAttribution | null;
   sectionImage?: string | null;
   feedback?: string | null;
   profile: LandingPageProfileInput;
@@ -592,6 +626,7 @@ export function normalizeLandingPageDocument(
     const designPackId = normalizeLandingPageDesignPackId(page.design?.packId);
     const hasDesignPackId = page.design?.packId !== undefined;
     const hasDesignPackVersion = page.design?.packVersion !== undefined;
+    const customization = page.design?.customization;
     if (
       !page.intent ||
       !page.recipe ||
@@ -617,7 +652,18 @@ export function normalizeLandingPageDocument(
         !landingPageDesignPackSupportsPurpose(
           designPackId,
           page.recipe.template,
-        ))
+        )) ||
+      (customization !== undefined &&
+        (!customization ||
+          typeof customization !== "object" ||
+          (customization.accentColor !== undefined &&
+            !isLandingPageCustomizationColor(customization.accentColor)) ||
+          (customization.backgroundColor !== undefined &&
+            !isLandingPageCustomizationColor(customization.backgroundColor)) ||
+          (customization.textColor !== undefined &&
+            !isLandingPageCustomizationColor(customization.textColor)) ||
+          (customization.fontPreset !== undefined &&
+            !normalizeLandingPageFontPreset(customization.fontPreset))))
     ) {
       return null;
     }
@@ -1104,7 +1150,7 @@ function buildLandingPageDocumentV3(
       id: "profile",
       type: "profile",
       heading: recipe.intent === "event" ? "Hosted by" : "From the person behind it",
-      body: input.profile.bio || `${profileName} created this page with ME3.`,
+      body: landingPageProfileBio(input.profile.bio),
       profileName,
       profileImage: input.profile.avatar,
       profileLink: input.profile.profileUrl,
@@ -1192,6 +1238,7 @@ function buildLandingPageDocumentV3(
     },
     assets: {
       heroImage: input.heroImage || null,
+      heroImageAttribution: input.heroImageAttribution || null,
       sectionImage: input.sectionImage || null,
     },
     updatedAt: new Date().toISOString(),
@@ -1295,9 +1342,7 @@ export function buildLandingPageDocumentV2(
             id: "maker",
             type: "profile",
             heading: "From the person building it",
-            body:
-              input.profile.bio ||
-              `${profileName} is shaping this launch through ME3.`,
+            body: landingPageProfileBio(input.profile.bio),
             profileName,
             profileImage: input.profile.avatar,
             profileLink: input.profile.profileUrl,
@@ -1412,9 +1457,7 @@ export function buildLandingPageDocumentV2(
           id: "host",
           type: "profile",
           heading: "Hosted by",
-          body:
-            input.profile.bio ||
-            `${profileName} is hosting this event through ME3.`,
+          body: landingPageProfileBio(input.profile.bio),
           profileName,
           profileImage: input.profile.avatar,
           profileLink: input.profile.profileUrl,
@@ -1578,8 +1621,7 @@ function renderStarterLandingPageHtml(
     designPackId === "starter-service-01"
       ? `<div class="pack-announcement" aria-hidden="true"><span>Clear offer · useful work · decisive next step · </span><span>Clear offer · useful work · decisive next step · </span></div>`
       : "";
-
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.seo.title)}</title><meta name="description" content="${escapeHtml(page.seo.description)}"><meta property="og:title" content="${escapeHtml(page.seo.title)}"><meta property="og:description" content="${escapeHtml(page.seo.description)}">${socialImage}${starterLandingPageFontLinks(designPackId)}<style>${renderStarterLandingPageCss(page, designPackId)}${renderActionCss()}</style></head><body data-theme="${escapeHtml(page.design.theme)}" data-design-pack="${escapeHtml(designPackId)}" data-design-pack-version="${pack.version}"><a href="#main" class="skip-link">Skip to content</a>${announcement}<header class="pack-header shell"><a class="pack-brand" href="#">${escapeHtml(username)}</a><nav aria-label="Page navigation"><a href="#${escapeHtml(firstSection)}">Explore</a>${primaryAction ? `<a class="pack-nav-action" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}</nav></header><main id="main"><header class="pack-hero"><div class="shell pack-hero-grid"><div class="pack-hero-copy"><span class="pack-kicker">${escapeHtml(page.intent.audience)}</span><h1>${renderStarterHeadline(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p><div class="pack-hero-actions">${primaryAction ? `<a class="button primary" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}${secondaryAction ? `<a class="button secondary" href="${escapeHtml(actionHref(secondaryAction))}">${escapeHtml(secondaryAction.label)}</a>` : ""}</div></div><aside class="pack-hero-aside" aria-label="Page highlights">${renderStarterLandingPageVisual(page, designPackId)}${metadata ? `<div class="pack-meta">${metadata}</div>` : ""}</aside></div></header>${sections}</main><footer class="pack-footer"><div class="shell"><span>${escapeHtml(username)}</span><span>Built with ME3</span></div></footer><script>${landingActionScript()}</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.seo.title)}</title><meta name="description" content="${escapeHtml(page.seo.description)}"><meta property="og:title" content="${escapeHtml(page.seo.title)}"><meta property="og:description" content="${escapeHtml(page.seo.description)}">${socialImage}${starterLandingPageFontLinks(page, designPackId)}<style>${renderStarterLandingPageCss(page, designPackId)}${renderActionCss()}</style></head><body data-theme="${escapeHtml(page.design.theme)}" data-design-pack="${escapeHtml(designPackId)}" data-design-pack-version="${pack.version}"><a href="#main" class="skip-link">Skip to content</a>${announcement}<header class="pack-header shell"><a class="pack-brand" href="#">${escapeHtml(username)}</a><nav aria-label="Page navigation"><a href="#${escapeHtml(firstSection)}">Explore</a>${primaryAction ? `<a class="pack-nav-action" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}</nav></header><main id="main"><header class="pack-hero"><div class="shell pack-hero-grid"><div class="pack-hero-copy"><span class="pack-kicker">${escapeHtml(page.intent.audience)}</span><h1>${renderStarterHeadline(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p><div class="pack-hero-actions">${primaryAction ? `<a class="button primary" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}${secondaryAction ? `<a class="button secondary" href="${escapeHtml(actionHref(secondaryAction))}">${escapeHtml(secondaryAction.label)}</a>` : ""}</div></div><aside class="pack-hero-aside" aria-label="Page highlights">${renderStarterLandingPageVisual(page, designPackId)}${metadata ? `<div class="pack-meta">${metadata}</div>` : ""}</aside></div></header>${sections}</main><footer class="pack-footer"><div class="shell"><span>${escapeHtml(username)}</span><span>Built with ME3</span></div></footer><script>${landingActionScript()}</script></body></html>`;
 }
 
 function renderStarterHeadline(headline: string): string {
@@ -1630,9 +1672,9 @@ function renderStarterLandingPageSection(
   }
   if (section.type === "profile") {
     const profileVisual = section.profileImage
-      ? `<img src="${escapeHtml(section.profileImage)}" alt="" loading="lazy" decoding="async">`
+      ? `<img src="${escapeHtml(section.profileImage)}" alt="${escapeHtml(section.profileName ? `${section.profileName} profile photo` : "Profile photo")}" loading="lazy" decoding="async">`
       : `<span class="pack-profile-shape" aria-hidden="true"></span>`;
-    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-profile"><div class="shell pack-profile-grid"><div class="pack-profile-visual">${profileVisual}</div><div>${label}<h2>${heading}</h2><p class="pack-lead">${escapeHtml(section.body)}</p>${section.profileName ? `<strong class="pack-profile-name">${escapeHtml(section.profileName)}${section.profileRole ? ` · ${escapeHtml(section.profileRole)}` : ""}</strong>` : ""}${section.profileLink ? `<a class="pack-text-link" href="${escapeHtml(section.profileLink)}">Visit profile</a>` : ""}</div></div></section>`;
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-profile"><div class="shell pack-profile-grid"><div class="pack-profile-visual">${profileVisual}</div><div>${label}<h2>${heading}</h2><p class="pack-lead">${escapeHtml(landingPageProfileBio(section.body))}</p>${section.profileName ? `<strong class="pack-profile-name">${escapeHtml(section.profileName)}${section.profileRole ? ` · ${escapeHtml(section.profileRole)}` : ""}</strong>` : ""}${section.profileLink ? `<a class="pack-text-link" href="${escapeHtml(section.profileLink)}">Visit profile</a>` : ""}</div></div></section>`;
   }
   if (section.type === "faq") {
     return `<section id="${escapeHtml(section.id)}" class="pack-section pack-faq"><div class="shell pack-split">${label}<div><h2>${heading}</h2><div class="pack-faq-list">${section.items.map((item) => `<details><summary>${escapeHtml(item.question)}</summary><p>${escapeHtml(item.answer)}</p></details>`).join("")}</div></div></div></section>`;
@@ -1645,12 +1687,14 @@ function renderStarterLandingPageSection(
 }
 
 function starterLandingPageFontLinks(
+  page: LandingPageDocumentV3,
   designPackId: LandingPageDesignPackId,
 ): string {
+  const fontPreset = resolveLandingPageFontPreset(page, designPackId);
   const href =
-    designPackId === "starter-event-01"
+    fontPreset === "editorial"
       ? "https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Newsreader:opsz,wght@6..72,300;6..72,400;6..72,500&display=swap"
-      : designPackId === "starter-service-01"
+      : fontPreset === "bold"
         ? "https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap"
         : "https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Geologica:opsz,wdth,wght@12..72,75..100,300..800&display=swap";
   return `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="${href}" rel="stylesheet">`;
@@ -1661,7 +1705,7 @@ function renderStarterLandingPageCss(
   designPackId: LandingPageDesignPackId,
 ): string {
   const accent = safeCssColor(
-    page.design.accentColor,
+    page.design.customization?.accentColor || page.design.accentColor,
     designPackId === "starter-event-01"
       ? "#b05235"
       : designPackId === "starter-service-01"
@@ -1674,7 +1718,95 @@ function renderStarterLandingPageCss(
       : designPackId === "starter-service-01"
         ? starterServiceCss(accent)
         : starterWaitlistCss(accent)
-  }`;
+  }${renderLandingPageCustomizationCss(page, designPackId)}`;
+}
+
+function resolveLandingPageFontPreset(
+  page: LandingPageDocumentV3,
+  designPackId: LandingPageDesignPackId,
+): LandingPageFontPreset {
+  return (
+    normalizeLandingPageFontPreset(page.design.customization?.fontPreset) ||
+    (designPackId === "starter-event-01"
+      ? "editorial"
+      : designPackId === "starter-service-01"
+        ? "bold"
+        : "modern")
+  );
+}
+
+function renderLandingPageCustomizationCss(
+  page: LandingPageDocumentV3,
+  designPackId: LandingPageDesignPackId,
+): string {
+  const customization = page.design.customization;
+  if (!customization) return "";
+  const declarations: string[] = [];
+  const accent = safeCssColor(customization.accentColor, "");
+  const background = safeCssColor(customization.backgroundColor, "");
+  const text = safeCssColor(customization.textColor, "");
+  if (accent) {
+    declarations.push(`--accent:${accent}`);
+    declarations.push(`--accent-contrast:${readableTextColor(accent)}`);
+  }
+  if (background) declarations.push(`--bg:${background}`);
+  if (text) {
+    declarations.push(`--text:${text}`);
+    declarations.push(`--muted:color-mix(in srgb,${text} 68%,${background || "var(--bg)"})`);
+    declarations.push(`--line:color-mix(in srgb,${text} 24%,transparent)`);
+  }
+
+  const fontPreset = resolveLandingPageFontPreset(page, designPackId);
+  if (fontPreset === "editorial") {
+    declarations.push('--display-font:"Newsreader",Georgia,serif');
+    declarations.push('--accent-font:"Newsreader",Georgia,serif');
+    declarations.push('--body-font:"Newsreader",Georgia,serif');
+    declarations.push('--meta-font:"DM Mono",monospace');
+  } else if (fontPreset === "bold") {
+    declarations.push('--display-font:"Archivo Black",sans-serif');
+    declarations.push('--accent-font:"Instrument Serif",Georgia,serif');
+    declarations.push('--body-font:"Instrument Serif",Georgia,serif');
+    declarations.push('--meta-font:"IBM Plex Mono",monospace');
+  } else {
+    declarations.push('--display-font:"Geologica",sans-serif');
+    declarations.push('--accent-font:"Geologica",sans-serif');
+    declarations.push('--body-font:"Geologica",sans-serif');
+    declarations.push('--meta-font:"Fira Code",monospace');
+  }
+  return declarations.length ? `:root{${declarations.join(";")}}` : "";
+}
+
+function readableTextColor(color: string): "#111111" | "#ffffff" {
+  const value = color.slice(1);
+  if (!/^[0-9a-f]{6}$/i.test(value)) return "#ffffff";
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return (red * 299 + green * 587 + blue * 114) / 1000 > 150
+    ? "#111111"
+    : "#ffffff";
+}
+
+const DEFAULT_LANDING_PAGE_PROFILE_BIO =
+  "Add a short bio to introduce the person behind this page.";
+
+function landingPageProfileBio(value: string | null | undefined): string {
+  const bio = value?.trim();
+  if (!bio) return DEFAULT_LANDING_PAGE_PROFILE_BIO;
+  const normalized = bio.replace(/\s+/g, " ");
+  if (
+    /^Personal AI assistant powered by ME3(?: Core)?\.?$/i.test(normalized) ||
+    /^.+ (?:created this page with|is shaping this launch through|is hosting this event through) ME3\.?$/i.test(
+      normalized,
+    )
+  ) {
+    return DEFAULT_LANDING_PAGE_PROFILE_BIO;
+  }
+  return bio;
+}
+
+function isLandingPageCustomizationColor(value: unknown): value is string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value.trim());
 }
 
 function starterLandingPageBaseCss(): string {
@@ -1682,7 +1814,13 @@ function starterLandingPageBaseCss(): string {
 }
 
 function starterEventCss(accent: string): string {
-  return `:root{--bg:#f2ead8;--surface:#dfd2ba;--text:#22251e;--muted:#596052;--line:rgba(34,37,30,.24);--accent:${accent};--accent-contrast:#fff5e4;--focus:#e6b85c;--display-font:"Newsreader",Georgia,serif;--accent-font:"Newsreader",Georgia,serif;--body-font:"Newsreader",Georgia,serif;--meta-font:"DM Mono",monospace;--shell:1240px;--footer-bg:#22251e;--footer-text:#f2ead8}body{background:linear-gradient(rgba(34,37,30,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(34,37,30,.035) 1px,transparent 1px),var(--bg);background-size:28px 28px}.pack-brand{font-weight:400}.pack-hero h1{font-weight:300}.pack-hero h1 em{color:var(--accent);font-style:italic}.event-landscape{position:relative;min-height:440px;overflow:hidden}.event-sun{position:absolute;top:14%;left:43%;width:138px;aspect-ratio:1;border-radius:50%;background:#e6b85c}.event-hill{position:absolute;left:-20%;width:145%;border-radius:50% 50% 0 0}.event-hill-one{bottom:0;height:58%;background:#566148;transform:rotate(-6deg)}.event-hill-two{bottom:-18%;height:58%;background:#31382c;transform:rotate(11deg)}.pack-story .pack-lead em{color:var(--accent)}.pack-features,.pack-steps{background:#22251e;color:#f2ead8;--text:#f2ead8;--muted:rgba(242,234,216,.68);--line:rgba(242,234,216,.22);--surface:#31382c}.pack-features .pack-card-grid article:nth-child(2){background:#31382c}.pack-details dd,.pack-steps li strong{font-weight:400}.pack-action{background:var(--accent);color:#fff5e4;--text:#fff5e4;--muted:rgba(255,245,228,.78);--line:rgba(255,255,255,.36);--surface:#fff5e4;--accent:#fff5e4;--accent-contrast:${accent}}.pack-action h2{font-weight:300}.pack-profile h2{font-weight:300}.pack-profile-visual{background:#dfd2ba}@media(max-width:620px){.event-landscape{min-height:330px}.event-sun{width:108px}}`;
+  const actionText = readableTextColor(accent);
+  const actionContrast = actionText === "#111111" ? "#ffffff" : "#111111";
+  const actionMuted =
+    actionText === "#111111" ? "rgba(17,17,17,.72)" : "rgba(255,255,255,.78)";
+  const actionLine =
+    actionText === "#111111" ? "rgba(17,17,17,.42)" : "rgba(255,255,255,.5)";
+  return `:root{--bg:#f2ead8;--surface:#dfd2ba;--text:#22251e;--muted:#596052;--line:rgba(34,37,30,.24);--accent:${accent};--accent-contrast:${readableTextColor(accent)};--focus:#e6b85c;--display-font:"Newsreader",Georgia,serif;--accent-font:"Newsreader",Georgia,serif;--body-font:"Newsreader",Georgia,serif;--meta-font:"DM Mono",monospace;--shell:1240px;--footer-bg:#22251e;--footer-text:#f2ead8}body{background:linear-gradient(rgba(34,37,30,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(34,37,30,.035) 1px,transparent 1px),var(--bg);background-size:28px 28px}.pack-brand{font-weight:400}.pack-hero h1{font-weight:300}.pack-hero h1 em{color:var(--accent);font-style:italic}.event-landscape{position:relative;min-height:440px;overflow:hidden}.event-sun{position:absolute;top:14%;left:43%;width:138px;aspect-ratio:1;border-radius:50%;background:#e6b85c}.event-hill{position:absolute;left:-20%;width:145%;border-radius:50% 50% 0 0}.event-hill-one{bottom:0;height:58%;background:#566148;transform:rotate(-6deg)}.event-hill-two{bottom:-18%;height:58%;background:#31382c;transform:rotate(11deg)}.pack-story .pack-lead em{color:var(--accent)}.pack-features,.pack-steps{background:#22251e;color:#f2ead8;--text:#f2ead8;--muted:rgba(242,234,216,.68);--line:rgba(242,234,216,.22);--surface:#31382c}.pack-features .pack-card-grid article:nth-child(2){background:#31382c}.pack-details dd,.pack-steps li strong{font-weight:400}.pack-action{background:${accent};color:${actionText};--text:${actionText};--muted:${actionMuted};--line:${actionLine};--surface:#fffaf0;--field-text:#22251e;--field-border:#22251e;--accent:${actionText};--accent-contrast:${actionContrast}}.pack-action h2{font-weight:300}.pack-profile h2{font-weight:300}.pack-profile-visual{background:#dfd2ba}@media(max-width:620px){.event-landscape{min-height:330px}.event-sun{width:108px}}`;
 }
 
 function starterServiceCss(accent: string): string {
@@ -1746,7 +1884,7 @@ function renderLandingAction(
 }
 
 function renderActionCss(): string {
-  return `.page-action-form,.booking-action{display:grid;gap:14px;max-width:520px}.page-action-form label,.booking-action>label{display:grid;gap:7px;font-weight:700}.page-action-form label span{font-weight:400;color:var(--text-muted)}.page-action-form input,.page-action-form textarea,.booking-action input{width:100%;min-height:48px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:#111;padding:12px 14px;font:inherit}.page-action-form textarea{resize:vertical}.page-action-form .button{width:fit-content;border:0;cursor:pointer}.payment-later-note{margin:0;padding:12px 14px;border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.95rem;line-height:1.5}.action-status{min-height:1.5em;margin:0;color:var(--text-muted)}.action-status.is-error,.action-error{color:#b42318}.honeypot{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important}.booking-slots{display:flex;flex-wrap:wrap;gap:8px}.booking-slot{min-height:44px;border:1px solid var(--border);border-radius:999px;background:transparent;color:var(--text);padding:0 14px;font:inherit;cursor:pointer}.booking-slot[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-contrast)}button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 72%,white);outline-offset:3px}@media(max-width:640px){.page-action .section-grid{gap:22px}.page-action-form .button{width:100%}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto!important}}`;
+  return `.page-action-form,.booking-action{display:grid;gap:14px;max-width:520px}.page-action-form label,.booking-action>label{display:grid;gap:7px;font-weight:700}.page-action-form label span{font-weight:400;color:var(--muted,var(--text-muted))}.page-action-form input,.page-action-form textarea,.booking-action input{width:100%;min-height:48px;border:2px solid var(--field-border,var(--line,var(--border)));border-radius:8px;background:var(--surface);color:var(--field-text,var(--text,#111));padding:12px 14px;font:inherit}.page-action-form input::placeholder,.page-action-form textarea::placeholder{color:color-mix(in srgb,var(--field-text,var(--text,#111)) 62%,transparent);opacity:1}.page-action-form textarea{resize:vertical}.page-action-form .button{width:fit-content;min-height:50px;padding-inline:22px;border:2px solid var(--accent);background:var(--accent);color:var(--accent-contrast);box-shadow:0 3px 0 color-mix(in srgb,var(--text) 42%,transparent);cursor:pointer}.payment-later-note{margin:0;padding:12px 14px;border:1px solid var(--line,var(--border));border-radius:8px;color:var(--text);font-size:.95rem;line-height:1.5}.action-status{min-height:1.5em;margin:0;color:var(--muted,var(--text-muted))}.action-status.is-error,.action-error{color:#b42318}.honeypot{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important}.booking-slots{display:flex;flex-wrap:wrap;gap:8px}.booking-slot{min-height:44px;border:1px solid var(--line,var(--border));border-radius:999px;background:transparent;color:var(--text);padding:0 14px;font:inherit;cursor:pointer}.booking-slot[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-contrast)}button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 72%,white);outline-offset:3px}@media(max-width:640px){.page-action .section-grid{gap:22px}.page-action-form .button{width:100%}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto!important}}`;
 }
 
 function landingActionScript(): string {

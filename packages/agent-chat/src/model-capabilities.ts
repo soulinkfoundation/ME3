@@ -102,6 +102,26 @@ const AI_MODEL_CAPABILITY_RECORDS: readonly AiModelCapabilityRecord[] = [
   },
   {
     providerId: "workers-ai",
+    model: "@cf/zai-org/glm-5.2",
+    capabilities: ["text", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "workers-ai",
+    model: "@cf/qwen/qwen3-30b-a3b-fp8",
+    capabilities: ["text", "long-context", "reasoning"],
+  },
+  {
+    providerId: "workers-ai",
+    model: "@cf/openai/gpt-oss-120b",
+    capabilities: ["text", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "workers-ai",
+    model: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    capabilities: ["text", "long-context", "reasoning"],
+  },
+  {
+    providerId: "workers-ai",
     model: "@cf/moonshotai/kimi-k2.7-code",
     capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
     image: {
@@ -152,6 +172,17 @@ export function modelCapabilitiesFor(
   model: string,
 ): readonly AiAgentModelCapability[] {
   return findModelCapabilityRecord(providerId, model)?.capabilities ?? [];
+}
+
+export function modelSupportsToolUse(
+  providerId: AiAgentModelProviderId,
+  model: string,
+): boolean {
+  const record = findModelCapabilityRecord(providerId, model);
+  // Custom/self-hosted models historically entered the tool runtime without a
+  // catalog record. Preserve that compatibility while using explicit records
+  // to keep known chat-only models out of native function calling.
+  return record ? record.capabilities.includes("tool-use") : true;
 }
 
 function findModelCapabilityRecord(

@@ -107,21 +107,38 @@ describe("Site branding", () => {
     });
   });
 
-  it("updates the full reusable branding record", async () => {
+  it("updates only the reusable logo and email colours", async () => {
     const updated = await updateSiteBranding(env, site, {
-      displayName: "Kieran Studio",
       logoRef: "/brand/logo.webp",
       accentColor: "#112233",
-      backgroundColor: "#f0f0f0",
-      surfaceColor: "#ffffff",
       textColor: "#101010",
     });
 
     expect(updated).toMatchObject({
-      displayName: "Kieran Studio",
+      displayName: "Kieran Butler",
       logoUrl: "https://sites.example.com/brand/logo.webp",
       accentColor: "#112233",
+      backgroundColor: "#f4f5f4",
+      surfaceColor: "#ffffff",
+      textColor: "#101010",
       persisted: true,
+    });
+  });
+
+  it("ignores legacy name and surface overrides", async () => {
+    const updated = await updateSiteBranding(env, site, {
+      displayName: "Legacy override",
+      logoRef: null,
+      accentColor: "#112233",
+      backgroundColor: "#000000",
+      surfaceColor: "#111111",
+      textColor: "#eeeeee",
+    });
+
+    expect(updated).toMatchObject({
+      displayName: "Kieran Butler",
+      backgroundColor: "#f4f5f4",
+      surfaceColor: "#ffffff",
     });
   });
 });

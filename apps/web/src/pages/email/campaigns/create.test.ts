@@ -88,6 +88,7 @@ describe("campaign creation wizard", () => {
               fromAddress: "campaign@example.com",
               domain: "example.com",
             },
+            addOn: null,
             instructions: [],
           },
         });
@@ -104,6 +105,7 @@ describe("campaign creation wizard", () => {
               fromAddress: "campaign@example.com",
               domain: "example.com",
             },
+            addOn: null,
             instructions: [],
           },
         });
@@ -131,12 +133,26 @@ describe("campaign creation wizard", () => {
     expect(wrapper.text()).toContain("Kieran Studio <campaign@example.com>");
     expect(wrapper.find(".brand-card").exists()).toBe(false);
 
+    const senderName = wrapper.find<HTMLInputElement>('input[maxlength="120"]');
+    expect(senderName.element.value).toBe("Kieran Studio");
+    await senderName.setValue("Kieran Butler");
+    expect(wrapper.text()).toContain("Kieran Butler <campaign@example.com>");
+
     const reviewButton = wrapper.findAll("button").find((button) =>
       button.text().includes("Review audience"),
     );
     expect(reviewButton).toBeDefined();
     await reviewButton!.trigger("click");
     await flushPromises();
+
+    expect(apiPut).toHaveBeenCalledWith(
+      "/email/campaigns/campaign-1",
+      expect.objectContaining({
+        document: expect.objectContaining({
+          brand: expect.objectContaining({ name: "Kieran Butler" }),
+        }),
+      }),
+    );
 
     expect(wrapper.find(".send-review").exists()).toBe(true);
     expect(wrapper.text()).toContain("Review and schedule");

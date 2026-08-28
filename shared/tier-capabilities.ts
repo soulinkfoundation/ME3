@@ -4,8 +4,6 @@ export interface TierCapabilities {
   maxSites: number;
   customDomain: boolean;
   footerCustomization: boolean;
-  emailSendQuota: number;
-  emailOverageRate: number;
   financialLedger: boolean;
   mailboxAlias: boolean;
   agentInbox: boolean;
@@ -28,8 +26,6 @@ export const TIER_CAPABILITIES: Record<SubscriptionTier, TierCapabilities> = {
     maxSites: 1,
     customDomain: false,
     footerCustomization: false,
-    emailSendQuota: 0,
-    emailOverageRate: 0,
     financialLedger: false,
     mailboxAlias: false,
     agentInbox: false,
@@ -50,8 +46,6 @@ export const TIER_CAPABILITIES: Record<SubscriptionTier, TierCapabilities> = {
     maxSites: 1,
     customDomain: true,
     footerCustomization: true,
-    emailSendQuota: 0,
-    emailOverageRate: 0,
     financialLedger: false,
     mailboxAlias: false,
     agentInbox: false,
@@ -72,8 +66,6 @@ export const TIER_CAPABILITIES: Record<SubscriptionTier, TierCapabilities> = {
     maxSites: 4,
     customDomain: true,
     footerCustomization: true,
-    emailSendQuota: 5000,
-    emailOverageRate: 2,
     financialLedger: true,
     mailboxAlias: true,
     agentInbox: true,

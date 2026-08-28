@@ -7,8 +7,11 @@ import {
   cancelCampaignDelivery,
   dispatchDueCampaignJobs,
   getCampaignTransportStatus,
+  openCampaignAddOnPortal,
   receiveManagedCampaignEvent,
   sendCampaignTest,
+  setupManagedCampaignSender,
+  startCampaignAddOnCheckout,
   startCampaignDelivery,
 } from "../campaign-delivery";
 import {
@@ -19,7 +22,12 @@ import {
   previewCampaignAudience,
   saveCampaignDraft,
 } from "../campaigns";
-import type { AppHono, OwnerRouteDeps } from "../http/types";
+import {
+  EMAIL_CAMPAIGNS_PLUGIN_ID,
+  type CampaignAddOnPlanKey,
+} from "@me3-core/plugin-email-campaigns";
+import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
+import { isCorePluginEnabled } from "../plugins";
 
 type OwnedCampaignSite = {
   id: string;
@@ -48,18 +56,24 @@ export function registerCampaignRoutes(app: AppHono, deps: OwnerRouteDeps) {
   app.get("/api/email/campaigns/transport", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
     return c.json({ transport: await getCampaignTransportStatus(c.env) });
   });
 
   app.get("/api/email/campaigns", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
     return c.json({ campaigns: await listCampaigns(c.env, ownerId) });
   });
 
   app.post("/api/email/campaigns", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
     try {
       const campaign = await createCampaign(
         c.env,
@@ -72,9 +86,50 @@ export function registerCampaignRoutes(app: AppHono, deps: OwnerRouteDeps) {
     }
   });
 
+  app.post("/api/email/campaigns/add-on/checkout", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
+    try {
+      const body = await c.req
+        .json<{ plan?: CampaignAddOnPlanKey }>()
+        .catch((): { plan?: CampaignAddOnPlanKey } => ({}));
+      return c.json(await startCampaignAddOnCheckout(c.env, body.plan as CampaignAddOnPlanKey));
+    } catch (error) {
+      return campaignError(c, error);
+    }
+  });
+
+  app.post("/api/email/campaigns/add-on/portal", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
+    try {
+      return c.json(await openCampaignAddOnPortal(c.env));
+    } catch (error) {
+      return campaignError(c, error);
+    }
+  });
+
+  app.post("/api/email/campaigns/sender/setup", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
+    try {
+      return c.json({ transport: await setupManagedCampaignSender(c.env) });
+    } catch (error) {
+      return campaignError(c, error);
+    }
+  });
+
   app.get("/api/email/campaigns/:campaignId", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
     const campaign = await getCampaign(c.env, ownerId, c.req.param("campaignId"));
     return campaign
       ? c.json({ campaign })
@@ -84,6 +139,8 @@ export function registerCampaignRoutes(app: AppHono, deps: OwnerRouteDeps) {
   app.put("/api/email/campaigns/:campaignId", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
     try {
       const campaign = await saveCampaignDraft(
         c.env,
@@ -100,6 +157,8 @@ export function registerCampaignRoutes(app: AppHono, deps: OwnerRouteDeps) {
   app.get("/api/email/campaigns/:campaignId/review", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
     try {
       const audience = await previewCampaignAudience(
         c.env,
@@ -122,6 +181,8 @@ export function registerCampaignRoutes(app: AppHono, deps: OwnerRouteDeps) {
   app.post("/api/email/campaigns/:campaignId/test", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
     try {
       return c.json({
         test: await sendCampaignTest(
@@ -138,6 +199,8 @@ export function registerCampaignRoutes(app: AppHono, deps: OwnerRouteDeps) {
   app.post("/api/email/campaigns/:campaignId/send", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
     try {
       const result = await startCampaignDelivery(
         c.env,
@@ -161,6 +224,8 @@ export function registerCampaignRoutes(app: AppHono, deps: OwnerRouteDeps) {
   app.post("/api/email/campaigns/:campaignId/cancel", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
     try {
       return c.json({
         ok: true,
@@ -178,6 +243,8 @@ export function registerCampaignRoutes(app: AppHono, deps: OwnerRouteDeps) {
   app.post("/api/email/campaigns/:campaignId/assets", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
     if (!c.env.SITE_ASSETS) {
       return c.json({ error: "Campaign image storage is not available" }, 503);
     }
@@ -228,6 +295,17 @@ export function registerCampaignRoutes(app: AppHono, deps: OwnerRouteDeps) {
       return c.json({ error: "Failed to store campaign image" }, 500);
     }
   });
+}
+
+async function requireCampaignPlugin(c: AppContext) {
+  if (await isCorePluginEnabled(c.env, EMAIL_CAMPAIGNS_PLUGIN_ID)) return null;
+  return c.json(
+    {
+      error: "Activate the Email Campaigns plugin to use this workspace",
+      code: "campaign_plugin_required",
+    },
+    403,
+  );
 }
 
 function campaignError(

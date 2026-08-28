@@ -72,6 +72,89 @@ describe("landing pages package", () => {
     expect(getLandingPageDesignPackId(page)).toBe("starter-event-01");
   });
 
+  it("renders accessible event actions and replaces platform profile placeholders", () => {
+    const page = buildLandingPageDocument({
+      username: "owner",
+      brief: "A small coastal gathering for thoughtful founders.",
+      template: "event",
+      profile: {
+        name: "ME3 Owner",
+        bio: "Personal AI assistant powered by ME3 Core.",
+        avatar: "/files/owner.jpg",
+        profileUrl: "/me",
+      },
+    });
+    if (page.version !== 3) throw new Error("Expected v3 event page");
+    page.actions[0] = {
+      ...page.actions[0],
+      kind: "subscribe",
+      label: "Join the guest list",
+    };
+
+    const html = renderLandingPageHtml(page, "owner", { pageId: "event-1" });
+    expect(html).not.toContain("Personal AI assistant powered by ME3 Core");
+    expect(html).toContain(
+      "Add a short bio to introduce the person behind this page.",
+    );
+    expect(html).toContain('src="/files/owner.jpg"');
+    expect(html).toContain('alt="ME3 Owner profile photo"');
+    expect(html).toContain('href="/me"');
+    expect(html).toContain(
+      "border:2px solid var(--field-border,var(--line,var(--border)))",
+    );
+    expect(html).toContain(
+      ".page-action-form .button{width:fit-content;min-height:50px",
+    );
+    expect(html).toContain(
+      ".pack-action{background:#f2664a;color:#ffffff",
+    );
+  });
+
+  it("renders a stored Pexels image without adding attribution to the public footer", () => {
+    const page = buildLandingPageDocument({
+      username: "bright-ideas",
+      brief: "A product studio for thoughtful teams.",
+      template: "service",
+      heroImage: "files/page-hero.jpg",
+      heroImageAttribution: {
+        provider: "pexels",
+        photographer: "Ada Camera",
+        photographerUrl: "https://www.pexels.com/@ada-camera/",
+        sourceUrl: "https://www.pexels.com/photo/bright-studio-42/",
+      },
+      profile: { name: "Owner", bio: null, avatar: null, profileUrl: null },
+    });
+
+    const html = renderLandingPageHtml(page, "bright-ideas");
+    expect(html).toContain('src="files/page-hero.jpg"');
+    expect(html).toContain("Built with ME3");
+    expect(html).not.toContain("Photo by");
+    expect(html).not.toContain("Ada Camera");
+  });
+
+  it("renders validated color and font customizations over a starter design", () => {
+    const page = buildLandingPageDocument({
+      username: "studio",
+      brief: "A concise creative studio offer.",
+      template: "service",
+      profile: { name: "Owner", bio: null, avatar: null, profileUrl: null },
+    });
+    if (page.version !== 3) throw new Error("Expected v3 page");
+    page.design.customization = {
+      accentColor: "#7c3aed",
+      backgroundColor: "#fffaf2",
+      textColor: "#211a2c",
+      fontPreset: "editorial",
+    };
+
+    const html = renderLandingPageHtml(page, "studio");
+    expect(normalizeLandingPageDocument(page)).toEqual(page);
+    expect(html).toContain("family=Newsreader");
+    expect(html).toContain("--accent:#7c3aed");
+    expect(html).toContain("--bg:#fffaf2");
+    expect(html).toContain('--display-font:"Newsreader"');
+  });
+
   it("keeps selectable starter designs separate and purpose-specific", () => {
     const packs = getSelectableLandingPageDesignPacks();
     expect(packs.map((pack) => pack.id)).toEqual([

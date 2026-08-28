@@ -149,7 +149,7 @@ export async function createCampaign(
   const revisionId = newId("campaign-revision");
   const name = normalizeText(input.name, 160) || "Untitled campaign";
   const document = createEmptyCampaignDocument({
-    name: branding.displayName,
+    name: defaultCampaignSenderName(site.username),
     homeUrl: getPublicSiteOrigin(env, {
       custom_domain:
         site.custom_domain_status === "active" ? site.custom_domain : null,
@@ -495,6 +495,18 @@ function normalizeReference(value: unknown): string {
 
 function nullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function defaultCampaignSenderName(username: string): string {
+  const listName = username
+    .trim()
+    .replace(/^@/, "")
+    .replace(/[-_.]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!listName) return "ME3";
+  return listName.replace(/\b[a-z]/g, (letter) => letter.toUpperCase()).slice(0, 120);
 }
 
 function newId(prefix: string): string {

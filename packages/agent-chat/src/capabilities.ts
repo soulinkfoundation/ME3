@@ -133,7 +133,6 @@ export const CORE_CHAT_CAPABILITIES = [
         url: {
           type: "string",
           description: "An absolute public HTTP or HTTPS URL from the owner or search results.",
-          format: "uri",
         },
         retrievalMode: {
           type: "string",
@@ -943,7 +942,18 @@ export const CORE_CHAT_CAPABILITIES = [
       properties: {
         site: {
           type: "string",
-          description: "Optional profile-site username or custom domain.",
+          description:
+            "Optional existing site username or custom domain. Omit to create a new unpublished additional site.",
+        },
+        siteName: {
+          type: "string",
+          description:
+            "Short owner-grounded name for a new site. Use when site is omitted.",
+        },
+        siteHandle: {
+          type: "string",
+          description:
+            "Optional working URL handle for a new site. ME3 makes it unique and it can be renamed later.",
         },
         slug: {
           type: "string",
@@ -979,6 +989,28 @@ export const CORE_CHAT_CAPABILITIES = [
           type: "string",
           description: "Optional primary button label.",
         },
+        imageQuery: {
+          type: "string",
+          description:
+            "Optional concise visual search phrase grounded in the brief, such as 'calm yoga studio natural light'.",
+        },
+        accentColor: {
+          type: "string",
+          description: "Optional six-digit hex accent color explicitly requested by the owner.",
+        },
+        backgroundColor: {
+          type: "string",
+          description: "Optional six-digit hex page background explicitly requested by the owner.",
+        },
+        textColor: {
+          type: "string",
+          description: "Optional six-digit hex primary text color explicitly requested by the owner.",
+        },
+        fontPreset: {
+          type: "string",
+          description: "Optional controlled font direction explicitly requested by the owner.",
+          enum: ["editorial", "bold", "modern"],
+        },
       },
       additionalProperties: false,
     },
@@ -1000,7 +1032,7 @@ export const CORE_CHAT_CAPABILITIES = [
     owner: "plugin",
     pluginId: "me3.landing-pages",
     ownerFacingLabel: "Update landing-page draft",
-    summary: "Revise the content or replaceable design pack of an existing landing-page draft.",
+    summary: "Revise the content, image, primary action, styling, or design pack of an existing landing-page draft.",
     category: "sites",
     handler: {
       surface: "chat",
@@ -1033,12 +1065,48 @@ export const CORE_CHAT_CAPABILITIES = [
           description: "Optional newline-separated replacement highlights as Title: explanation.",
         },
         ctaLabel: { type: "string", description: "Optional replacement primary button label." },
+        imageQuery: {
+          type: "string",
+          description:
+            "Optional concise visual search phrase for a replacement hero image, grounded in the owner's request.",
+        },
+        actionType: {
+          type: "string",
+          description:
+            "Optional primary action type. Use subscribe for an email or newsletter signup form.",
+          enum: ["link", "subscribe"],
+        },
+        actionHref: {
+          type: "string",
+          description:
+            "Optional internal path or HTTPS destination when the primary action type is link.",
+        },
+        accentColor: {
+          type: "string",
+          description: "Optional six-digit hex accent color explicitly requested by the owner.",
+        },
+        backgroundColor: {
+          type: "string",
+          description: "Optional six-digit hex page background explicitly requested by the owner.",
+        },
+        textColor: {
+          type: "string",
+          description: "Optional six-digit hex primary text color explicitly requested by the owner.",
+        },
+        fontPreset: {
+          type: "string",
+          description: "Optional controlled font direction explicitly requested by the owner.",
+          enum: ["editorial", "bold", "modern"],
+        },
       },
       additionalProperties: false,
     },
     auditEventKind: "landing_page_draft_updated",
     examples: {
-      positive: ["Change that landing-page headline and make the call to action Book a place."],
+      positive: [
+        "Change that landing-page headline and make the call to action Book a place.",
+        "Swap the hero image, use a modern font, and add an email signup form.",
+      ],
       negative: ["Publish the landing page now."],
     },
     chat: {

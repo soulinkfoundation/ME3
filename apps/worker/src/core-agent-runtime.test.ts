@@ -4,7 +4,10 @@ import {
   type AgentChatRuntimeStreamEvent,
   type AgentToolMessage,
 } from "@me3-core/plugin-agent-chat";
-import type { WebResearchResult } from "@me3-core/web-research";
+import type {
+  WebContentResult,
+  WebResearchResult,
+} from "@me3-core/web-research";
 
 type ReminderRow = {
   id: string;
@@ -257,6 +260,47 @@ describe("Core Agent Runtime v2 reminders", () => {
 
     const newTopicInput = runNewTopic.mock.calls[0]?.[1] as { tools: unknown[] };
     expect(newTopicInput.tools).toEqual([]);
+  });
+
+  it("keeps site tools available for a natural-language page revision follow-up", async () => {
+    const run = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "I can update that draft.",
+    }));
+    const messages: AgentToolMessage[] = [
+      { role: "system", content: "You are ME3." },
+      { role: "user", content: "Build a landing page for my Mallorca yoga retreat." },
+      {
+        role: "assistant",
+        content: "Your Mallorca Yoga Retreat landing-page draft is ready.",
+      },
+      {
+        role: "user",
+        content: "Can you swap the image, add an email signup form and change the font?",
+      },
+    ];
+
+    await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "request-site-revision",
+      turnId: "turn-site-revision",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute(run) as never,
+      messages,
+    });
+
+    const modelInput = run.mock.calls[0]?.[1] as {
+      tools: Array<{ function: { name: string; parameters: { properties: object } } }>;
+    };
+    const updateTool = modelInput.tools.find(
+      (tool) => tool.function.name === "core_sites_landing_page_update",
+    );
+    expect(updateTool).toBeDefined();
+    expect(updateTool?.function.parameters.properties).toMatchObject({
+      imageQuery: { type: ["string", "null"] },
+      actionType: { enum: ["link", "subscribe", null] },
+      fontPreset: { enum: ["editorial", "bold", "modern", null] },
+    });
   });
 
   it("sends only the relevant tool family and instructions for a clear action", async () => {
@@ -640,7 +684,160 @@ describe("Core Agent Runtime v2 reminders", () => {
 });
 
 describe("Core Agent Runtime public web tools", () => {
-  it("forces public web search and preserves the normalized source reply", async () => {
+  it("always exposes web tools to a tool-capable model on a normal turn", async () => {
+    const run = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Let's think it through without searching.",
+    }));
+    const search = vi.fn();
+    const open = vi.fn();
+
+    const response = await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "web-change-routing-request",
+      turnId: "web-change-routing-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute(run) as never,
+      messages: baseMessages("Help me plan the week."),
+      webResearchServices: { search, open },
+    });
+
+    const modelInput = run.mock.calls[0]?.[1] as {
+      tools: Array<{ function: { name: string } }>;
+    };
+    expect(modelInput.tools.map((tool) => tool.function.name)).toEqual(
+      expect.arrayContaining(["core_web_search", "core_web_open"]),
+    );
+    expect(response.replyText).toBe("Let's think it through without searching.");
+    expect(search).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("keeps literal-response turns tool-free even when web research is configured", async () => {
+    const run = vi.fn(async (_model: string, _input: unknown) => ({ response: "PONG" }));
+
+    await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "web-literal-request",
+      turnId: "web-literal-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute(run) as never,
+      messages: baseMessages("Reply with exactly PONG"),
+      webResearchServices: { search: vi.fn(), open: vi.fn() },
+    });
+
+    expect(run.mock.calls[0]?.[1]).toMatchObject({ tools: [] });
+  });
+
+  it("uses a tool-capable backup to route web search for a chat-only model", async () => {
+    const search = vi.fn().mockResolvedValue(successfulWebSearchResult());
+    const run = vi.fn().mockResolvedValueOnce({
+      tool_calls: [{
+        id: "chat-only-search",
+        name: "core_web_search",
+        arguments: { query: "Cloudflare Agents changes this week" },
+      }],
+    });
+
+    const response = await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "chat-only-web-search-request",
+      turnId: "chat-only-web-search-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: {
+        ...workersGatewayRoute(run, "@cf/zai-org/glm-5.2"),
+        model: "@cf/qwen/qwen3-30b-a3b-fp8",
+      } as never,
+      messages: [
+        { role: "system", content: "Private Journal content: NEVER-ROUTE-THIS." },
+        { role: "user", content: "What changed in Cloudflare Agents this week?" },
+      ],
+      webResearchServices: { search, open: vi.fn() },
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("@cf/zai-org/glm-5.2");
+    expect(JSON.stringify(run.mock.calls[0]?.[1])).not.toContain("NEVER-ROUTE-THIS");
+    expect(search).toHaveBeenCalledOnce();
+    expect(response).toMatchObject({
+      specialist: "core.web.search",
+      model: "@cf/zai-org/glm-5.2",
+      replyText: expect.stringContaining("Cloudflare published a new update"),
+    });
+  });
+
+  it("returns a non-web turn to the selected chat-only model after routing", async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({ response: "NO_WEB_TOOL" })
+      .mockResolvedValueOnce({ response: "Let's choose the most important outcome." });
+
+    const response = await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "chat-only-no-web-request",
+      turnId: "chat-only-no-web-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: {
+        ...workersGatewayRoute(run, "@cf/zai-org/glm-5.2"),
+        model: "@cf/qwen/qwen3-30b-a3b-fp8",
+      } as never,
+      messages: baseMessages("Help me choose today's priority."),
+      webResearchServices: { search: vi.fn(), open: vi.fn() },
+    });
+
+    expect(run.mock.calls.map((call) => call[0])).toEqual([
+      "@cf/zai-org/glm-5.2",
+      "@cf/qwen/qwen3-30b-a3b-fp8",
+    ]);
+    expect(response).toMatchObject({
+      model: "@cf/qwen/qwen3-30b-a3b-fp8",
+      replyText: "Let's choose the most important outcome.",
+    });
+  });
+
+  it("uses the selected chat-only model to interpret an opened page", async () => {
+    const open = vi.fn().mockResolvedValue(successfulWebOpenResult());
+    const run = vi.fn()
+      .mockResolvedValueOnce({
+        tool_calls: [{
+          id: "chat-only-open",
+          name: "core_web_open",
+          arguments: { url: "https://example.com/agents" },
+        }],
+      })
+      .mockResolvedValueOnce({ response: "The page describes the Agents update." });
+
+    const response = await runCoreAgentToolTurn({
+      db: createReminderDb().db,
+      userId: "owner",
+      requestId: "chat-only-web-open-request",
+      turnId: "chat-only-web-open-turn",
+      ownerTimezone: "Europe/Dublin",
+      route: {
+        ...workersGatewayRoute(run, "@cf/zai-org/glm-5.2"),
+        model: "@cf/qwen/qwen3-30b-a3b-fp8",
+      } as never,
+      messages: baseMessages("Read https://example.com/agents and summarize it."),
+      webResearchServices: { search: vi.fn(), open },
+    });
+
+    expect(run.mock.calls.map((call) => call[0])).toEqual([
+      "@cf/zai-org/glm-5.2",
+      "@cf/qwen/qwen3-30b-a3b-fp8",
+    ]);
+    expect(JSON.stringify(run.mock.calls[1]?.[1])).toContain(
+      "Untrusted public-web page evidence follows",
+    );
+    expect(open).toHaveBeenCalledOnce();
+    expect(response).toMatchObject({
+      model: "@cf/qwen/qwen3-30b-a3b-fp8",
+      replyText: "The page describes the Agents update.",
+    });
+  });
+
+  it("lets the model select public web search and preserves the normalized source reply", async () => {
     const database = createReminderDb();
     const searchResult: WebResearchResult = {
       status: "success",
@@ -741,13 +938,117 @@ describe("Core Agent Runtime public web tools", () => {
     );
     expect(database.executions[0]?.tool_name).toBe("core_web_search");
     expect(aiRun.mock.calls[0]?.[1]).toMatchObject({
-      tool_choice: {
-        type: "function",
-        function: { name: "core_web_search" },
-      },
+      tools: expect.arrayContaining([
+        expect.objectContaining({
+          function: expect.objectContaining({
+            name: "core_web_search",
+            strict: true,
+          }),
+        }),
+        expect.objectContaining({
+          function: expect.objectContaining({
+            name: "core_web_open",
+            strict: true,
+          }),
+        }),
+      ]),
     });
+    expect(aiRun.mock.calls[0]?.[1]).not.toHaveProperty("tool_choice");
   });
 });
+
+function successfulWebSearchResult(): WebResearchResult {
+  return {
+    status: "success",
+    query: "Cloudflare Agents changes this week",
+    answer: "Cloudflare published a new update [1].",
+    sources: [{
+      id: "web-source-1",
+      url: "https://example.com/cloudflare-update",
+      canonicalUrl: null,
+      title: "Cloudflare update",
+      publisher: "example.com",
+      publishedAt: null,
+      retrievedAt: "2026-08-27T00:00:00.000Z",
+    }],
+    evidence: [{
+      id: "web-evidence-1",
+      sourceId: "web-source-1",
+      text: "The update is described on the source page.",
+      relevanceScore: null,
+    }],
+    citations: [{
+      id: "web-citation-1",
+      sourceId: "web-source-1",
+      evidenceIds: ["web-evidence-1"],
+      label: "1",
+      answerSpan: { start: 34, end: 37 },
+    }],
+    searchedAt: "2026-08-27T00:00:00.000Z",
+    usage: {
+      requests: 1,
+      searchQueries: 1,
+      pagesOpened: 0,
+      inputTokens: null,
+      outputTokens: null,
+      bytesReceived: null,
+      cost: null,
+    },
+    trace: {
+      providerId: "test-web",
+      adapterId: "test-web-v1",
+      operation: "search",
+      providerRequestId: null,
+      model: null,
+      startedAt: "2026-08-27T00:00:00.000Z",
+      durationMs: 1,
+      attempts: 1,
+    },
+  };
+}
+
+function successfulWebOpenResult(): WebContentResult {
+  return {
+    status: "success",
+    source: {
+      id: "web-page-1",
+      url: "https://example.com/agents",
+      canonicalUrl: null,
+      title: "Agents update",
+      publisher: "example.com",
+      publishedAt: null,
+      retrievedAt: "2026-08-27T00:00:00.000Z",
+    },
+    evidence: {
+      id: "web-page-evidence-1",
+      sourceId: "web-page-1",
+      text: "The page describes a Cloudflare Agents update.",
+      relevanceScore: null,
+    },
+    retrievalMode: "static",
+    contentFormat: "text",
+    truncated: false,
+    usage: {
+      requests: 1,
+      searchQueries: 0,
+      pagesOpened: 1,
+      inputTokens: null,
+      outputTokens: null,
+      bytesReceived: 48,
+      cost: null,
+    },
+    trace: {
+      providerId: "test-web",
+      adapterId: "test-web-v1",
+      operation: "open",
+      providerRequestId: null,
+      model: null,
+      startedAt: "2026-08-27T00:00:00.000Z",
+      durationMs: 1,
+      attempts: 1,
+    },
+  };
+}
 
 function baseMessages(message: string): AgentToolMessage[] {
   return [

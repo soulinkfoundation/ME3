@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
-import { LANDING_PAGES_PLUGIN_ID } from "@me3-core/plugin-landing-pages";
+import { AGENT_LANDING_PAGE_SITE_TEMPLATE_ID } from "@me3-core/plugin-landing-pages";
 import {
   useSitesStore,
   type Site,
-  type SitePage,
   type SiteQuota,
 } from "../../stores/sites";
-import { api } from "../../api";
 import BrandLogo from "../../components/BrandLogo.vue";
+import AppDialog from "../../components/AppDialog.vue";
 import Button from "../../components/Button.vue";
 import UiIcon from "../../components/UiIcon.vue";
+import { ASSISTANT_SITE_BUILDER_STARTER_PROMPT } from "../../utils/assistantSiteBuilder";
 
 definePage({
   meta: {
@@ -23,10 +23,10 @@ definePage({
 });
 
 const sites = useSitesStore();
-const landingPagesEnabled = ref(false);
 const quota = ref<SiteQuota | null>(null);
 const sitesReady = ref(sites.loaded);
 const quotaLoading = ref(true);
+const addSiteDialogOpen = ref(false);
 
 const profileSite = computed(() =>
   sites.sites.find((site) => site.site_role === "profile"),
@@ -38,35 +38,6 @@ const persistentSites = computed(() => [
   ...(profileSite.value ? [profileSite.value] : []),
   ...additionalSites.value,
 ]);
-const legacyLandingSites = computed(() =>
-  sites.sites.filter((site) => site.site_type === "landing_page"),
-);
-
-const landingPageCards = computed(() => {
-  const profileUsername = profileSite.value?.username;
-  if (!profileUsername || !landingPagesEnabled.value) return [];
-
-  const pages = sites.sitePages.map((page: SitePage) => ({
-    key: `page-${page.id}`,
-    title: page.title || `/${page.slug}`,
-    path: `/sites/${encodeURIComponent(profileUsername)}/pages/${encodeURIComponent(page.id)}`,
-    slug: `/me/${page.slug}`,
-    published: Boolean(page.publishedAt),
-  }));
-  const migratedSlugs = new Set(sites.sitePages.map((page) => page.slug));
-  const legacy = legacyLandingSites.value
-    .filter((site) => !migratedSlugs.has(site.username))
-    .map((site) => ({
-      key: `site-${site.id}`,
-      title: site.username,
-      path: `/sites/${encodeURIComponent(site.username)}`,
-      slug: `/${site.username}`,
-      published: Boolean(site.published_at),
-    }));
-
-  return [...pages, ...legacy];
-});
-
 const visibleSitesError = computed(() => {
   const message = sites.error?.trim();
   if (!message || message.toLowerCase().includes("activate me3 landing pages")) {
@@ -97,16 +68,31 @@ const createAdditionalSiteRoute = {
   path: "/create",
   query: { new: "1", siteRole: "organization", return: "/sites" },
 };
-const createLandingPagePath = computed(() =>
-  profileSite.value
-    ? `/assistant?prompt=${encodeURIComponent(
-        `Help me create a landing page for @${profileSite.value.username}. Ask what the page is for, show me the available starter designs, and then build a draft with me.`,
-      )}`
-    : "/create",
-);
-
-function siteRoute(site: Site): string {
+const buildWithMe3Route = {
+  path: "/assistant",
+  query: {
+    mode: "site-builder",
+    prompt: ASSISTANT_SITE_BUILDER_STARTER_PROMPT,
+  },
+};
+function siteRoute(site: Site) {
+  if (
+    site.template_id === AGENT_LANDING_PAGE_SITE_TEMPLATE_ID &&
+    site.builder_thread_id
+  ) {
+    return {
+      path: "/assistant",
+      query: { mode: "site-builder", thread: site.builder_thread_id },
+    };
+  }
   return `/sites/${encodeURIComponent(site.username)}`;
+}
+
+function siteLinkLabel(site: Site): string {
+  return site.template_id === AGENT_LANDING_PAGE_SITE_TEMPLATE_ID &&
+    site.builder_thread_id
+    ? `Continue building @${site.username} with ME3`
+    : `Open @${site.username}`;
 }
 
 function statusLabel(published: boolean): string {
@@ -132,54 +118,22 @@ function siteAvatar(site: Site): string | null {
   return resolveSiteAvatar(site.avatar, site.username);
 }
 
-async function syncLandingPagesPlugin(): Promise<void> {
-  try {
-    const response = await api.get<{
-      plugins: Array<{ id: string; enabled: boolean; status: string }>;
-    }>("/plugins");
-    landingPagesEnabled.value = response.plugins.some(
-      (plugin) =>
-        plugin.id === LANDING_PAGES_PLUGIN_ID &&
-        plugin.enabled &&
-        plugin.status === "installed",
-    );
-  } catch {
-    landingPagesEnabled.value = false;
-  }
-
-  if (landingPagesEnabled.value && profileSite.value) {
-    await sites.fetchSitePages(profileSite.value.username);
-  }
-}
-
 async function refreshQuota(): Promise<void> {
   quota.value = await sites.getSiteQuota();
 }
 
-function handlePluginsChanged() {
-  void syncLandingPagesPlugin();
-}
-
 async function loadDashboardDetails(): Promise<void> {
   try {
-    await Promise.all([
-      refreshQuota(),
-      syncLandingPagesPlugin(),
-    ]);
+    await refreshQuota();
   } finally {
     quotaLoading.value = false;
   }
 }
 
 onMounted(async () => {
-  window.addEventListener("me3:plugins-changed", handlePluginsChanged);
   await sites.ensureSites();
   sitesReady.value = true;
   void loadDashboardDetails();
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener("me3:plugins-changed", handlePluginsChanged);
 });
 </script>
 
@@ -194,9 +148,10 @@ onBeforeUnmount(() => {
           shape="soft"
           size="compact"
           icon-only
-          :to="createAdditionalSiteRoute"
           aria-label="Add site"
           title="Add site"
+          type="button"
+          @click="addSiteDialogOpen = true"
         >
           <UiIcon name="Plus" :size="20" aria-hidden="true" />
         </Button>
@@ -249,7 +204,7 @@ onBeforeUnmount(() => {
           :key="ownedSite.id"
           class="site-card"
           :to="siteRoute(ownedSite)"
-          :aria-label="`Open @${ownedSite.username}`"
+          :aria-label="siteLinkLabel(ownedSite)"
         >
           <BrandLogo
             v-if="ownedSite.site_role === 'profile'"
@@ -275,45 +230,87 @@ onBeforeUnmount(() => {
         </RouterLink>
       </section>
 
-      <section
-        v-if="landingPageCards.length"
-        class="sites-section"
-        aria-labelledby="landing-pages-title"
-      >
-        <div class="section-heading">
-          <h2 id="landing-pages-title">Landing pages</h2>
-          <Button color="outline" shape="soft" size="small" :to="createLandingPagePath">
-            <template #icon>
-              <UiIcon name="Plus" :size="16" aria-hidden="true" />
-            </template>
-            Create landing page
-          </Button>
-        </div>
+    </main>
 
-        <div class="landing-grid">
-          <RouterLink
-            v-for="landing in landingPageCards"
-            :key="landing.key"
-            class="landing-card"
-            :to="landing.path"
+    <AppDialog
+      :open="addSiteDialogOpen"
+      labelled-by="add-site-title"
+      described-by="add-site-description"
+      close-on-backdrop
+      @close="addSiteDialogOpen = false"
+    >
+      <section class="add-site-dialog">
+        <header class="add-site-dialog__header">
+          <div>
+            <h2 id="add-site-title">Create a site</h2>
+            <p id="add-site-description">
+              Choose how you want to build. Both options create a ME3 site you
+              can manage and share.
+            </p>
+          </div>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Close"
+            title="Close"
+            @click="addSiteDialogOpen = false"
           >
-            <span class="site-card__icon" aria-hidden="true">
-              <UiIcon name="Sparkles" :size="22" />
+            <UiIcon name="X" :size="18" aria-hidden="true" />
+          </Button>
+        </header>
+
+        <div class="add-site-options">
+          <RouterLink
+            class="add-site-option add-site-option--agent"
+            :to="buildWithMe3Route"
+            @click="addSiteDialogOpen = false"
+          >
+            <span class="add-site-option__icon" aria-hidden="true">
+              <UiIcon name="Sparkles" :size="24" />
             </span>
-            <span>
-              <strong>{{ landing.title }}</strong>
-              <small>{{ landing.slug }}</small>
+            <span class="add-site-option__copy">
+              <strong>Build with ME3</strong>
+              <span>
+                Describe what you need, add images, and build with your agent
+                beside a live preview.
+              </span>
             </span>
-            <span
-              class="site-status"
-              :class="{ 'site-status--published': landing.published }"
-            >
-              {{ statusLabel(landing.published) }}
+            <UiIcon
+              class="add-site-option__arrow"
+              name="ArrowRight"
+              :size="20"
+              aria-hidden="true"
+            />
+          </RouterLink>
+
+          <RouterLink
+            class="add-site-option"
+            :to="createAdditionalSiteRoute"
+            @click="addSiteDialogOpen = false"
+          >
+            <span class="add-site-option__icon" aria-hidden="true">
+              <UiIcon name="Pencil" :size="24" />
             </span>
+            <span class="add-site-option__copy">
+              <strong>Create manually</strong>
+              <span>
+                Use the guided wizard for a structured ME3 site you control
+                step by step.
+              </span>
+            </span>
+            <UiIcon
+              class="add-site-option__arrow"
+              name="ArrowRight"
+              :size="20"
+              aria-hidden="true"
+            />
           </RouterLink>
         </div>
       </section>
-    </main>
+    </AppDialog>
 
   </div>
 </template>
@@ -331,6 +328,117 @@ onBeforeUnmount(() => {
   margin: 0 auto;
 }
 
+.add-site-dialog {
+  display: grid;
+  gap: 22px;
+  width: min(620px, 100%);
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-lg, 16px);
+  padding: 22px;
+  background: var(--ui-surface, var(--color-bg));
+  box-shadow: var(--ui-shadow-lg, 0 24px 70px rgb(15 23 42 / 0.18));
+}
+
+.add-site-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.add-site-dialog__header h2,
+.add-site-dialog__header p {
+  margin: 0;
+}
+
+.add-site-dialog__header h2 {
+  font-size: 1.3rem;
+  letter-spacing: -0.025em;
+}
+
+.add-site-dialog__header p {
+  max-width: 52ch;
+  margin-top: 6px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  line-height: 1.5;
+}
+
+.add-site-options {
+  display: grid;
+  gap: 10px;
+}
+
+.add-site-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 92px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 12px);
+  padding: 14px;
+  background: var(--ui-surface, var(--color-bg));
+  color: inherit;
+  text-decoration: none;
+}
+
+.add-site-option--agent {
+  border-color: color-mix(
+    in oklab,
+    var(--ui-accent, var(--color-accent)) 38%,
+    var(--ui-border, var(--color-border))
+  );
+  background: color-mix(
+    in oklab,
+    var(--ui-accent-soft, var(--color-bg-subtle)) 54%,
+    var(--ui-surface, var(--color-bg))
+  );
+}
+
+.add-site-option:hover {
+  border-color: var(--ui-border-strong, var(--color-border));
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.add-site-option:focus-visible {
+  outline: 3px solid var(--ui-accent, var(--color-accent));
+  outline-offset: 2px;
+}
+
+.add-site-option__icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: var(--ui-radius-md, 12px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.add-site-option--agent .add-site-option__icon {
+  background: var(--ui-accent-soft, var(--color-bg-subtle));
+  color: var(--ui-accent, var(--color-accent));
+}
+
+.add-site-option__copy {
+  display: grid;
+  gap: 4px;
+}
+
+.add-site-option__copy strong {
+  font-size: 1rem;
+}
+
+.add-site-option__copy > span {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.add-site-option__arrow {
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
 .sr-only {
   position: absolute;
   overflow: hidden;
@@ -341,12 +449,6 @@ onBeforeUnmount(() => {
   margin: -1px;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
-}
-
-.section-heading,
-.landing-card {
-  display: flex;
-  align-items: center;
 }
 
 .sites-header {
@@ -365,14 +467,12 @@ onBeforeUnmount(() => {
   min-height: 44px;
 }
 
-.section-heading h2,
 .profile-callout h2,
 .site-card h2 {
   margin: 0;
   letter-spacing: -0.025em;
 }
 
-.section-heading p,
 .profile-callout p {
   color: var(--ui-text-muted, var(--color-text-muted));
 }
@@ -425,27 +525,6 @@ onBeforeUnmount(() => {
   line-height: 1.5;
 }
 
-.sites-section + .sites-section,
-.sites-message + .sites-section,
-.sites-section + .sites-message {
-  margin-top: 32px;
-}
-
-.section-heading {
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
-}
-
-.section-heading h2 {
-  font-size: 1.15rem;
-}
-
-.section-heading p {
-  margin: 0;
-  font-size: 0.88rem;
-}
-
 .sites-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -468,13 +547,6 @@ onBeforeUnmount(() => {
   cursor: pointer;
   text-align: center;
   text-decoration: none;
-}
-
-.landing-card .site-card__icon {
-  width: 48px;
-  height: 48px;
-  margin: 0;
-  border-radius: var(--ui-radius-md, 12px);
 }
 
 .site-status {
@@ -528,50 +600,20 @@ onBeforeUnmount(() => {
   margin-top: 12px;
 }
 
-.landing-grid {
-  display: grid;
-  gap: 8px;
-}
-
-.landing-card {
-  min-height: 72px;
-  gap: 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 12px);
-  background: var(--ui-surface, var(--color-bg));
-  color: inherit;
-  text-decoration: none;
-}
-
-.landing-card > span:nth-child(2) {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-}
-
-.landing-card small {
-  margin-top: 3px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.site-card:focus-visible,
-.landing-card:focus-visible {
+.site-card:focus-visible {
   outline: 3px solid var(--ui-accent, var(--color-accent));
   outline-offset: 3px;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .site-card,
-  .landing-card {
+  .site-card {
     transition:
       border-color 160ms ease,
       box-shadow 160ms ease,
       transform 160ms ease;
   }
 
-  .site-card:hover,
-  .landing-card:hover {
+  .site-card:hover {
     border-color: var(--ui-border-strong, var(--color-border));
     box-shadow: var(--ui-shadow-md, 0 12px 24px rgb(15 23 42 / 0.08));
     transform: translateY(-2px);
@@ -581,10 +623,6 @@ onBeforeUnmount(() => {
 @media (max-width: 720px) {
   .sites-page {
     padding: var(--workspace-topbar-padding-block) 16px 48px;
-  }
-
-  .section-heading {
-    align-items: flex-start;
   }
 
   .profile-callout {
@@ -602,8 +640,19 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 520px) {
-  .section-heading {
-    flex-direction: column;
+  .add-site-dialog {
+    gap: 18px;
+    width: 100%;
+    border-radius: var(--ui-radius-lg, 16px) var(--ui-radius-lg, 16px) 0 0;
+    padding: 20px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .add-site-option {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .add-site-option__arrow {
+    display: none;
   }
 }
 </style>

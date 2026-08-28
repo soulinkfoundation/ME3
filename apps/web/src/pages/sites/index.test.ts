@@ -80,9 +80,7 @@ describe("Sites dashboard", () => {
     expect(wrapper.text()).toContain("@owner");
     expect(wrapper.text()).toContain("@studio");
     expect(wrapper.text()).toContain("@community");
-    expect(wrapper.get('[aria-label="Add site"]').attributes("href")).toContain(
-      "siteRole=organization",
-    );
+    expect(wrapper.get('[aria-label="Add site"]').element.tagName).toBe("BUTTON");
 
     const cards = wrapper.findAll("a.site-card");
     expect(cards).toHaveLength(3);
@@ -99,6 +97,57 @@ describe("Sites dashboard", () => {
       "/preview/studio/files/avatar.jpg",
     );
     expect(cards[2].find(".site-card__icon").exists()).toBe(true);
+  });
+
+  it("resumes an agent-built site in its builder conversation", async () => {
+    const profile = siteRecord("owner", "profile");
+    const generated = siteRecord("studio", "organization");
+    generated.template_id = "agent-landing-page";
+    generated.builder_thread_id = "thread-123";
+    const wrapper = await mountDashboard(
+      [profile, generated],
+      quotaResponse({
+        canCreateProfile: false,
+        canCreateAdditionalSite: false,
+        remainingAdditionalSites: 0,
+      }),
+    );
+
+    const card = wrapper.get('[aria-label="Continue building @studio with ME3"]');
+    expect(card.attributes("href")).toBe(
+      "/assistant?mode=site-builder&thread=thread-123",
+    );
+    expect(wrapper.text()).not.toContain("Landing pages");
+  });
+
+  it("offers agent and manual creation from the Add site chooser", async () => {
+    const wrapper = await mountDashboard(
+      [siteRecord("owner", "profile")],
+      quotaResponse({
+        canCreateProfile: false,
+        canCreateAdditionalSite: true,
+        remainingAdditionalSites: 1,
+      }),
+    );
+
+    await wrapper.get('[aria-label="Add site"]').trigger("click");
+
+    const chooser = wrapper.get('[role="dialog"]');
+    expect(chooser.text()).toContain("Build with ME3");
+    expect(chooser.text()).toContain("Create manually");
+
+    const links = chooser.findAll("a");
+    const agentLink = links.find((link) => link.text().includes("Build with ME3"));
+    const manualLink = links.find((link) => link.text().includes("Create manually"));
+    expect(agentLink?.attributes("href")).toContain(
+      "/assistant?mode=site-builder",
+    );
+    expect(agentLink?.attributes("href")).toContain(
+      "prompt=Build+me+a+landing+page+site+for+",
+    );
+    expect(agentLink?.attributes("href")).not.toContain("send=");
+    expect(manualLink?.attributes("href")).toContain("/create?new=1");
+    expect(manualLink?.attributes("href")).toContain("siteRole=organization");
   });
 
   it("hides Add site and explains when the quota is full", async () => {
@@ -157,6 +206,11 @@ function mountOptions(router: Router) {
     global: {
       plugins: [router],
       stubs: {
+        AppDialog: {
+          props: ["open"],
+          emits: ["close"],
+          template: '<div v-if="open" role="dialog"><slot /></div>',
+        },
         BrandLogo: { template: '<span class="brand-logo-stub" />' },
         UiIcon: { template: '<span class="ui-icon-stub" />' },
       },

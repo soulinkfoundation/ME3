@@ -190,8 +190,8 @@ test("the workflow provisions the managed email install identity and HTTPS gatew
   }
 });
 
-test("the workflow installs the hosted OpenAI key as the existing Worker secret binding", () => {
-  const installSecret = getStep("Install the hosted image provider secret");
+test("the workflow installs hosted provider keys as Worker secret bindings", () => {
+  const installSecret = getStep("Install the hosted provider secrets");
   const publish = getStep("Publish the managed Worker");
 
   assert.match(
@@ -201,6 +201,14 @@ test("the workflow installs the hosted OpenAI key as the existing Worker secret 
   assert.match(
     installSecret,
     /wrangler secret put OPENAI_API_KEY --config wrangler\.toml/,
+  );
+  assert.match(
+    installSecret,
+    /ME3_MANAGED_PEXELS_API_KEY: \$\{\{ secrets\.ME3_MANAGED_PEXELS_API_KEY \}\}/,
+  );
+  assert.match(
+    installSecret,
+    /wrangler secret put PEXELS_API_KEY --config wrangler\.toml/,
   );
   assert.doesNotMatch(installSecret, /ME3_AI_IMAGE_GENERATION_/);
   assert.ok(workflow.indexOf(installSecret) < workflow.indexOf(publish));

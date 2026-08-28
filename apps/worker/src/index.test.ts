@@ -10241,6 +10241,15 @@ describe("ME3 Worker auth", () => {
           activationAllowed: true,
           enabled: false,
         }),
+        expect.objectContaining({
+          id: "me3.email-campaigns",
+          showInPluginList: true,
+          status: "available",
+          implementationStatus: "bundled",
+          releaseStage: "available",
+          activationAllowed: true,
+          enabled: false,
+        }),
       ]),
     );
     expect(body.plugins).not.toEqual(
@@ -11406,6 +11415,40 @@ describe("ME3 Worker auth", () => {
       status: "installed",
       enabled: true,
     });
+  });
+
+  it("keeps campaign APIs behind the activatable Email Campaigns plugin", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const disabled = await app.fetch(
+      new Request("http://localhost/api/email/campaigns", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    expect(disabled.status).toBe(403);
+    await expect(disabled.json()).resolves.toMatchObject({
+      code: "campaign_plugin_required",
+    });
+
+    const activation = await app.fetch(
+      new Request("http://localhost/api/plugins/me3.email-campaigns/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    expect(activation.status).toBe(200);
+
+    const enabled = await app.fetch(
+      new Request("http://localhost/api/email/campaigns", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    expect(enabled.status).toBe(200);
+    await expect(enabled.json()).resolves.toMatchObject({ campaigns: [] });
   });
 
   it("keeps landing pages inside an existing site", async () => {
