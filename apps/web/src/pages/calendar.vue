@@ -29,6 +29,7 @@ import type {
   CalendarAgendaEvent,
   CalendarRangeMode,
 } from "../components/calendar/calendarAgenda";
+import { calendarActivityDateKeys } from "../components/calendar/calendarAgenda";
 import type {
   CalendarContextAnchor,
   CalendarWeekSlot,
@@ -271,6 +272,8 @@ const addingImportedBirthdayId = ref<string | null>(null);
 const { toastSuccess, toastFromUnknown } = useAppToast();
 let calendarLoadToken = 0;
 let calendarLoadController: AbortController | null = null;
+let calendarPickerLoadToken = 0;
+let calendarPickerLoadController: AbortController | null = null;
 /** Matches `.cal-shell` stacked layout at `max-width: 1100px`. */
 const CALENDAR_COMPACT_MAX_WIDTH_PX = 1100;
 
@@ -285,6 +288,7 @@ const showSettingsMenu = ref(false);
 const calendarsDialogOpen = ref(false);
 const calendarPickerOpen = ref(false);
 const calendarPickerMonth = ref(monthKeyFromDate(new Date()));
+const calendarPickerEvents = ref<CalendarAgendaEvent[]>([]);
 const quickCreateDayKey = ref<string | null>(null);
 const boardContextAnchor = ref<CalendarContextAnchor | null>(null);
 const quickWeekSlot = ref<CalendarWeekSlot | null>(null);
@@ -316,6 +320,15 @@ function monthGridWindow(from: Date): { start: Date; end: Date } {
   const rowCount = Math.ceil((lead + daysInMonth) / 7);
   const end = new Date(start);
   end.setDate(start.getDate() + rowCount * 7);
+  return { start, end };
+}
+
+function datePickerWindow(month: string): { start: Date; end: Date } | null {
+  const [year, monthNumber] = month.split("-").map(Number);
+  if (!year || !monthNumber) return null;
+  const start = startOfWeekMonday(new Date(year, monthNumber - 1, 1));
+  const end = new Date(start);
+  end.setDate(start.getDate() + 42);
   return { start, end };
 }
 
@@ -1211,17 +1224,37 @@ function loadCalendarVisibility() {
   calendarVisibilityHydrated = true;
 }
 
-const mergedRangeEvents = computed(() =>
-  [
-    ...bookings.value.map(mapBookingToCalendarEvent),
-    ...events.value.map(mapEventToCalendarEvent),
-    ...importedEvents.value.map(mapEventToCalendarEvent),
-    ...reminders.value.map(mapReminderToCalendarEvent),
-    ...tasks.value.map(mapTaskToCalendarEvent),
-    ...socialPublications.value.map(mapSocialPublicationToCalendarEvent),
+function calendarFeedAgendaEvents(
+  response: CalendarFeedResponse,
+): CalendarAgendaEvent[] {
+  return [
+    ...(response.bookings || []).map(mapBookingToCalendarEvent),
+    ...(response.events || []).map(mapEventToCalendarEvent),
+    ...(response.importedEvents || []).map(mapEventToCalendarEvent),
+    ...(response.reminders || []).map(mapReminderToCalendarEvent),
+    ...(response.tasks || []).map(mapTaskToCalendarEvent),
+    ...(response.socialPublishing?.ready
+      ? response.socialPublishing.publications || []
+      : []
+    ).map(mapSocialPublicationToCalendarEvent),
   ].sort(
     (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
-  ),
+  );
+}
+
+const mergedRangeEvents = computed(() =>
+  calendarFeedAgendaEvents({
+    bookings: bookings.value,
+    reminders: reminders.value,
+    events: events.value,
+    importedEvents: importedEvents.value,
+    sources: sources.value,
+    tasks: tasks.value,
+    socialPublishing: {
+      ready: socialPublishingReady.value,
+      publications: socialPublications.value,
+    },
+  }),
 );
 
 const visibleEvents = computed(() => {
@@ -1229,6 +1262,15 @@ const visibleEvents = computed(() => {
     (event) => !hiddenCalendarKeys.value.includes(event.siteKey),
   );
 });
+
+const calendarPickerMarkedDates = computed(() =>
+  calendarActivityDateKeys(
+    calendarPickerEvents.value.filter(
+      (event) => !hiddenCalendarKeys.value.includes(event.siteKey),
+    ),
+    resolvedTimeZone || "UTC",
+  ),
+);
 
 const initialCalendarLoading = computed(
   () => loading.value && !calendarLoaded.value,
@@ -1645,9 +1687,50 @@ function syncCalendarPickerMonth() {
   calendarPickerMonth.value = monthKeyFromDate(miniCalendarCursor.value);
 }
 
+async function loadCalendarPickerMarkers(month: string) {
+  const window = datePickerWindow(month);
+  if (!window) {
+    calendarPickerEvents.value = [];
+    return;
+  }
+
+  const token = ++calendarPickerLoadToken;
+  calendarPickerLoadController?.abort();
+  const controller = new AbortController();
+  calendarPickerLoadController = controller;
+  calendarPickerEvents.value = [];
+
+  try {
+    const qs = new URLSearchParams({
+      start: window.start.toISOString(),
+      end: window.end.toISOString(),
+    });
+    const response = await api.get<CalendarFeedResponse>(
+      `/calendar/feed?${qs.toString()}`,
+      { signal: controller.signal },
+    );
+    if (
+      token !== calendarPickerLoadToken ||
+      controller.signal.aborted ||
+      !calendarPickerOpen.value ||
+      month !== calendarPickerMonth.value
+    ) {
+      return;
+    }
+    calendarPickerEvents.value = calendarFeedAgendaEvents(response);
+  } catch {
+    if (token === calendarPickerLoadToken && !controller.signal.aborted) {
+      calendarPickerEvents.value = [];
+    }
+  }
+}
+
 function toggleCalendarPicker() {
   if (!calendarPickerOpen.value) {
     syncCalendarPickerMonth();
+    void loadCalendarPickerMarkers(calendarPickerMonth.value);
+  } else {
+    calendarPickerLoadController?.abort();
   }
   showCreateMenu.value = false;
   showSettingsMenu.value = false;
@@ -1656,6 +1739,7 @@ function toggleCalendarPicker() {
 
 function moveCalendarPickerMonth(delta: number) {
   calendarPickerMonth.value = addMonthsToKey(calendarPickerMonth.value, delta);
+  void loadCalendarPickerMarkers(calendarPickerMonth.value);
 }
 
 function chooseCalendarPickerDay(dayKey: string) {
@@ -2987,6 +3071,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   calendarLoadController?.abort();
+  calendarPickerLoadController?.abort();
   if (transientHighlightTimer) clearTimeout(transientHighlightTimer);
   mobileMediaQuery?.removeEventListener("change", onMobileCalendarChange);
   window.removeEventListener("keydown", handleWindowKeydown);
@@ -3046,6 +3131,8 @@ onBeforeUnmount(() => {
             :month-key="calendarPickerMonth"
             :selected-date="calendarPickerSelectedDate"
             :today-date="todayDayKey"
+            :marked-dates="calendarPickerMarkedDates"
+            marked-date-label="calendar items scheduled"
             aria-label="Choose calendar date"
             @move-month="moveCalendarPickerMonth"
             @select-date="chooseCalendarPickerDay"
@@ -3234,6 +3321,8 @@ onBeforeUnmount(() => {
             :month-key="calendarPickerMonth"
             :selected-date="calendarPickerSelectedDate"
             :today-date="todayDayKey"
+            :marked-dates="calendarPickerMarkedDates"
+            marked-date-label="calendar items scheduled"
             aria-label="Choose calendar date"
             @move-month="moveCalendarPickerMonth"
             @select-date="chooseCalendarPickerDay"

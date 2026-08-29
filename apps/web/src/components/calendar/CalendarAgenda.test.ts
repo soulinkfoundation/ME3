@@ -2,6 +2,7 @@ import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import CalendarAgenda from "./CalendarAgenda.vue";
 import type { CalendarAgendaEvent } from "./calendarAgenda";
+import { calendarActivityDateKeys } from "./calendarAgenda";
 
 const events: CalendarAgendaEvent[] = [
   {
@@ -94,5 +95,45 @@ describe("CalendarAgenda", () => {
     expect(wrapper.findAll(".calendar-day")).toHaveLength(2);
     expect(wrapper.text()).toContain("Today");
     expect(wrapper.findAll(".calendar-day-empty")).toHaveLength(1);
+  });
+});
+
+function event(
+  startsAt: string,
+  endsAt: string,
+): CalendarAgendaEvent {
+  return {
+    id: startsAt,
+    sourceLabel: "Event",
+    title: "Calendar item",
+    siteKey: "__events__",
+    siteLabel: "Events",
+    startsAt,
+    endsAt,
+    summary: "",
+    detailLines: [],
+  };
+}
+
+describe("calendarActivityDateKeys", () => {
+  it("marks every occupied local day without leaking an exclusive midnight end", () => {
+    expect(
+      calendarActivityDateKeys(
+        [
+          event("2026-08-12T22:00:00Z", "2026-08-14T00:00:00Z"),
+          event("2026-08-18T09:00:00Z", "2026-08-18T09:00:00Z"),
+        ],
+        "UTC",
+      ),
+    ).toEqual(["2026-08-12", "2026-08-13", "2026-08-18"]);
+  });
+
+  it("uses the calendar display timezone", () => {
+    expect(
+      calendarActivityDateKeys(
+        [event("2026-08-29T23:30:00Z", "2026-08-30T00:30:00Z")],
+        "Europe/Dublin",
+      ),
+    ).toEqual(["2026-08-30"]);
   });
 });

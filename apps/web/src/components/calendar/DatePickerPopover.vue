@@ -18,6 +18,7 @@ const props = withDefaults(
     selectedDate?: string | null;
     todayDate: string;
     markedDates?: string[];
+    markedDateLabel?: string;
     ariaLabel?: string;
     todayActionLabel?: string;
     secondaryActionLabel?: string;
@@ -25,6 +26,7 @@ const props = withDefaults(
   {
     selectedDate: null,
     markedDates: () => [],
+    markedDateLabel: "journal entry saved",
     ariaLabel: "Choose date",
     todayActionLabel: "Today",
     secondaryActionLabel: undefined,
@@ -137,7 +139,7 @@ function formatDateLabel(value: string): string {
           'is-selected': cell.isSelected,
           'has-marker': cell.isMarked,
         }"
-        :aria-label="`${formatDateLabel(cell.date)}${cell.isMarked ? ', journal entry saved' : ''}`"
+        :aria-label="`${formatDateLabel(cell.date)}${cell.isMarked ? `, ${markedDateLabel}` : ''}`"
         :aria-pressed="cell.isSelected"
         @click="emit('select-date', cell.date)"
       >
