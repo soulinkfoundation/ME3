@@ -14,7 +14,7 @@ import {
   startCampaignAddOnCheckout,
   startCampaignDelivery,
 } from "./campaign-delivery";
-import { createCampaign, getCampaign, saveCampaignDraft } from "./campaigns";
+import { createCampaign, deleteCampaign, getCampaign, saveCampaignDraft } from "./campaigns";
 import type { Env } from "./types";
 
 const migrationFiles = [
@@ -262,6 +262,31 @@ describe("campaign delivery lifecycle", () => {
       database.prepare(
         "SELECT COUNT(*) AS count FROM email_campaign_audience_snapshots",
       ).get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("deletes a terminal failed campaign and its delivery records", async () => {
+    const current = await getCampaign(env, "owner", campaignId);
+    const revisionId = current?.revision.id;
+    expect(revisionId).toBeTruthy();
+    if (!revisionId) throw new Error("Expected campaign revision");
+    database.prepare(
+      `INSERT INTO email_campaign_recipient_jobs
+       (id, campaign_id, revision_id, kind, recipient_ref, recipient_email,
+        status, next_attempt_at, created_at, updated_at)
+       VALUES ('failed-job', ?, ?, 'test', 'test-ref', 'owner@example.com',
+               'failed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    ).run(campaignId, revisionId);
+    database.prepare(
+      "UPDATE email_campaigns SET status = 'failed' WHERE id = ?",
+    ).run(campaignId);
+
+    await expect(deleteCampaign(env, "owner", campaignId)).resolves.toEqual({ campaignId });
+    expect(database.prepare("SELECT COUNT(*) AS count FROM email_campaigns").get()).toEqual({
+      count: 0,
+    });
+    expect(
+      database.prepare("SELECT COUNT(*) AS count FROM email_campaign_recipient_jobs").get(),
     ).toEqual({ count: 0 });
   });
 

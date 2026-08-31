@@ -43,6 +43,7 @@ export type CampaignDocument = {
     name: string;
     homeUrl: string;
     logoUrl: string | null;
+    logoAlignment: "left" | "center";
     backgroundColor: string;
     surfaceColor: string;
     textColor: string;

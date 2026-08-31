@@ -36,6 +36,7 @@ describe("campaign document editor conversion", () => {
         name: "ME3",
         homeUrl: "https://example.com",
         logoUrl: null,
+        logoAlignment: "center",
         backgroundColor: "#ffffff",
         surfaceColor: "#ffffff",
         textColor: "#111111",

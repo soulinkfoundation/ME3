@@ -61,6 +61,7 @@ describe("campaign document", () => {
         name: "Owner",
         homeUrl: "https://me3.app/",
         logoUrl: null,
+        logoAlignment: "center",
         backgroundColor: "#f4f5f4",
         surfaceColor: "#ffffff",
         textColor: "#18201d",
@@ -102,6 +103,7 @@ describe("campaign renderer", () => {
     expect(first.html).toContain("The short preview");
     expect(first.html).toContain("A useful update");
     expect(first.html).toContain("{{unsubscribe_url}}");
+    expect(first.html).toContain('align="center"');
     expect(first.text).toContain("• One clear point");
     expect(first.text).toContain("Read more: https://example.com/story");
   });

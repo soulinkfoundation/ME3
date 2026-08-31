@@ -42,8 +42,9 @@ function renderCampaignHtml(
   const { brand } = document;
   const blocks = document.blocks.map((block) => renderBlock(block, document)).join("");
   const logo = brand.logoUrl
-    ? `<a href="${escapeAttribute(brand.homeUrl)}" style="text-decoration:none"><img src="${escapeAttribute(brand.logoUrl)}" width="96" alt="${escapeAttribute(brand.name)}" style="display:block;width:96px;max-width:100%;height:auto;border:0"></a>`
+    ? `<a href="${escapeAttribute(brand.homeUrl)}" style="display:inline-block;text-decoration:none"><img src="${escapeAttribute(brand.logoUrl)}" width="96" alt="${escapeAttribute(brand.name)}" style="display:block;width:96px;max-width:100%;height:auto;border:0"></a>`
     : `<a href="${escapeAttribute(brand.homeUrl)}" style="color:${brand.textColor};font-family:Arial,Helvetica,sans-serif;font-size:20px;line-height:1.2;font-weight:700;text-decoration:none">${escapeHtml(brand.name)}</a>`;
+  const logoAlignment = brand.logoAlignment === "center" ? "center" : "left";
 
   return `<!doctype html>
 <html lang="en">
@@ -65,7 +66,7 @@ function renderCampaignHtml(
     <tr>
       <td align="center" style="padding:32px 12px">
         <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" class="me3-email-shell" style="width:600px;max-width:600px;border-collapse:collapse;background:${brand.surfaceColor}">
-          <tr><td class="me3-email-pad" style="padding:32px 40px 20px">${logo}</td></tr>
+          <tr><td class="me3-email-pad" align="${logoAlignment}" style="padding:32px 40px 20px;text-align:${logoAlignment}">${logo}</td></tr>
           <tr><td class="me3-email-pad" style="padding:4px 40px 16px">${blocks}</td></tr>
           <tr>
             <td class="me3-email-pad" style="padding:24px 40px 32px;border-top:1px solid #dfe3e1;color:#69736f;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.6">

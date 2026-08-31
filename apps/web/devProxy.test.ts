@@ -31,4 +31,13 @@ describe("remote development API guard", () => {
       ),
     ).toBe(false);
   });
+
+  it("blocks deleting campaigns", () => {
+    expect(
+      isBlockedRemoteDevRequest(
+        "DELETE",
+        "/api/email/campaigns/campaign-1",
+      ),
+    ).toBe(true);
+  });
 });

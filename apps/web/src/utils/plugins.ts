@@ -95,7 +95,7 @@ export function pluginInfoText(plugin: PluginRecord) {
     return "Adds social account connection and approval-first publishing.";
   }
   if (plugin.id === "me3.email-campaigns") {
-    return "Adds campaign drafting, consent-aware audiences, scheduling, and delivery history.";
+    return "Schedule and manage email campaigns (this is a paid feature)";
   }
   return plugin.description;
 }

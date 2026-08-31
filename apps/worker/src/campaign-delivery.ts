@@ -98,7 +98,9 @@ export async function getCampaignTransportStatus(
   const config = await getManagedCampaignConfig(env).catch(() => null);
   if (!config) {
     await storeTransportStatus(env, null, false, "managed_transport_not_configured");
-    return unavailableTransport(true, "managed_transport_not_configured");
+    return unavailableTransport(true, "managed_transport_not_configured", null, [
+      "Managed campaign delivery is not configured for this installation yet.",
+    ]);
   }
 
   let knownAddOn: CampaignAddOnStatus | null = null;
@@ -114,7 +116,12 @@ export async function getCampaignTransportStatus(
       | null;
     const addOn = normalizeCampaignAddOnStatus(addOnBody?.addOn);
     if (!addOnResponse.ok || isRedirect(addOnResponse.status) || !addOn) {
-      return unavailableTransport(true, `campaign_billing_status_${addOnResponse.status}`);
+      return unavailableTransport(
+        true,
+        `campaign_billing_status_${addOnResponse.status}`,
+        null,
+        ["Campaign Sending billing is temporarily unavailable. Drafts remain available."],
+      );
     }
     knownAddOn = addOn;
     if (!addOn.entitled) {
@@ -132,7 +139,9 @@ export async function getCampaignTransportStatus(
     );
     if (!response.ok || isRedirect(response.status)) {
       await storeTransportStatus(env, null, false, `sender_status_${response.status}`);
-      return unavailableTransport(true, `sender_status_${response.status}`, addOn);
+      return unavailableTransport(true, `sender_status_${response.status}`, addOn, [
+        "Campaign sender status could not be confirmed. Try again shortly.",
+      ]);
     }
     const body = (await response.json().catch(() => null)) as ManagedCampaignSenderStatus | null;
     const sender = body?.sender;
@@ -166,7 +175,9 @@ export async function getCampaignTransportStatus(
     return status;
   } catch {
     await storeTransportStatus(env, null, false, "managed_transport_unreachable");
-    return unavailableTransport(true, "managed_transport_unreachable", knownAddOn);
+    return unavailableTransport(true, "managed_transport_unreachable", knownAddOn, [
+      "Campaign Sending is temporarily unavailable. Drafts remain available.",
+    ]);
   }
 }
 

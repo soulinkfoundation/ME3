@@ -48,7 +48,7 @@ export default defineConfig({
                   if (!isBlockedRemoteDevRequest(req.method, req.url)) return
                   res?.writeHead(403, { 'Content-Type': 'application/json' })
                   res?.end(JSON.stringify({
-                    error: 'Campaign delivery actions are blocked in remote development mode.',
+                    error: 'Campaign send and delete actions are blocked in remote development mode.',
                     code: 'remote_dev_delivery_blocked',
                   }))
                   return req.url || '/api'

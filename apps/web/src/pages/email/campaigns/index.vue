@@ -61,6 +61,7 @@ const checkoutPlan = ref<CampaignAddOnPlanKey | null>(null);
 const openingBilling = ref(false);
 const settingUpSender = ref(false);
 const cancellingId = ref<string | null>(null);
+const deletingId = ref<string | null>(null);
 const route = useRoute();
 const router = useRouter();
 let refreshTimer: number | null = null;
@@ -233,6 +234,29 @@ async function cancelCampaign(campaign: CampaignSummary) {
     error.value = caught instanceof Error ? caught.message : "Unable to cancel campaign.";
   } finally {
     cancellingId.value = null;
+  }
+}
+
+function canDeleteCampaign(campaign: CampaignSummary) {
+  return ["draft", "failed", "cancelled"].includes(campaign.status);
+}
+
+async function deleteCampaign(campaign: CampaignSummary) {
+  if (deletingId.value) return;
+  const subject = campaignTitle(campaign);
+  const prompt = campaign.status === "draft"
+    ? `Delete “${subject}” draft? Its content will be permanently removed.`
+    : `Delete “${subject}” and its delivery history? This cannot be undone.`;
+  if (!window.confirm(prompt)) return;
+  deletingId.value = campaign.id;
+  actionError.value = "";
+  try {
+    await api.delete(`/email/campaigns/${encodeURIComponent(campaign.id)}`);
+    campaigns.value = campaigns.value.filter((item) => item.id !== campaign.id);
+  } catch (caught) {
+    actionError.value = caught instanceof Error ? caught.message : "Unable to delete campaign.";
+  } finally {
+    deletingId.value = null;
   }
 }
 
@@ -453,7 +477,20 @@ onBeforeUnmount(() => {
         </section>
 
         <section v-if="campaigns.length" class="campaign-list" aria-label="Email campaigns">
-          <article v-for="campaign in campaigns" :key="campaign.id" class="campaign-card">
+          <article
+            v-for="campaign in campaigns"
+            :key="campaign.id"
+            class="campaign-card"
+            :class="{ 'campaign-card--clickable': campaign.status === 'draft' }"
+          >
+            <router-link
+              v-if="campaign.status === 'draft'"
+              class="campaign-card__link"
+              :to="{ path: '/email/campaigns/create', query: { campaign: campaign.id } }"
+              :aria-label="`Open ${campaignTitle(campaign)} for @${campaign.siteUsername}`"
+            >
+              <span class="sr-only">Open campaign</span>
+            </router-link>
             <div class="campaign-card__main">
               <div class="campaign-card__title-row">
                 <h2>
@@ -467,16 +504,15 @@ onBeforeUnmount(() => {
             </div>
             <div class="campaign-card__actions">
               <Button
-                v-if="campaign.status === 'draft'"
+                v-if="canDeleteCampaign(campaign)"
+                class="campaign-card__delete"
                 color="ghost"
                 shape="soft"
                 size="compact"
-                icon-only
-                :to="{ path: '/email/campaigns/create', query: { campaign: campaign.id } }"
-                :aria-label="`Edit ${campaignTitle(campaign)} for @${campaign.siteUsername}`"
-                title="Edit campaign"
+                :disabled="deletingId === campaign.id"
+                @click="deleteCampaign(campaign)"
               >
-                <UiIcon name="Pencil" :size="17" aria-hidden="true" />
+                {{ deletingId === campaign.id ? "Deleting…" : "Delete" }}
               </Button>
               <Button v-if="['scheduled', 'sending'].includes(campaign.status)" color="ghost" shape="soft" size="compact" :disabled="cancellingId === campaign.id" @click="cancelCampaign(campaign)">
                 {{ cancellingId === campaign.id ? "Cancelling…" : "Cancel" }}
@@ -503,7 +539,9 @@ onBeforeUnmount(() => {
 .campaigns-mail-tabs { display: flex; justify-content: flex-start; width: 100%; padding: 4px 8px 0; border-bottom: 1px solid var(--ui-border, var(--color-border)); background: var(--ui-bg, var(--color-bg)); overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scroll-padding-inline: 8px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .campaigns-mail-tabs::-webkit-scrollbar { display: none; }
 .campaigns-shell { width: min(100%, 900px); margin: 0 auto; padding: 24px 24px 72px; box-sizing: border-box; }
-.campaign-card__actions { position: absolute; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.campaign-card__actions { position: absolute; right: 12px; bottom: 10px; z-index: 2; display: flex; align-items: center; gap: 8px; }
+.campaign-card__actions :deep(.campaign-card__delete) { color: var(--ui-danger, #b42318); }
+.campaign-card__actions :deep(.campaign-card__delete:hover:not(:disabled)) { background: var(--ui-danger-soft, color-mix(in srgb, var(--ui-danger, #b42318) 10%, transparent)); color: var(--ui-danger, #b42318); }
 .notice { display: flex; gap: 12px; margin-bottom: 20px; padding: 15px 16px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface-muted, var(--color-bg-subtle)); }
 .notice strong, .notice p { display: block; margin: 0; }
 .notice p { margin-top: 3px; color: var(--ui-text-muted, var(--color-text-muted)); line-height: 1.45; }
@@ -533,7 +571,10 @@ onBeforeUnmount(() => {
 .delivery-summary p { margin-top: 3px; color: var(--ui-text-muted, var(--color-text-muted)); font-size: .82rem; }
 .delivery-summary__actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .campaign-list { display: grid; gap: 8px; }
-.campaign-card { position: relative; min-height: 76px; padding: 14px 54px 12px 16px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface, var(--color-bg)); box-sizing: border-box; }
+.campaign-card { position: relative; min-height: 76px; padding: 14px 92px 12px 16px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface, var(--color-bg)); box-sizing: border-box; transition: border-color .15s ease, background .15s ease; }
+.campaign-card--clickable:hover { border-color: var(--ui-border-strong, var(--ui-accent, var(--color-accent))); background: var(--ui-surface-muted, var(--color-bg-subtle)); }
+.campaign-card__link { position: absolute; inset: 0; z-index: 1; border-radius: inherit; }
+.campaign-card__link:focus-visible { outline: 2px solid var(--ui-focus, var(--ui-accent)); outline-offset: 2px; }
 .campaign-card__main { min-width: 0; flex: 1; }
 .campaign-card__title-row { min-width: 0; }
 .campaign-card h2 { overflow: hidden; margin: 0; padding-right: 62px; font-size: .96rem; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
@@ -541,6 +582,7 @@ onBeforeUnmount(() => {
 .campaign-card p { margin-top: 4px; font-size: .82rem; }
 .campaign-card small { display: block; margin-top: 5px; font-size: .72rem; }
 .campaign-card__site { color: var(--ui-accent, var(--color-accent)); font-weight: 700; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .status-pill { position: absolute; top: 10px; right: 12px; padding: 4px 8px; border-radius: 999px; background: var(--ui-surface-muted, var(--color-bg-subtle)); color: var(--ui-text-muted, var(--color-text-muted)); font-size: .7rem; font-weight: 700; }
 .status-pill--sending, .status-pill--scheduled { background: color-mix(in srgb, var(--ui-accent, #13a27d) 12%, transparent); color: var(--ui-accent-strong, var(--color-accent)); }
 .status-pill--failed { background: color-mix(in srgb, var(--ui-danger, #b42318) 10%, transparent); color: var(--ui-danger, #b42318); }

@@ -89,6 +89,7 @@ const brand = ref<CampaignDocument["brand"]>({
   name: "ME3",
   homeUrl: "https://me3.app/",
   logoUrl: null,
+  logoAlignment: "center",
   backgroundColor: "#f4f5f4",
   surfaceColor: "#ffffff",
   textColor: "#18201d",
@@ -154,7 +155,10 @@ function applyCampaign(next: Campaign) {
   subject.value = next.revision.subject;
   previewText.value = next.revision.previewText;
   replyToAddress.value = next.revision.replyToAddress || ownerEmail.value;
-  brand.value = { ...next.revision.document.brand };
+  brand.value = {
+    ...next.revision.document.brand,
+    logoAlignment: next.revision.document.brand.logoAlignment === "left" ? "left" : "center",
+  };
   richTextHtml.value = campaignDocumentToEditorHtml(next.revision.document);
   queueMicrotask(() => {
     hydrating.value = false;
@@ -434,6 +438,36 @@ onBeforeUnmount(() => {
                     placeholder="The name subscribers will see"
                   />
                 </label>
+                <fieldset class="campaign-logo-settings field--wide">
+                  <legend>Email header image</legend>
+                  <div class="campaign-logo-settings__fields">
+                    <label class="field">
+                      <span>Image URL</span>
+                      <input
+                        v-model="brand.logoUrl"
+                        type="url"
+                        placeholder="Leave blank for no header image"
+                      />
+                    </label>
+                    <label v-if="brand.logoUrl" class="field">
+                      <span>Alignment</span>
+                      <select v-model="brand.logoAlignment">
+                        <option value="left">Left</option>
+                        <option value="center">Center</option>
+                      </select>
+                    </label>
+                  </div>
+                  <Button
+                    v-if="brand.logoUrl"
+                    color="ghost"
+                    shape="soft"
+                    size="small"
+                    type="button"
+                    @click="brand.logoUrl = null"
+                  >
+                    Remove image
+                  </Button>
+                </fieldset>
                 <label class="field field--wide"><span>Subject</span><input v-model="subject" maxlength="200" placeholder="A useful update" /></label>
                 <label class="field field--wide"><span>Preview text</span><input v-model="previewText" maxlength="240" placeholder="A short line shown beside the subject" /></label>
                 <label class="field field--wide">
@@ -492,7 +526,7 @@ onBeforeUnmount(() => {
               <div v-if="review && !review.transport.ready" class="delivery-notice">
                 <div>
                   <strong>Delivery is not active</strong>
-                  <p>You can keep this draft. Activate or configure delivery from the Campaigns page before sending.</p>
+                  <p>{{ review.transport.instructions[0] || "You can keep this draft. Activate or configure delivery from the Campaigns page before sending." }}</p>
                 </div>
                 <Button color="outline" shape="soft" size="small" to="/email/campaigns">Manage delivery</Button>
               </div>
@@ -513,7 +547,14 @@ onBeforeUnmount(() => {
 
               <div class="test-send">
                 <div><strong>Send a test</strong><p>Send a test to {{ ownerEmail }}.</p></div>
-                <Button color="outline" shape="soft" size="small" :disabled="testing || !review?.transport.ready" @click="sendTest">{{ testing ? "Sending…" : "Send test" }}</Button>
+                <Button
+                  color="outline"
+                  shape="soft"
+                  size="small"
+                  :disabled="testing || !review?.transport.ready"
+                  :title="!review?.transport.ready ? review?.transport.instructions[0] : undefined"
+                  @click="sendTest"
+                >{{ testing ? "Sending…" : "Send test" }}</Button>
               </div>
               <p v-if="testMessage" class="test-message" role="status">{{ testMessage }}</p>
 
@@ -581,10 +622,13 @@ onBeforeUnmount(() => {
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 22px; }
 .field--wide { grid-column: 1 / -1; }
 .field { display: grid; gap: 6px; min-width: 0; }
-.field > span, .section-label > span, .send-choice legend { font-size: .8rem; font-weight: 750; }
+.field > span, .section-label > span, .send-choice legend, .campaign-logo-settings legend { font-size: .8rem; font-weight: 750; }
 .field small, .section-label small { color: var(--ui-text-muted, var(--color-text-muted)); font-size: .74rem; }
 .field input, .field select { width: 100%; min-height: 42px; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: 9px; background: var(--ui-surface, var(--color-bg)); color: var(--ui-text, var(--color-text)); font: inherit; }
 .field input:focus, .field select:focus { outline: 2px solid var(--ui-primary, var(--ui-accent)); outline-offset: 1px; }
+.campaign-logo-settings { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 14px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 10px); }
+.campaign-logo-settings__fields { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 10px; }
+.campaign-logo-settings :deep(.me3-btn) { justify-self: start; }
 .section-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
 .wizard-actions { display: flex; justify-content: space-between; gap: 12px; padding-top: 40px; }
 .send-review { display: grid; width: min(100%, 720px); gap: 28px; margin: 0 auto; }
@@ -623,6 +667,7 @@ details ul { margin-bottom: 0; color: var(--ui-text-muted, var(--color-text-mute
   .progress-step-dot { width: 16px; height: 16px; }
   .progress-step.is-current .progress-step-dot { width: 20px; height: 20px; }
   .field-grid { grid-template-columns: 1fr; }
+  .campaign-logo-settings__fields { grid-template-columns: 1fr; }
   .wizard-actions { flex-direction: column-reverse; }
   .wizard-actions :deep(.me3-btn) { width: 100%; }
   .audience-count { align-items: flex-start; }

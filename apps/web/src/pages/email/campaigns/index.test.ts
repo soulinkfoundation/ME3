@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiGet = vi.fn();
 const apiPost = vi.fn();
+const apiDelete = vi.fn();
 const routerPush = vi.fn();
 
 vi.mock("unplugin-vue-router/runtime", () => ({ definePage: vi.fn() }));
@@ -18,6 +19,7 @@ vi.mock("../../../api", () => ({
   api: {
     get: (...args: unknown[]) => apiGet(...args),
     post: (...args: unknown[]) => apiPost(...args),
+    delete: (...args: unknown[]) => apiDelete(...args),
   },
 }));
 
@@ -134,7 +136,7 @@ describe("campaign list", () => {
     wrapper.unmount();
   });
 
-  it("renders compact draft metadata with an accessible edit action", async () => {
+  it("makes the draft card clickable without a separate edit icon", async () => {
     const wrapper = mount(CampaignsPage, { attachTo: document.body });
     await flushPromises();
 
@@ -143,10 +145,32 @@ describe("campaign list", () => {
     expect(card.get(".status-pill").text()).toBe("Draft");
     expect(card.text()).not.toContain("Not sent yet");
     expect(card.text()).not.toContain("Continue");
-    expect(
-      card.get('[aria-label="Edit Test for @mentuition"]').classes(),
-    ).toContain("me3-btn--icon-only");
+    expect(card.get(".campaign-card__link").attributes("aria-label")).toBe(
+      "Open Test for @mentuition",
+    );
+    expect(card.find('[title="Edit campaign"]').exists()).toBe(false);
+    expect(card.text()).toContain("Delete");
 
     wrapper.unmount();
+  });
+
+  it("deletes a campaign after confirmation", async () => {
+    apiDelete.mockResolvedValue({ ok: true, campaignId: "campaign-1" });
+    const confirmation = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirmation);
+    const wrapper = mount(CampaignsPage, { attachTo: document.body });
+    await flushPromises();
+
+    await wrapper.get(".campaign-card__actions button").trigger("click");
+    await flushPromises();
+
+    expect(confirmation).toHaveBeenCalledWith(
+      "Delete “Test” draft? Its content will be permanently removed.",
+    );
+    expect(apiDelete).toHaveBeenCalledWith("/email/campaigns/campaign-1");
+    expect(wrapper.find(".campaign-card").exists()).toBe(false);
+
+    wrapper.unmount();
+    vi.unstubAllGlobals();
   });
 });

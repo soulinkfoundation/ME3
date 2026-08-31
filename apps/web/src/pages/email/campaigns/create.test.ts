@@ -55,7 +55,8 @@ const campaign = {
       brand: {
         name: "Kieran Studio",
         homeUrl: "https://kieran.example.com/",
-        logoUrl: null,
+        logoUrl: "https://kieran.example.com/logo.png",
+        logoAlignment: "center",
         backgroundColor: "#f4f5f4",
         surfaceColor: "#ffffff",
         textColor: "#18201d",
@@ -132,6 +133,15 @@ describe("campaign creation wizard", () => {
     expect(wrapper.find(".compose-preview").exists()).toBe(true);
     expect(wrapper.text()).toContain("Kieran Studio <campaign@example.com>");
     expect(wrapper.find(".brand-card").exists()).toBe(false);
+    expect(wrapper.get<HTMLInputElement>('input[type="url"]').element.value).toBe(
+      "https://kieran.example.com/logo.png",
+    );
+    expect(wrapper.get<HTMLSelectElement>(".campaign-logo-settings select").element.value).toBe(
+      "center",
+    );
+    await wrapper.get(".campaign-logo-settings button").trigger("click");
+    expect(wrapper.get<HTMLInputElement>('input[type="url"]').element.value).toBe("");
+    expect(wrapper.find(".campaign-logo-settings select").exists()).toBe(false);
 
     const senderName = wrapper.find<HTMLInputElement>('input[maxlength="120"]');
     expect(senderName.element.value).toBe("Kieran Studio");

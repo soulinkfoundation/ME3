@@ -4469,13 +4469,13 @@ h1 {
   justify-content: center;
   width: 100%;
   min-width: 0;
-  min-height: 36px;
+  min-height: 44px;
 }
 
 .account-mobile-nav__actions {
   position: absolute;
   top: 50%;
-  right: 0;
+  right: 4px;
   transform: translateY(-50%);
 }
 

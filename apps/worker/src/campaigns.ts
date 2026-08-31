@@ -11,7 +11,7 @@ import {
 } from "./campaign-audience";
 import { renderCampaign } from "./campaign-renderer";
 import { getSiteBranding } from "./site-branding";
-import { getOwnerProfile, getPublicSiteOrigin } from "./sites";
+import { getOwnerProfile, getPublicSiteOrigin, getR2SiteFileKey } from "./sites";
 import type { DbSite, Env } from "./types";
 
 export class CampaignInputError extends Error {
@@ -277,6 +277,77 @@ export async function saveCampaignDraft(
   }
   await runStatements(env.DB, statements);
   return getCampaign(env, ownerId, campaignId);
+}
+
+export async function deleteCampaign(
+  env: Env,
+  ownerId: string,
+  campaignId: string,
+) {
+  const campaign = await env.DB.prepare(
+    `SELECT campaign.id, campaign.status, site.username AS site_username
+     FROM email_campaigns campaign
+     INNER JOIN sites site ON site.id = campaign.site_id
+     WHERE campaign.id = ? AND site.user_id = ?`,
+  )
+    .bind(campaignId, ownerId)
+    .first<{ id: string; status: CampaignStatus; site_username: string }>();
+  if (!campaign) {
+    throw new CampaignInputError("Campaign not found", 404, "campaign_not_found");
+  }
+  if (!["draft", "failed", "cancelled"].includes(campaign.status)) {
+    throw new CampaignInputError(
+      "Only drafts, failed campaigns, and cancelled campaigns can be deleted",
+      409,
+      "campaign_not_deletable",
+    );
+  }
+
+  const inProgress = await env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM email_campaign_recipient_jobs
+     WHERE campaign_id = ? AND status IN (
+       'queued', 'submitting', 'accepted', 'delayed', 'retry_wait',
+       'delivery_unknown', 'unresolved', 'paused'
+     )`,
+  )
+    .bind(campaignId)
+    .first<{ count: number }>();
+  if (Number(inProgress?.count || 0) > 0) {
+    throw new CampaignInputError(
+      "This campaign still has delivery activity and cannot be deleted yet",
+      409,
+      "campaign_delivery_active",
+    );
+  }
+
+  const assets = await env.DB.prepare(
+    "SELECT storage_path FROM email_campaign_assets WHERE campaign_id = ?",
+  )
+    .bind(campaignId)
+    .all<{ storage_path: string }>();
+  const deleted = await env.DB.prepare(
+    "DELETE FROM email_campaigns WHERE id = ?",
+  )
+    .bind(campaignId)
+    .run();
+  if (Number(deleted.meta.changes || 0) === 0) {
+    throw new CampaignInputError("Campaign not found", 404, "campaign_not_found");
+  }
+
+  if (env.SITE_ASSETS && assets.results?.length) {
+    await Promise.allSettled(
+      assets.results.map((asset) =>
+        env.SITE_ASSETS!.delete(
+          getR2SiteFileKey(
+            { username: campaign.site_username } as DbSite,
+            asset.storage_path,
+          ),
+        ),
+      ),
+    );
+  }
+  return { campaignId };
 }
 
 export async function previewCampaignAudience(

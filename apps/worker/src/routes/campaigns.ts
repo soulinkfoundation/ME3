@@ -17,6 +17,7 @@ import {
 import {
   CampaignInputError,
   createCampaign,
+  deleteCampaign,
   getCampaign,
   listCampaigns,
   previewCampaignAudience,
@@ -149,6 +150,21 @@ export function registerCampaignRoutes(app: AppHono, deps: OwnerRouteDeps) {
         await c.req.json().catch(() => ({})),
       );
       return c.json({ campaign });
+    } catch (error) {
+      return campaignError(c, error);
+    }
+  });
+
+  app.delete("/api/email/campaigns/:campaignId", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const pluginError = await requireCampaignPlugin(c);
+    if (pluginError) return pluginError;
+    try {
+      return c.json({
+        ok: true,
+        ...(await deleteCampaign(c.env, ownerId, c.req.param("campaignId"))),
+      });
     } catch (error) {
       return campaignError(c, error);
     }

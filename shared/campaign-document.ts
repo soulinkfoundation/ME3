@@ -13,6 +13,7 @@ export type CampaignBrand = {
   name: string;
   homeUrl: string;
   logoUrl: string | null;
+  logoAlignment: "left" | "center";
   backgroundColor: string;
   surfaceColor: string;
   textColor: string;
@@ -98,6 +99,7 @@ export function createEmptyCampaignDocument(brand: Partial<CampaignBrand> = {}):
       name: normalizeText(brand.name, 120) || "ME3",
       homeUrl: normalizeHttpUrl(brand.homeUrl) || "https://me3.app/",
       logoUrl: normalizeHttpUrl(brand.logoUrl),
+      logoAlignment: brand.logoAlignment === "left" ? "left" : "center",
       backgroundColor: normalizeColor(brand.backgroundColor, "#f4f5f4"),
       surfaceColor: normalizeColor(brand.surfaceColor, "#ffffff"),
       textColor: normalizeColor(brand.textColor, "#18201d"),
@@ -119,6 +121,7 @@ export function parseCampaignDocument(input: unknown): CampaignDocumentV1 {
     name: stringValue(brandInput.name),
     homeUrl: stringValue(brandInput.homeUrl),
     logoUrl: stringValue(brandInput.logoUrl),
+    logoAlignment: brandInput.logoAlignment === "left" ? "left" : "center",
     backgroundColor: stringValue(brandInput.backgroundColor),
     surfaceColor: stringValue(brandInput.surfaceColor),
     textColor: stringValue(brandInput.textColor),
