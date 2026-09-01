@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onBeforeUnmount, provide, nextTick } from "vue";
+import { computed, ref, watch, onBeforeUnmount, provide, nextTick } from "vue";
 import type { Component } from "vue";
 import {
   useEditor,
@@ -38,7 +38,7 @@ const props = withDefaults(
     modelValue: string;
     placeholder?: string;
     /** Tailors the shared editor to a full site, narrow workspace, or email campaign. */
-    variant?: "default" | "workspace" | "campaign";
+    variant?: "default" | "workspace" | "campaign" | "section";
     /** Optional title shown below the toolbar (e.g. journal entry title). */
     showTitleField?: boolean;
     title?: string;
@@ -74,6 +74,8 @@ const emit = defineEmits<{
   ): void;
   (e: "imageRemoved", imageId: string): void;
 }>();
+
+const isSectionVariant = computed(() => props.variant === "section");
 
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const allowedImageTypes = new Set([
@@ -801,7 +803,14 @@ const editor = useEditor({
   content: props.modelValue,
   extensions: [
     StarterKit.configure({
-      heading: { levels: props.variant === "campaign" ? [1, 2] : [1, 2, 3] },
+      heading: {
+        levels:
+          props.variant === "campaign"
+            ? [1, 2]
+            : props.variant === "section"
+              ? [2, 3]
+              : [1, 2, 3],
+      },
       bulletList: {},
       orderedList: props.variant === "campaign" ? false : {},
       blockquote: props.variant === "campaign" ? false : {},
@@ -1520,7 +1529,7 @@ defineExpose({
         <span class="toolbar-underline">U</span>
       </button>
       <button
-        v-if="variant !== 'campaign'"
+        v-if="variant !== 'campaign' && !isSectionVariant"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('strike') }"
@@ -1530,7 +1539,7 @@ defineExpose({
         <s>S</s>
       </button>
       <button
-        v-if="variant !== 'campaign'"
+        v-if="variant !== 'campaign' && !isSectionVariant"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('code') }"
@@ -1541,6 +1550,7 @@ defineExpose({
       </button>
       <span class="toolbar-divider"></span>
       <button
+        v-if="!isSectionVariant"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('heading', { level: 1 }) }"
@@ -1559,7 +1569,7 @@ defineExpose({
         H2
       </button>
       <button
-        v-if="variant !== 'campaign'"
+        v-if="variant !== 'campaign' && !isSectionVariant"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('heading', { level: 3 }) }"
@@ -1579,7 +1589,7 @@ defineExpose({
         •
       </button>
       <button
-        v-if="variant !== 'campaign'"
+        v-if="variant !== 'campaign' && !isSectionVariant"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('orderedList') }"
@@ -1589,7 +1599,7 @@ defineExpose({
         1.
       </button>
       <button
-        v-if="variant !== 'campaign'"
+        v-if="variant !== 'campaign' && !isSectionVariant"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('taskList') }"
@@ -1599,9 +1609,9 @@ defineExpose({
       >
         <UiIcon name="CircleCheckBig" :size="16" aria-hidden="true" />
       </button>
-      <span v-if="variant !== 'campaign'" class="toolbar-divider"></span>
+      <span v-if="variant !== 'campaign' && !isSectionVariant" class="toolbar-divider"></span>
       <button
-        v-if="variant !== 'campaign'"
+        v-if="variant !== 'campaign' && !isSectionVariant"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('blockquote') }"
@@ -1612,6 +1622,7 @@ defineExpose({
       </button>
       <span class="toolbar-divider"></span>
       <button
+        v-if="!isSectionVariant"
         type="button"
         class="toolbar-btn"
         @click="editor?.chain().focus().setHorizontalRule().run()"
@@ -1629,7 +1640,7 @@ defineExpose({
         <UiIcon name="Link" :size="16" aria-hidden="true" />
       </button>
       <button
-        v-if="variant !== 'campaign'"
+        v-if="variant !== 'campaign' && !isSectionVariant"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('youtubeEmbed') }"
@@ -1640,6 +1651,7 @@ defineExpose({
         <UiIcon name="Play" :size="16" aria-hidden="true" />
       </button>
       <button
+        v-if="!isSectionVariant"
         type="button"
         class="toolbar-btn"
         :disabled="isProcessingImage"
@@ -1650,7 +1662,7 @@ defineExpose({
         <UiIcon v-else name="Image" :size="16" aria-hidden="true" />
       </button>
       <button
-        v-if="variant !== 'campaign'"
+        v-if="variant !== 'campaign' && !isSectionVariant"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('gallery') }"
@@ -1693,9 +1705,9 @@ defineExpose({
           <UiIcon name="LayoutGrid" :size="16" aria-hidden="true" />
         </button>
       </template>
-      <span v-if="variant !== 'workspace'" class="toolbar-divider"></span>
+      <span v-if="variant !== 'workspace' && !isSectionVariant" class="toolbar-divider"></span>
       <button
-        v-if="variant !== 'workspace'"
+        v-if="variant !== 'workspace' && !isSectionVariant"
         type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('ctaButtonBlock') }"

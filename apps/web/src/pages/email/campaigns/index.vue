@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -12,6 +13,8 @@ import Button from "../../../components/Button.vue";
 import PageLoading from "../../../components/PageLoading.vue";
 import UiIcon from "../../../components/UiIcon.vue";
 import WorkspaceTabs from "../../../components/WorkspaceTabs.vue";
+import { useAppToast } from "../../../composables/useAppToast";
+import { useMailboxCacheStore } from "../../../stores/mailbox";
 import type { UiIconName } from "../../../utils/icons";
 import type { PluginRecord, PluginsResponse } from "../../../utils/plugins";
 
@@ -51,9 +54,9 @@ type TransportStatus = {
 
 const loading = ref(true);
 const refreshing = ref(false);
-const error = ref("");
-const actionError = ref("");
+const loadFailed = ref(false);
 const campaigns = ref<CampaignSummary[]>([]);
+const campaignSearchQuery = ref("");
 const transport = ref<TransportStatus | null>(null);
 const campaignPlugin = ref<PluginRecord | null>(null);
 const activatingPlugin = ref(false);
@@ -64,26 +67,52 @@ const cancellingId = ref<string | null>(null);
 const deletingId = ref<string | null>(null);
 const route = useRoute();
 const router = useRouter();
+const mailbox = useMailboxCacheStore();
+const { folderCounts } = storeToRefs(mailbox);
+const { toastFromUnknown } = useAppToast();
 let refreshTimer: number | null = null;
 let billingRefreshAttempts = 0;
 
-const campaignMailboxTabs: Array<{
+const campaignMailboxTabs = computed<Array<{
   id: string;
   label: string;
   icon: UiIconName;
-}> = [
+  count?: number | null;
+}>>(() => [
   { id: "campaigns", label: "Campaigns", icon: "Send" },
-  { id: "inbox", label: "Inbox", icon: "Inbox" },
-  { id: "drafts", label: "Drafts", icon: "FileText" },
+  {
+    id: "inbox",
+    label: "Inbox",
+    icon: "Inbox",
+    count: folderCounts.value.inbox || null,
+  },
+  {
+    id: "drafts",
+    label: "Drafts",
+    icon: "FileText",
+    count: folderCounts.value.drafts || null,
+  },
   { id: "sent", label: "Sent", icon: "Send" },
   { id: "archive", label: "Archive", icon: "Archive" },
   { id: "trash", label: "Trash", icon: "Trash2" },
   { id: "contacts", label: "Contacts", icon: "UsersRound" },
-];
+]);
 
 const hasActiveCampaigns = computed(() =>
   campaigns.value.some((campaign) => ["scheduled", "sending"].includes(campaign.status)),
 );
+const filteredCampaigns = computed(() => {
+  const query = campaignSearchQuery.value.trim().toLowerCase();
+  if (!query) return campaigns.value;
+  return campaigns.value.filter((campaign) =>
+    [
+      campaignTitle(campaign),
+      campaign.siteUsername,
+      statusLabel(campaign.status),
+      campaign.failureReason || "",
+    ].some((value) => value.toLowerCase().includes(query)),
+  );
+});
 const pluginEnabled = computed(() => Boolean(campaignPlugin.value?.enabled));
 const canCreateCampaign = computed(() => pluginEnabled.value);
 const billingReturn = computed(() =>
@@ -104,7 +133,7 @@ function switchCampaignMailboxTab(tabId: string) {
 
 async function loadCampaignAccess() {
   loading.value = true;
-  error.value = "";
+  loadFailed.value = false;
   try {
     const response = await api.get<PluginsResponse>("/plugins");
     campaignPlugin.value = response.plugins.find(
@@ -115,7 +144,8 @@ async function loadCampaignAccess() {
     }
     if (campaignPlugin.value.enabled) await loadCampaigns();
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Unable to load campaigns.";
+    loadFailed.value = true;
+    toastFromUnknown(caught, "Unable to load campaigns.");
   } finally {
     loading.value = false;
   }
@@ -124,7 +154,6 @@ async function loadCampaignAccess() {
 async function loadCampaigns(silent = false) {
   if (silent) refreshing.value = true;
   else loading.value = true;
-  error.value = "";
   try {
     const [campaignResponse, transportResponse] = await Promise.all([
       api.get<{ campaigns: CampaignSummary[] }>("/email/campaigns"),
@@ -134,7 +163,8 @@ async function loadCampaigns(silent = false) {
     transport.value = transportResponse.transport;
     scheduleRefresh();
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Unable to load campaigns.";
+    if (!silent) loadFailed.value = true;
+    toastFromUnknown(caught, "Unable to load campaigns.");
   } finally {
     loading.value = false;
     refreshing.value = false;
@@ -162,7 +192,6 @@ function scheduleRefresh() {
 async function activateCampaignPlugin() {
   if (!campaignPlugin.value || activatingPlugin.value) return;
   activatingPlugin.value = true;
-  actionError.value = "";
   try {
     const response = await api.post<{ plugin: PluginRecord }>(
       `/plugins/${encodeURIComponent(EMAIL_CAMPAIGNS_PLUGIN_ID)}/activate`,
@@ -170,7 +199,7 @@ async function activateCampaignPlugin() {
     campaignPlugin.value = response.plugin;
     await loadCampaigns();
   } catch (caught) {
-    actionError.value = caught instanceof Error ? caught.message : "Unable to activate Email Campaigns.";
+    toastFromUnknown(caught, "Unable to activate Email Campaigns.");
   } finally {
     activatingPlugin.value = false;
   }
@@ -179,14 +208,13 @@ async function activateCampaignPlugin() {
 async function startCheckout(plan: CampaignAddOnPlanKey) {
   if (checkoutPlan.value) return;
   checkoutPlan.value = plan;
-  actionError.value = "";
   try {
     const response = await api.post<{ url: string }>("/email/campaigns/add-on/checkout", {
       plan,
     });
     window.location.assign(response.url);
   } catch (caught) {
-    actionError.value = caught instanceof Error ? caught.message : "Unable to open checkout.";
+    toastFromUnknown(caught, "Unable to open checkout.");
     checkoutPlan.value = null;
   }
 }
@@ -194,12 +222,11 @@ async function startCheckout(plan: CampaignAddOnPlanKey) {
 async function openBillingPortal() {
   if (openingBilling.value) return;
   openingBilling.value = true;
-  actionError.value = "";
   try {
     const response = await api.post<{ url: string }>("/email/campaigns/add-on/portal");
     window.location.assign(response.url);
   } catch (caught) {
-    actionError.value = caught instanceof Error ? caught.message : "Unable to open billing.";
+    toastFromUnknown(caught, "Unable to open billing.");
     openingBilling.value = false;
   }
 }
@@ -207,14 +234,13 @@ async function openBillingPortal() {
 async function setupSender() {
   if (settingUpSender.value) return;
   settingUpSender.value = true;
-  actionError.value = "";
   try {
     const response = await api.post<{ transport: TransportStatus }>(
       "/email/campaigns/sender/setup",
     );
     transport.value = response.transport;
   } catch (caught) {
-    actionError.value = caught instanceof Error ? caught.message : "Unable to set up campaign sending.";
+    toastFromUnknown(caught, "Unable to set up campaign sending.");
   } finally {
     settingUpSender.value = false;
   }
@@ -231,7 +257,7 @@ async function cancelCampaign(campaign: CampaignSummary) {
     await api.post(`/email/campaigns/${encodeURIComponent(campaign.id)}/cancel`);
     await loadCampaigns(true);
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Unable to cancel campaign.";
+    toastFromUnknown(caught, "Unable to cancel campaign.");
   } finally {
     cancellingId.value = null;
   }
@@ -249,12 +275,11 @@ async function deleteCampaign(campaign: CampaignSummary) {
     : `Delete “${subject}” and its delivery history? This cannot be undone.`;
   if (!window.confirm(prompt)) return;
   deletingId.value = campaign.id;
-  actionError.value = "";
   try {
     await api.delete(`/email/campaigns/${encodeURIComponent(campaign.id)}`);
     campaigns.value = campaigns.value.filter((item) => item.id !== campaign.id);
   } catch (caught) {
-    actionError.value = caught instanceof Error ? caught.message : "Unable to delete campaign.";
+    toastFromUnknown(caught, "Unable to delete campaign.");
   } finally {
     deletingId.value = null;
   }
@@ -308,7 +333,9 @@ function formatResetDate(value: string) {
   }).format(new Date(value));
 }
 
-onMounted(() => void loadCampaignAccess());
+onMounted(() => {
+  void Promise.all([loadCampaignAccess(), mailbox.loadFolderCounts()]);
+});
 onBeforeUnmount(() => {
   if (refreshTimer !== null) window.clearTimeout(refreshTimer);
 });
@@ -317,7 +344,28 @@ onBeforeUnmount(() => {
 <template>
   <main class="agent-page campaigns-page">
     <Teleport to="#app-side-nav-mobile-page-controls" defer>
-      <div class="campaigns-mobile-nav">
+      <form class="campaigns-mobile-nav" role="search" @submit.prevent>
+        <label class="campaigns-mobile-nav__label" for="campaign-search-input-top">
+          Search campaigns
+        </label>
+        <input
+          id="campaign-search-input-top"
+          v-model="campaignSearchQuery"
+          class="campaigns-mobile-nav__input"
+          type="search"
+          placeholder="Search campaigns"
+        />
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          type="submit"
+          aria-label="Search campaigns"
+          title="Search"
+        >
+          <UiIcon name="Search" :size="18" aria-hidden="true" />
+        </Button>
         <Button
           v-if="canCreateCampaign"
           color="ghost"
@@ -341,7 +389,7 @@ onBeforeUnmount(() => {
         >
           <UiIcon name="X" :size="18" aria-hidden="true" />
         </Button>
-      </div>
+      </form>
     </Teleport>
 
     <div class="campaigns-mail-tabs">
@@ -357,7 +405,12 @@ onBeforeUnmount(() => {
     <div class="campaigns-shell">
 
       <PageLoading v-if="loading" label="Loading campaigns…" />
-      <p v-else-if="error" class="notice notice--error" role="alert">{{ error }}</p>
+      <section v-else-if="loadFailed" class="empty-campaigns" aria-labelledby="campaign-load-failed-title">
+        <span aria-hidden="true"><UiIcon name="Info" :size="28" /></span>
+        <h2 id="campaign-load-failed-title">Campaigns could not be loaded</h2>
+        <p>Check your connection and try again.</p>
+        <Button color="primary" shape="soft" @click="loadCampaignAccess">Try again</Button>
+      </section>
       <section v-else-if="!pluginEnabled" class="campaign-setup" aria-labelledby="campaign-plugin-title">
         <span class="campaign-setup__icon" aria-hidden="true"><UiIcon name="Send" :size="26" /></span>
         <div>
@@ -365,7 +418,6 @@ onBeforeUnmount(() => {
           <h1 id="campaign-plugin-title">Email Campaigns</h1>
           <p>Create newsletters from your ME3 lists, review consent-aware audiences, and keep delivery history with your site.</p>
           <p>Activating the plugin is free. Delivery is configured separately.</p>
-          <p v-if="actionError" class="inline-error" role="alert">{{ actionError }}</p>
           <Button
             color="primary"
             shape="soft"
@@ -378,7 +430,6 @@ onBeforeUnmount(() => {
       </section>
 
       <template v-else>
-        <p v-if="actionError" class="notice notice--error" role="alert">{{ actionError }}</p>
         <p v-if="billingReturn === 'cancelled'" class="notice" role="status">
           No changes were made. You can choose a delivery allowance whenever you are ready.
         </p>
@@ -396,9 +447,8 @@ onBeforeUnmount(() => {
           aria-labelledby="campaign-add-on-title"
         >
           <div class="campaign-add-on__intro">
-            <small>Optional managed delivery</small>
             <h1 id="campaign-add-on-title">Choose your monthly email capacity</h1>
-            <p>Drafting and subscriber management stay available without this add-on. Activate it when you are ready to send through ME3.</p>
+            <p>Choose a paid plan to activate managed email campaign delivery.</p>
           </div>
           <div class="capacity-options" aria-label="Campaign Sending plans">
             <article v-for="plan in transport.addOn.plans" :key="plan.key" class="capacity-option">
@@ -409,7 +459,7 @@ onBeforeUnmount(() => {
                 color="primary"
                 shape="soft"
                 size="small"
-                :disabled="checkoutPlan !== null || !plan.checkoutAvailable || !transport.addOn.available"
+                :disabled="checkoutPlan === plan.key || !plan.checkoutAvailable || !transport.addOn.available"
                 @click="startCheckout(plan.key)"
               >
                 {{ checkoutPlan === plan.key ? "Opening checkout…" : plan.checkoutAvailable ? "Choose plan" : "Coming soon" }}
@@ -476,9 +526,9 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section v-if="campaigns.length" class="campaign-list" aria-label="Email campaigns">
+        <section v-if="filteredCampaigns.length" class="campaign-list" aria-label="Email campaigns">
           <article
-            v-for="campaign in campaigns"
+            v-for="campaign in filteredCampaigns"
             :key="campaign.id"
             class="campaign-card"
             :class="{ 'campaign-card--clickable': campaign.status === 'draft' }"
@@ -508,17 +558,27 @@ onBeforeUnmount(() => {
                 class="campaign-card__delete"
                 color="ghost"
                 shape="soft"
-                size="compact"
+                size="large"
+                icon-only
                 :disabled="deletingId === campaign.id"
+                :aria-label="`${deletingId === campaign.id ? 'Deleting' : 'Delete'} ${campaignTitle(campaign)}`"
+                :title="deletingId === campaign.id ? 'Deleting campaign' : 'Delete campaign'"
                 @click="deleteCampaign(campaign)"
               >
-                {{ deletingId === campaign.id ? "Deleting…" : "Delete" }}
+                <UiIcon name="Trash2" :size="18" aria-hidden="true" />
               </Button>
               <Button v-if="['scheduled', 'sending'].includes(campaign.status)" color="ghost" shape="soft" size="compact" :disabled="cancellingId === campaign.id" @click="cancelCampaign(campaign)">
                 {{ cancellingId === campaign.id ? "Cancelling…" : "Cancel" }}
               </Button>
             </div>
           </article>
+        </section>
+
+        <section v-else-if="campaigns.length" class="empty-campaigns">
+          <span aria-hidden="true"><UiIcon name="Search" :size="28" /></span>
+          <h2>No matching campaigns</h2>
+          <p>Try another subject, site, status, or failure reason.</p>
+          <Button color="outline" shape="soft" @click="campaignSearchQuery = ''">Clear search</Button>
         </section>
 
         <section v-else class="empty-campaigns">
@@ -534,29 +594,30 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .campaigns-page { display: flex; flex-direction: column; min-height: 100%; background: var(--ui-bg, var(--color-bg)); color: var(--ui-text, var(--color-text)); }
-.campaigns-mobile-nav { display: flex; align-items: center; justify-content: flex-end; gap: 10px; width: 100%; }
+.campaigns-mobile-nav { display: grid; grid-template-columns: minmax(0, 1fr) 36px auto 36px; align-items: center; gap: 8px; width: 100%; margin: 0; min-width: 0; }
+.campaigns-mobile-nav__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+.campaigns-mobile-nav__input { min-width: 0; height: 36px; padding: 0 12px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-sm, 6px); background: var(--ui-bg, var(--color-bg)); color: var(--ui-text, var(--color-text)); font: inherit; }
+.campaigns-mobile-nav__input:focus { outline: 2px solid var(--ui-focus, var(--ui-text, var(--color-text))); outline-offset: 1px; }
 .campaigns-mobile-nav :deep(.me3-btn) { flex: 0 0 36px; width: 36px; height: 36px; }
 .campaigns-mail-tabs { display: flex; justify-content: flex-start; width: 100%; padding: 4px 8px 0; border-bottom: 1px solid var(--ui-border, var(--color-border)); background: var(--ui-bg, var(--color-bg)); overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scroll-padding-inline: 8px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .campaigns-mail-tabs::-webkit-scrollbar { display: none; }
 .campaigns-shell { width: min(100%, 900px); margin: 0 auto; padding: 24px 24px 72px; box-sizing: border-box; }
-.campaign-card__actions { position: absolute; right: 12px; bottom: 10px; z-index: 2; display: flex; align-items: center; gap: 8px; }
+.campaign-card__actions { position: absolute; right: 8px; bottom: 6px; z-index: 2; display: flex; align-items: center; gap: 8px; }
 .campaign-card__actions :deep(.campaign-card__delete) { color: var(--ui-danger, #b42318); }
 .campaign-card__actions :deep(.campaign-card__delete:hover:not(:disabled)) { background: var(--ui-danger-soft, color-mix(in srgb, var(--ui-danger, #b42318) 10%, transparent)); color: var(--ui-danger, #b42318); }
 .notice { display: flex; gap: 12px; margin-bottom: 20px; padding: 15px 16px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface-muted, var(--color-bg-subtle)); }
 .notice strong, .notice p { display: block; margin: 0; }
 .notice p { margin-top: 3px; color: var(--ui-text-muted, var(--color-text-muted)); line-height: 1.45; }
-.notice--error { color: var(--ui-danger, #b42318); }
 .campaign-setup { display: grid; grid-template-columns: auto minmax(0, 1fr); max-width: 620px; gap: 18px; margin: 64px auto 0; padding: 24px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-lg, 16px); background: var(--ui-surface, var(--color-bg)); }
 .campaign-setup__icon { display: grid; width: 52px; height: 52px; place-items: center; border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface-muted, var(--color-bg-subtle)); color: var(--ui-accent, var(--color-accent)); }
-.campaign-setup small, .campaign-add-on__intro small, .delivery-summary small { color: var(--ui-text-muted, var(--color-text-muted)); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.campaign-setup small, .delivery-summary small { color: var(--ui-text-muted, var(--color-text-muted)); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .campaign-setup h1, .campaign-setup p { margin: 0; }
 .campaign-setup h1 { margin-top: 3px; font-size: 1.4rem; }
 .campaign-setup p { margin-top: 8px; color: var(--ui-text-muted, var(--color-text-muted)); line-height: 1.5; }
 .campaign-setup :deep(.me3-btn) { margin-top: 18px; }
-.campaign-setup .inline-error { color: var(--ui-danger, #b42318); }
 .campaign-add-on { margin-bottom: 24px; padding: 22px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-lg, 16px); background: var(--ui-surface, var(--color-bg)); }
 .campaign-add-on__intro h1, .campaign-add-on__intro p { margin: 0; }
-.campaign-add-on__intro h1 { margin-top: 4px; font-size: 1.3rem; }
+.campaign-add-on__intro h1 { font-size: 1.3rem; }
 .campaign-add-on__intro p { max-width: 680px; margin-top: 6px; color: var(--ui-text-muted, var(--color-text-muted)); line-height: 1.45; }
 .capacity-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
 .capacity-option { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; padding: 16px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface-muted, var(--color-bg-subtle)); }
@@ -571,7 +632,7 @@ onBeforeUnmount(() => {
 .delivery-summary p { margin-top: 3px; color: var(--ui-text-muted, var(--color-text-muted)); font-size: .82rem; }
 .delivery-summary__actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .campaign-list { display: grid; gap: 8px; }
-.campaign-card { position: relative; min-height: 76px; padding: 14px 92px 12px 16px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface, var(--color-bg)); box-sizing: border-box; transition: border-color .15s ease, background .15s ease; }
+.campaign-card { position: relative; min-height: 100px; padding: 14px 104px 12px 16px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface, var(--color-bg)); box-sizing: border-box; transition: border-color .15s ease, background .15s ease; }
 .campaign-card--clickable:hover { border-color: var(--ui-border-strong, var(--ui-accent, var(--color-accent))); background: var(--ui-surface-muted, var(--color-bg-subtle)); }
 .campaign-card__link { position: absolute; inset: 0; z-index: 1; border-radius: inherit; }
 .campaign-card__link:focus-visible { outline: 2px solid var(--ui-focus, var(--ui-accent)); outline-offset: 2px; }

@@ -21,9 +21,6 @@ const props = withDefaults(
 );
 
 const previewWidth = ref<"desktop" | "mobile">("desktop");
-const senderInitial = computed(() =>
-  (props.senderName || props.fromAddress || "M").trim().charAt(0).toUpperCase(),
-);
 const fromLine = computed(() => {
   const address = props.fromAddress || "Sender unavailable";
   return props.senderName ? `${props.senderName} <${address}>` : address;
@@ -54,7 +51,6 @@ const fromLine = computed(() => {
     <div class="email-frame-shell">
       <div class="email-frame" :class="`email-frame--${previewWidth}`">
         <header class="email-frame__header">
-          <div class="email-frame__avatar" aria-hidden="true">{{ senderInitial }}</div>
           <dl class="email-frame__details">
             <div>
               <dt>Subject</dt>
@@ -150,19 +146,6 @@ const fromLine = computed(() => {
   padding: 16px;
   border-bottom: 1px solid var(--ui-border, var(--color-border));
   background: var(--ui-surface, var(--color-bg));
-}
-
-.email-frame__avatar {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--ui-surface-muted, var(--color-border));
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 14px;
-  font-weight: 800;
 }
 
 .email-frame__details {

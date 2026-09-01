@@ -328,7 +328,7 @@ function campaignError(
   c: {
     json(
       body: { error: string; code: string },
-      status: 400 | 404 | 409 | 500,
+      status: 400 | 404 | 409 | 500 | 503,
     ): Response;
   },
   error: unknown,

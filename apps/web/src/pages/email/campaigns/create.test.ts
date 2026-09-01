@@ -24,7 +24,10 @@ vi.mock("../../../stores/auth", () => ({
 }));
 vi.mock("../../../stores/sites", () => ({
   useSitesStore: () => ({
-    sites: [{ id: "site-1", username: "kieran" }],
+    sites: [
+      { id: "site-1", username: "kieran" },
+      { id: "site-2", username: "mentuition" },
+    ],
     ensureSites: vi.fn(),
   }),
 }));
@@ -50,6 +53,7 @@ const campaign = {
     subject: "August update",
     previewText: "A short preview",
     replyToAddress: "hello@example.com",
+    rendererVersion: "me3.email-renderer.v1",
     document: {
       version: "me3.campaign-document.v1",
       brand: {
@@ -133,33 +137,29 @@ describe("campaign creation wizard", () => {
     expect(wrapper.find(".compose-preview").exists()).toBe(true);
     expect(wrapper.text()).toContain("Kieran Studio <campaign@example.com>");
     expect(wrapper.find(".brand-card").exists()).toBe(false);
-    expect(wrapper.get<HTMLInputElement>('input[type="url"]').element.value).toBe(
-      "https://kieran.example.com/logo.png",
-    );
-    expect(wrapper.get<HTMLSelectElement>(".campaign-logo-settings select").element.value).toBe(
-      "center",
-    );
-    await wrapper.get(".campaign-logo-settings button").trigger("click");
-    expect(wrapper.get<HTMLInputElement>('input[type="url"]').element.value).toBe("");
-    expect(wrapper.find(".campaign-logo-settings select").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Email header image");
+    expect(wrapper.find('.campaign-logo-settings').exists()).toBe(false);
 
     const senderName = wrapper.find<HTMLInputElement>('input[maxlength="120"]');
     expect(senderName.element.value).toBe("Kieran Studio");
     await senderName.setValue("Kieran Butler");
     expect(wrapper.text()).toContain("Kieran Butler <campaign@example.com>");
 
-    const reviewButton = wrapper.findAll("button").find((button) =>
-      button.text().includes("Review audience"),
+    const nextButton = wrapper.findAll("button").find((button) =>
+      button.text().trim() === "Next",
     );
-    expect(reviewButton).toBeDefined();
-    await reviewButton!.trigger("click");
+    expect(nextButton).toBeDefined();
+    await nextButton!.trigger("click");
     await flushPromises();
 
     expect(apiPut).toHaveBeenCalledWith(
       "/email/campaigns/campaign-1",
       expect.objectContaining({
         document: expect.objectContaining({
-          brand: expect.objectContaining({ name: "Kieran Butler" }),
+          brand: expect.objectContaining({
+            name: "Kieran Butler",
+            logoUrl: null,
+          }),
         }),
       }),
     );
@@ -171,6 +171,36 @@ describe("campaign creation wizard", () => {
     expect(
       wrapper.findAll(".send-actions button").map((button) => button.text().trim()),
     ).toEqual(["Send campaign", "Back"]);
+
+    wrapper.unmount();
+  });
+
+  it("lets an existing draft return to step one and change its email list", async () => {
+    const wrapper = mount(CampaignCreatePage, {
+      global: {
+        stubs: {
+          UiIcon: true,
+          RouterLink: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    await wrapper.findAll(".progress-step")[0]!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Choose email list");
+    const list = wrapper.get<HTMLSelectElement>(".start-card select");
+    expect(list.element.value).toBe("site-1");
+    await list.setValue("site-2");
+    await wrapper.get(".start-card button").trigger("click");
+    await flushPromises();
+
+    expect(apiPut).toHaveBeenLastCalledWith(
+      "/email/campaigns/campaign-1",
+      expect.objectContaining({ siteId: "site-2" }),
+    );
+    expect(wrapper.find(".compose-grid").exists()).toBe(true);
 
     wrapper.unmount();
   });

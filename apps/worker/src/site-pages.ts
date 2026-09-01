@@ -123,7 +123,7 @@ export async function migrateLegacyLandingPages(
   targetSite: DbSite,
 ): Promise<DbSitePage[]> {
   const legacy = await env.DB.prepare(
-    `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
+    `SELECT id, user_id, username, site_type, site_role, template_id, profile_site_id, custom_domain,
             custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
      FROM sites WHERE user_id = ? AND site_type = 'landing_page' ORDER BY created_at`,
   )
@@ -222,11 +222,12 @@ export async function publishSitePage(
     throw new SitePageInputError(errors.join(" "), 409);
   }
   const revisionId = crypto.randomUUID();
+  const resourceSite = await getPageResourceSite(env, site);
   const renderedHtml = renderLandingPageHtml(document, site.username, {
     pageId: page.id,
     slug: page.slug,
     campaign: page.slug,
-    actionUsername: site.username,
+    actionUsername: resourceSite.username,
     ...(await getPagePaymentMethods(env, site)),
   });
   await env.DB.prepare(
@@ -397,7 +398,7 @@ export function serializeSitePage(page: DbSitePage) {
   };
 }
 
-async function validatePageResources(
+export async function validatePageResources(
   env: Env,
   site: DbSite,
   page: LandingPageDocumentV3,
@@ -405,11 +406,12 @@ async function validatePageResources(
   if (!page.actions.some((action) => action.kind === "booking" || action.kind === "product")) {
     return [];
   }
+  const resourceSite = await getPageResourceSite(env, site);
   const raw =
-    (await getSiteFileText(env, site.id, "src/me.json")) ||
-    (await getSiteFileText(env, site.id, "public/me.json"));
+    (await getSiteFileText(env, resourceSite.id, "src/me.json")) ||
+    (await getSiteFileText(env, resourceSite.id, "public/me.json"));
   if (!raw) return ["Publish the main site before using booking or product actions."];
-  const profile = parseSiteProfile(raw, site.username);
+  const profile = parseSiteProfile(raw, resourceSite.username);
   const bookingIds = new Map<string, "free" | "stripe" | "manual">();
   const book = profile.intents?.book as
     | {
@@ -480,12 +482,13 @@ function resourcePaymentMethod(pricing?: {
   return pricing.paymentMethod === "manual" ? "manual" : "stripe";
 }
 
-async function getPagePaymentMethods(env: Env, site: DbSite) {
+export async function getPagePaymentMethods(env: Env, site: DbSite) {
+  const resourceSite = await getPageResourceSite(env, site);
   const raw =
-    (await getSiteFileText(env, site.id, "src/me.json")) ||
-    (await getSiteFileText(env, site.id, "public/me.json"));
+    (await getSiteFileText(env, resourceSite.id, "src/me.json")) ||
+    (await getSiteFileText(env, resourceSite.id, "public/me.json"));
   if (!raw) return {};
-  const profile = parseSiteProfile(raw, site.username);
+  const profile = parseSiteProfile(raw, resourceSite.username);
   const bookingPaymentMethods: Record<string, "free" | "stripe" | "manual"> = {};
   const book = profile.intents?.book as
     | {
@@ -509,6 +512,24 @@ async function getPagePaymentMethods(env: Env, site: DbSite) {
     }
   }
   return { bookingPaymentMethods, productPaymentMethods };
+}
+
+export async function getPageResourceSite(
+  env: Env,
+  site: DbSite,
+): Promise<DbSite> {
+  if (site.site_role !== "organization" || !site.profile_site_id) return site;
+  return (
+    (await env.DB.prepare(
+      `SELECT id, user_id, username, site_type, site_role, template_id, profile_site_id,
+              custom_domain, custom_domain_status, custom_domain_cf_id,
+              created_at, updated_at, published_at
+       FROM sites
+       WHERE id = ? AND user_id = ? AND site_role = 'profile'`,
+    )
+      .bind(site.profile_site_id, site.user_id)
+      .first<DbSite>()) || site
+  );
 }
 
 async function copyLegacyAsset(

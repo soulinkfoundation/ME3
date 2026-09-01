@@ -67,6 +67,8 @@ export const RUNTIME_MIGRATIONS = [
   ["0042_email_campaign_assets", "2026-08-26-email-campaign-assets-v1"],
   ["0043_email_campaign_delivery", "2026-08-26-email-campaign-delivery-v1"],
   ["0044_site_branding", "2026-08-27-site-branding-v1"],
+  ["0045_commerce_stripe_provider", "2026-08-31-commerce-stripe-provider-v1"],
+  ["0046_business_site_profile_ownership", "2026-08-31-business-site-profile-ownership-v1"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];

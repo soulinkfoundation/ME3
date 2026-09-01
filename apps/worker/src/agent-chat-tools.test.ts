@@ -184,9 +184,10 @@ describe("Core chat tool contracts", () => {
           purpose: { enum: ["event", "service", "waitlist"] },
           designPackId: {
             enum: [
-              "starter-event-01",
-              "starter-service-01",
-              "starter-waitlist-01",
+            "starter-event-01",
+            "starter-service-01",
+            "starter-waitlist-01",
+            "clinical-editorial-01",
             ],
           },
           imageQuery: { type: "string" },

@@ -10,7 +10,6 @@ import UiIcon from "../components/UiIcon.vue";
 import WorkspaceTabs from "../components/WorkspaceTabs.vue";
 import { API_BASE, api } from "../api";
 import { useAppToast } from "../composables/useAppToast";
-import { useInboxDraftCount } from "../composables/useInboxDraftCount";
 import { useAuthStore } from "../stores/auth";
 import { useContactsStore, type Contact } from "../stores/contacts";
 import {
@@ -255,13 +254,6 @@ const deliveryRetryConfirmId = ref<string | null>(null);
 const deliveryStatuses = ref<Record<string, MailboxDeliveryStatus>>({});
 const total = ref(0);
 const activeTab = ref<Tab>("inbox");
-const folderCounts = ref<Record<EmailTab, number | null>>({
-  inbox: null,
-  drafts: null,
-  sent: null,
-  archive: null,
-  trash: null,
-});
 const mailboxAddress = ref<string | null>(null);
 const expandedId = ref<string | null>(null);
 const mobileThreadOpen = ref(false);
@@ -299,13 +291,10 @@ const composeForm = ref({
 const offset = ref(0);
 const limit = 50;
 const TELEGRAM_PAGE_LIMIT = 50;
-const {
-  setInboxDraftCount,
-} =
-  useInboxDraftCount();
 const { toastFromUnknown, toastSuccess, toast } = useAppToast();
 const auth = useAuthStore();
 const mailboxCache = useMailboxCacheStore();
+const { folderCounts } = storeToRefs(mailboxCache);
 const route = useRoute();
 const router = useRouter();
 /** File-based child routes render here instead of leaving the inbox visible. */
@@ -703,21 +692,10 @@ function draftStatusLabel(message: InboxMessage): string {
   return "Draft";
 }
 
-function buildFolderCountUrl(tab: EmailTab): string {
-  const config = emailTabConfig[tab];
-  const params = new URLSearchParams();
-  params.set("folder", config.folderParam);
-  if (config.statusParam) params.set("status", config.statusParam);
-  params.set("direction", config.directionParam);
-  if (tab === "inbox") {
-    params.set("unread", "1");
-  }
-  params.set("limit", "0");
-  return `/mailbox/messages?${params.toString()}`;
-}
-
 function getFolderCount(tab: EmailTab): number | null {
-  return folderCounts.value[tab];
+  return tab === "inbox" || tab === "drafts"
+    ? folderCounts.value[tab]
+    : null;
 }
 
 function getVisibleFolderCount(tab: EmailTab): number | null {
@@ -727,27 +705,8 @@ function getVisibleFolderCount(tab: EmailTab): number | null {
   return count;
 }
 
-async function loadFolderCounts() {
-  if (!isEmailTab(activeTab.value)) return;
-  const entries = await Promise.all(
-    (["inbox", "drafts"] as EmailTab[]).map(async (tab) => {
-      try {
-        const data = await api.get<MessagesResponse>(buildFolderCountUrl(tab));
-        return [tab, data.total] as const;
-      } catch {
-        return [tab, null] as const;
-      }
-    }),
-  );
-  const next = entries.reduce<Record<EmailTab, number | null>>(
-    (acc, [tab, count]) => {
-      acc[tab] = count;
-      return acc;
-    },
-    { ...folderCounts.value },
-  );
-  folderCounts.value = next;
-  setInboxDraftCount(next.drafts);
+async function loadFolderCounts(force = true) {
+  await mailboxCache.loadFolderCounts(force);
 }
 
 function normalizeEmail(value: string | null): string | null {
@@ -3090,7 +3049,7 @@ onMounted(() => {
   }
   void (async () => {
     await loadMessages();
-    void Promise.all([loadMailboxHealth(), loadFolderCounts()]);
+    void Promise.all([loadMailboxHealth(), loadFolderCounts(false)]);
   })();
 });
 
@@ -3426,6 +3385,7 @@ onBeforeUnmount(() => {
                       :aria-current="selectedMessage?.id === message.id ? 'true' : undefined"
                       @click="selectMessage(message.id)"
                     >
+                      <span v-if="message.unread" class="sr-only">Unread.</span>
                       <div class="conversation-item__content">
                         <div class="conversation-item__meta">
                           <strong>{{ getConversationParticipants(message) }}</strong>
@@ -5266,8 +5226,30 @@ onBeforeUnmount(() => {
   background: var(--color-bg-subtle);
 }
 
+.conversation-item--unread {
+  background: color-mix(
+    in oklab,
+    var(--ui-accent, var(--color-accent)) 8%,
+    var(--ui-surface, var(--color-bg))
+  );
+}
+
+.conversation-item--unread:hover,
+.conversation-item--unread.conversation-item--selected,
+.conversation-item--unread.conversation-item--active {
+  background: color-mix(
+    in oklab,
+    var(--ui-accent, var(--color-accent)) 14%,
+    var(--ui-surface, var(--color-bg))
+  );
+}
+
 .conversation-item--active {
   box-shadow: inset 3px 0 0 var(--color-text);
+}
+
+.conversation-item--unread.conversation-item--active {
+  box-shadow: inset 3px 0 0 var(--ui-accent, var(--color-accent));
 }
 
 .conversation-item--unread .conversation-item__meta strong,

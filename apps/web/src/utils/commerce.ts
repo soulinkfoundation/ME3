@@ -7,6 +7,10 @@ export type CommerceSettingsResponse = {
     keyHint: string | null;
     keyUpdatedAt: string | null;
     mode: "direct" | "managed";
+    preferredProvider: "auto" | "direct" | "managed";
+    directConfigured: boolean;
+    directSource: "environment" | "stored" | "not_configured";
+    managedAvailable: boolean;
     connectionStatus: "not_connected" | "pending" | "restricted" | "active" | "unavailable" | null;
     connected: boolean;
     chargesEnabled: boolean;

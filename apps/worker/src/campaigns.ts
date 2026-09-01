@@ -17,7 +17,7 @@ import type { DbSite, Env } from "./types";
 export class CampaignInputError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 404 | 409 = 400,
+    readonly status: 400 | 404 | 409 | 503 = 400,
     readonly code = "campaign_invalid",
   ) {
     super(message);
@@ -154,7 +154,7 @@ export async function createCampaign(
       custom_domain:
         site.custom_domain_status === "active" ? site.custom_domain : null,
     }) || "https://me3.app/",
-    logoUrl: branding.logoUrl,
+    logoUrl: null,
     accentColor: branding.accentColor,
     backgroundColor: branding.backgroundColor,
     surfaceColor: branding.surfaceColor,
@@ -204,6 +204,7 @@ export async function saveCampaignDraft(
   ownerId: string,
   campaignId: string,
   input: {
+    siteId?: unknown;
     name?: unknown;
     subject?: unknown;
     previewText?: unknown;
@@ -219,6 +220,14 @@ export async function saveCampaignDraft(
       409,
       "campaign_not_editable",
     );
+  }
+
+  const siteId = input.siteId === undefined
+    ? campaign.site_id
+    : normalizeReference(input.siteId);
+  if (!siteId) throw new CampaignInputError("Choose a Site for this campaign");
+  if (siteId !== campaign.site_id && !(await getOwnedSite(env, ownerId, siteId))) {
+    throw new CampaignInputError("Site not found", 404, "site_not_found");
   }
 
   const name = normalizeText(input.name, 160) || campaign.name;
@@ -263,9 +272,9 @@ export async function saveCampaignDraft(
     ),
     env.DB.prepare(
       `UPDATE email_campaigns
-       SET name = ?, current_revision_id = ?, updated_at = ?
+       SET site_id = ?, name = ?, current_revision_id = ?, updated_at = ?
        WHERE id = ?`,
-    ).bind(name, revisionId, now, campaignId),
+    ).bind(siteId, name, revisionId, now, campaignId),
   ];
   for (const assetId of campaignAssetIds(document)) {
     statements.push(

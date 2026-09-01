@@ -196,6 +196,16 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-08-27-site-branding-v1",
     apply: applySiteBrandingMigration,
   },
+  {
+    id: "0045_commerce_stripe_provider",
+    checksum: "2026-08-31-commerce-stripe-provider-v1",
+    apply: applyCommerceStripeProviderMigration,
+  },
+  {
+    id: "0046_business_site_profile_ownership",
+    checksum: "2026-08-31-business-site-profile-ownership-v1",
+    apply: applyBusinessSiteProfileOwnershipMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -355,6 +365,26 @@ async function applyCommerceDefaultCurrencyMigration(db: D1Database): Promise<vo
         .run();
     } catch (error) {
       if (!(await columnExists(db, "commerce_settings", "default_currency"))) throw error;
+    }
+  }
+}
+
+async function applyCommerceStripeProviderMigration(db: D1Database): Promise<void> {
+  if (!(await tableExists(db, "commerce_settings"))) {
+    throw new Error("Cannot apply 0045_commerce_stripe_provider: commerce_settings is missing");
+  }
+
+  if (!(await columnExists(db, "commerce_settings", "preferred_stripe_provider"))) {
+    try {
+      await db.prepare(
+        `ALTER TABLE commerce_settings
+         ADD COLUMN preferred_stripe_provider TEXT NOT NULL DEFAULT 'auto'
+           CHECK (preferred_stripe_provider IN ('auto', 'direct', 'managed'))`,
+      ).run();
+    } catch (error) {
+      if (!(await columnExists(db, "commerce_settings", "preferred_stripe_provider"))) {
+        throw error;
+      }
     }
   }
 }
@@ -2419,6 +2449,76 @@ async function applySiteRolesMigration(db: D1Database): Promise<void> {
   } else {
     for (const statement of statements) await statement.run();
   }
+}
+
+async function applyBusinessSiteProfileOwnershipMigration(
+  db: D1Database,
+): Promise<void> {
+  if (!(await tableExists(db, "sites"))) {
+    throw new Error(
+      "Cannot apply 0046_business_site_profile_ownership: sites is missing",
+    );
+  }
+  await addColumnIfMissing(
+    db,
+    "sites",
+    "profile_site_id",
+    "TEXT REFERENCES sites(id) ON DELETE RESTRICT",
+  );
+  const statements = [
+    db.prepare(
+      `UPDATE sites AS business_site
+       SET profile_site_id = (
+         SELECT profile.id
+         FROM sites AS profile
+         WHERE profile.user_id = business_site.user_id
+           AND profile.site_role = 'profile'
+         ORDER BY profile.created_at ASC, profile.id ASC
+         LIMIT 1
+       )
+       WHERE business_site.site_role = 'organization'
+         AND business_site.profile_site_id IS NULL`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_sites_profile_site
+       ON sites(profile_site_id, created_at)
+       WHERE profile_site_id IS NOT NULL`,
+    ),
+    db.prepare(
+      `CREATE TRIGGER IF NOT EXISTS sites_profile_ownership_insert
+       BEFORE INSERT ON sites
+       WHEN (NEW.site_role = 'profile' AND NEW.profile_site_id IS NOT NULL)
+         OR (NEW.site_role = 'organization' AND (
+           NEW.profile_site_id IS NULL OR NOT EXISTS (
+             SELECT 1 FROM sites AS profile
+             WHERE profile.id = NEW.profile_site_id
+               AND profile.user_id = NEW.user_id
+               AND profile.site_role = 'profile'
+           )
+         ))
+       BEGIN
+         SELECT RAISE(ABORT, 'ME3_SITE_PROFILE_OWNERSHIP');
+       END`,
+    ),
+    db.prepare(
+      `CREATE TRIGGER IF NOT EXISTS sites_profile_ownership_update
+       BEFORE UPDATE OF user_id, site_role, profile_site_id ON sites
+       WHEN (NEW.site_role = 'profile' AND NEW.profile_site_id IS NOT NULL)
+         OR (NEW.site_role = 'organization' AND (
+           NEW.profile_site_id IS NULL OR NOT EXISTS (
+             SELECT 1 FROM sites AS profile
+             WHERE profile.id = NEW.profile_site_id
+               AND profile.user_id = NEW.user_id
+               AND profile.site_role = 'profile'
+           )
+         ))
+       BEGIN
+         SELECT RAISE(ABORT, 'ME3_SITE_PROFILE_OWNERSHIP');
+       END`,
+    ),
+  ];
+  if (typeof db.batch === "function") await db.batch(statements);
+  else for (const statement of statements) await statement.run();
 }
 
 async function applyEmailCampaignFoundationsMigration(db: D1Database): Promise<void> {

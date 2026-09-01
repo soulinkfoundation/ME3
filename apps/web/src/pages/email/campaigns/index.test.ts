@@ -1,4 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiGet = vi.fn();
@@ -27,6 +28,7 @@ import CampaignsPage from "./index.vue";
 
 describe("campaign list", () => {
   beforeEach(() => {
+    setActivePinia(createPinia());
     vi.clearAllMocks();
     document.body.innerHTML = '<div id="app-side-nav-mobile-page-controls"></div>';
     apiGet.mockImplementation((path: string) => {
@@ -48,9 +50,43 @@ describe("campaign list", () => {
             ready: false,
             reason: "sender_not_ready",
             sender: null,
-            addOn: null,
+            addOn: {
+              available: true,
+              entitled: false,
+              status: "inactive",
+              planKey: null,
+              allowance: 0,
+              used: 0,
+              remaining: 0,
+              resetAt: "2026-09-01T00:00:00.000Z",
+              cancelAtPeriodEnd: false,
+              paidThroughAt: null,
+              plans: [
+                { key: "5k", allowance: 5_000, monthlyPriceUsd: 10, checkoutAvailable: true },
+                {
+                  key: "10k",
+                  allowance: 10_000,
+                  monthlyPriceUsd: 15,
+                  checkoutAvailable: true,
+                },
+                {
+                  key: "20k",
+                  allowance: 20_000,
+                  monthlyPriceUsd: 25,
+                  checkoutAvailable: true,
+                },
+              ],
+            },
             instructions: [],
           },
+        });
+      }
+      if (path.startsWith("/mailbox/messages?")) {
+        return Promise.resolve({
+          messages: [],
+          total: path.includes("unread=1") ? 2 : 1,
+          limit: 0,
+          offset: 0,
         });
       }
       return Promise.resolve({
@@ -87,7 +123,6 @@ describe("campaign list", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("Activate Email Campaigns");
-    expect(apiGet).toHaveBeenCalledTimes(1);
     expect(apiGet).toHaveBeenCalledWith("/plugins");
     wrapper.unmount();
   });
@@ -130,8 +165,16 @@ describe("campaign list", () => {
 
     const controls = document.querySelector(".campaigns-mobile-nav")!;
     expect(controls.querySelector('[aria-label="Create campaign"]')).not.toBeNull();
-    expect(controls.textContent?.trim()).toBe("");
+    expect(controls.textContent).toContain("Search campaigns");
     expect(wrapper.findAll(".workspace-tabs__tab")[0].text()).toContain("Campaigns");
+    expect(wrapper.findAll(".workspace-tabs__count").map((badge) => badge.text())).toEqual([
+      "2",
+      "1",
+    ]);
+    expect(wrapper.text()).toContain(
+      "Choose a paid plan to activate managed email campaign delivery.",
+    );
+    expect(wrapper.text()).not.toContain("Optional managed delivery");
 
     wrapper.unmount();
   });
@@ -149,7 +192,44 @@ describe("campaign list", () => {
       "Open Test for @mentuition",
     );
     expect(card.find('[title="Edit campaign"]').exists()).toBe(false);
-    expect(card.text()).toContain("Delete");
+    expect(card.text()).not.toContain("Delete");
+    expect(card.get('[aria-label="Delete Test"]').attributes("title")).toBe("Delete campaign");
+
+    wrapper.unmount();
+  });
+
+  it("filters campaigns by subject and site", async () => {
+    const wrapper = mount(CampaignsPage, { attachTo: document.body });
+    await flushPromises();
+
+    const search = document.querySelector<HTMLInputElement>("#campaign-search-input-top")!;
+    search.value = "kieran";
+    search.dispatchEvent(new Event("input"));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("No matching campaigns");
+
+    search.value = "mentuition";
+    search.dispatchEvent(new Event("input"));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".campaign-card h2").text()).toBe("Test - @mentuition");
+
+    wrapper.unmount();
+  });
+
+  it("only marks the selected billing plan as busy", async () => {
+    apiPost.mockReturnValue(new Promise(() => undefined));
+    const wrapper = mount(CampaignsPage, { attachTo: document.body });
+    await flushPromises();
+
+    const buttons = wrapper.findAll(".capacity-option button");
+    await buttons[0]!.trigger("click");
+    await flushPromises();
+
+    expect(buttons.map((button) => button.attributes("disabled") !== undefined)).toEqual([
+      true,
+      false,
+      false,
+    ]);
 
     wrapper.unmount();
   });

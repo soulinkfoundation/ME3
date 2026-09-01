@@ -1,5 +1,6 @@
 import {
   getLandingPageTemplateId,
+  normalizeBusinessSiteDocument,
   normalizeLandingPageDocument,
   renderLandingPageHtml,
   type LandingPageDocument,
@@ -530,8 +531,9 @@ export async function serveDefaultPublicSitePath(
 
 export async function serveMeJsonResponse(env: Env, request: Request): Promise<Response> {
   const requestHost = new URL(request.url).hostname;
-  const site = await getPublicSiteForHost(env, requestHost);
-  if (site) {
+  const requestedSite = await getPublicSiteForHost(env, requestHost);
+  if (requestedSite) {
+    const site = await getRepresentedProfileSite(env, requestedSite);
     const storedPublic = await getSiteFileText(env, site.id, "public/me.json");
     if (site.published_at && storedPublic) {
       const parsed = parseMe3Json(storedPublic);
@@ -576,6 +578,24 @@ export async function serveMeJsonResponse(env: Env, request: Request): Promise<R
   );
 }
 
+async function getRepresentedProfileSite(
+  env: Env,
+  site: DbSite,
+): Promise<DbSite> {
+  if (site.site_role !== "organization" || !site.profile_site_id) return site;
+  return (
+    (await env.DB.prepare(
+      `SELECT id, user_id, username, site_type, site_role, template_id, profile_site_id,
+              custom_domain, custom_domain_status, custom_domain_cf_id,
+              created_at, updated_at, published_at
+       FROM sites
+       WHERE id = ? AND user_id = ? AND site_role = 'profile'`,
+    )
+      .bind(site.profile_site_id, site.user_id)
+      .first<DbSite>()) || site
+  );
+}
+
 function publicMeJsonResponse(profile: Me3CompatibleProfile): Response {
   return new Response(JSON.stringify(profile, null, 2), {
     headers: {
@@ -590,7 +610,7 @@ export async function getPublicSiteForHost(env: Env, rawHost: string): Promise<D
   const host = normalizeHost(rawHost);
   if (!host) return null;
   const customDomainSite = await env.DB.prepare(
-    `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
+    `SELECT id, user_id, username, site_type, site_role, template_id, profile_site_id, custom_domain,
             custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
      FROM sites
      WHERE lower(custom_domain) = ?
@@ -611,7 +631,7 @@ export async function getPublicSiteForHost(env: Env, rawHost: string): Promise<D
 
   return (
     (await env.DB.prepare(
-      `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
+      `SELECT id, user_id, username, site_type, site_role, template_id, profile_site_id, custom_domain,
               custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
        FROM sites
        WHERE site_role = 'profile'
@@ -665,7 +685,13 @@ export async function servePublicSiteByUsername(
       headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   }
-  return serveSiteFileResponse(env, site, rawPath, true);
+  return serveSiteFileResponse(
+    env,
+    site,
+    rawPath,
+    true,
+    `/site/${encodeURIComponent(site.username)}`,
+  );
 }
 
 export async function serveSiteFileResponse(
@@ -673,6 +699,7 @@ export async function serveSiteFileResponse(
   site: DbSite,
   rawPath: string,
   requirePublished: boolean,
+  publicBasePath = "",
 ): Promise<Response> {
   if (requirePublished && !site.published_at) {
     return new Response(renderNotFoundPage("Site not published"), {
@@ -682,6 +709,40 @@ export async function serveSiteFileResponse(
   }
 
   const requestedPath = normalizeSiteFileName(rawPath) || "index.html";
+  if (requirePublished) {
+    const businessSiteRaw = await getSiteFileText(
+      env,
+      site.id,
+      "public/business-site.json",
+    );
+    if (businessSiteRaw) {
+      try {
+        const businessSite = normalizeBusinessSiteDocument(
+          JSON.parse(businessSiteRaw),
+        );
+        const requestPath = `/${requestedPath
+          .replace(/(?:^|\/)index\.html$/, "")
+          .replace(/\/+$/, "")}`.replace(/\/$/, "") || "/";
+        const redirect = businessSite?.redirects.find(
+          (item) => item.from.replace(/\/+$/, "") === requestPath,
+        );
+        if (redirect) {
+          const redirectTarget =
+            publicBasePath &&
+            redirect.to.startsWith("/") &&
+            !redirect.to.startsWith("//")
+              ? `${publicBasePath.replace(/\/+$/, "")}${redirect.to}`
+              : redirect.to;
+          return new Response(null, {
+            status: 301,
+            headers: { Location: redirectTarget },
+          });
+        }
+      } catch {
+        // Invalid public settings never prevent the last valid page snapshot.
+      }
+    }
+  }
   const publicPath = `public/${requestedPath}`;
   const indexPath =
     requestedPath && !requestedPath.split("/").pop()?.includes(".")
@@ -734,7 +795,7 @@ export async function getSiteForOwner(env: Env, ownerId: string, rawUsername: st
   if (!username) return null;
   return (
     (await env.DB.prepare(
-      `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
+      `SELECT id, user_id, username, site_type, site_role, template_id, profile_site_id, custom_domain,
               custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
        FROM sites
        WHERE user_id = ? AND username = ?`,
@@ -749,7 +810,7 @@ export async function getSiteByUsername(env: Env, rawUsername: string): Promise<
   if (!username) return null;
   return (
     (await env.DB.prepare(
-      `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
+      `SELECT id, user_id, username, site_type, site_role, template_id, profile_site_id, custom_domain,
               custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
        FROM sites
        WHERE username = ?`,
@@ -774,6 +835,16 @@ export async function putSiteFile(
   content: string | ArrayBuffer,
   contentType: string,
 ): Promise<void> {
+  await (await prepareSiteFileUpsert(env, siteId, path, content, contentType)).run();
+}
+
+export async function prepareSiteFileUpsert(
+  env: Env,
+  siteId: string,
+  path: string,
+  content: string | ArrayBuffer,
+  contentType: string,
+): Promise<D1PreparedStatement> {
   const buffer =
     typeof content === "string" ? new TextEncoder().encode(content).buffer : content;
   if (buffer.byteLength > D1_SITE_FILE_MAX_BYTES) {
@@ -781,7 +852,7 @@ export async function putSiteFile(
       "File is too large for Core D1 storage. Activate storage in Account settings to upload larger media.",
     );
   }
-  await env.DB.prepare(
+  return env.DB.prepare(
     `INSERT INTO site_files (site_id, path, content, content_type, size, sha256, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(site_id, path) DO UPDATE SET
@@ -791,8 +862,7 @@ export async function putSiteFile(
        sha256 = excluded.sha256,
        updated_at = datetime('now')`,
   )
-    .bind(siteId, path, buffer, contentType, buffer.byteLength, await sha256Buffer(buffer))
-    .run();
+    .bind(siteId, path, buffer, contentType, buffer.byteLength, await sha256Buffer(buffer));
 }
 
 export async function putSiteMediaFile(

@@ -584,7 +584,8 @@ async function createAgentLandingPageSite(
     .bind(userId)
     .all<DbAgentLandingSite>();
   const sites = result.results || [];
-  if (!sites.some((site) => site.site_role === "profile")) {
+  const profileSite = sites.find((site) => site.site_role === "profile");
+  if (!profileSite) {
     throw new Error("Create your ME3 profile site before building an additional site.");
   }
   if (sites.filter((site) => site.site_role === "organization").length >= 3) {
@@ -603,10 +604,17 @@ async function createAgentLandingPageSite(
   const id = crypto.randomUUID();
   try {
     await env.DB.prepare(
-      `INSERT INTO sites (id, user_id, username, site_type, site_role, template_id)
-       VALUES (?, ?, ?, 'profile', 'organization', ?)`,
+      `INSERT INTO sites
+         (id, user_id, username, site_type, site_role, template_id, profile_site_id)
+       VALUES (?, ?, ?, 'profile', 'organization', ?, ?)`,
     )
-      .bind(id, userId, username, AGENT_LANDING_PAGE_SITE_TEMPLATE_ID)
+      .bind(
+        id,
+        userId,
+        username,
+        AGENT_LANDING_PAGE_SITE_TEMPLATE_ID,
+        profileSite.id,
+      )
       .run();
   } catch (error) {
     const message = String(error);

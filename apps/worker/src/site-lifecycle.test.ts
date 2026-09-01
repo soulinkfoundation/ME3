@@ -10,6 +10,13 @@ const siteRolesMigration = readFileSync(
   new URL("../migrations/0038_site_roles.sql", import.meta.url),
   "utf8",
 );
+const businessSiteProfileOwnershipMigration = readFileSync(
+  new URL(
+    "../migrations/0046_business_site_profile_ownership.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 describe("0038 site roles migration", () => {
   it("preserves legacy sites and enforces one profile plus three organizations", () => {
@@ -103,6 +110,33 @@ describe("0038 site roles migration", () => {
   });
 });
 
+describe("0046 Business Site profile ownership migration", () => {
+  it("backfills organizations and enforces same-owner profile associations", () => {
+    const db = new SqliteD1(false);
+    db.raw.exec(`
+      INSERT INTO sites (id, user_id, username, site_type, created_at)
+      VALUES
+        ('profile', 'owner', 'owner', 'profile', '2026-01-01'),
+        ('business', 'owner', 'studio', 'profile', '2026-01-02');
+    `);
+    db.raw.exec(siteRolesMigration);
+    db.raw.exec(businessSiteProfileOwnershipMigration);
+
+    expect(
+      db.raw.prepare("SELECT profile_site_id FROM sites WHERE id = 'business'").get(),
+    ).toEqual({ profile_site_id: "profile" });
+    expect(() =>
+      db.raw
+        .prepare(
+          `INSERT INTO sites
+             (id, user_id, username, site_type, site_role, profile_site_id)
+           VALUES ('invalid', 'owner', 'invalid', 'profile', 'organization', 'missing')`,
+        )
+        .run(),
+    ).toThrow(/ME3_SITE_PROFILE_OWNERSHIP/);
+  });
+});
+
 describe("site role API lifecycle", () => {
   let db: SqliteD1;
   let env: Env;
@@ -118,7 +152,15 @@ describe("site role API lifecycle", () => {
     });
   });
 
-  it("allows organization creation without a profile and reports role-aware quota", async () => {
+  it("requires a profile, associates organizations, and reports role-aware quota", async () => {
+    const rejected = await postSite(app, env, {
+      username: "independent-studio",
+      siteRole: "organization",
+    });
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body).toMatchObject({ code: "profile_required" });
+
+    const profile = await postSite(app, env, { username: "owner" });
     const organization = await postSite(app, env, {
       username: "independent-studio",
       siteRole: "organization",
@@ -127,18 +169,19 @@ describe("site role API lifecycle", () => {
     expect(organization.body.site).toMatchObject({
       username: "independent-studio",
       site_role: "organization",
+      profile_site_id: profile.body.site.id,
     });
 
     const quotaResponse = await app.fetch(new Request("http://localhost/api/sites/quota"), env);
     const quota = (await quotaResponse.json()) as Record<string, any>;
     expect(quotaResponse.status).toBe(200);
     expect(quota).toMatchObject({
-      current: 1,
+      current: 2,
       limit: 4,
-      profile: { current: 0, limit: 1, remaining: 1, can_create: true },
+      profile: { current: 1, limit: 1, remaining: 0, can_create: false },
       additional_sites: { current: 1, limit: 3, remaining: 2, can_create: true },
       remaining_additional_sites: 2,
-      can_create_profile: true,
+      can_create_profile: false,
       can_create_additional_site: true,
     });
   });
@@ -301,6 +344,7 @@ describe("site role API lifecycle", () => {
   it("enforces three additional sites and releases quota after deletion", async () => {
     const siteAssets = new MemoryR2Bucket();
     env.SITE_ASSETS = siteAssets as unknown as R2Bucket;
+    await postSite(app, env, { username: "owner" });
     const attempts = await Promise.all(
       ["one", "two", "three", "four"].map((username) =>
         postSite(app, env, { username, siteRole: "organization" }),
@@ -419,7 +463,10 @@ class SqliteD1 {
         FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
       );
     `);
-    if (applyRolesMigration) this.raw.exec(siteRolesMigration);
+    if (applyRolesMigration) {
+      this.raw.exec(siteRolesMigration);
+      this.raw.exec(businessSiteProfileOwnershipMigration);
+    }
   }
 
   prepare(sql: string) {

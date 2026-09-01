@@ -57,6 +57,27 @@ describe("push notification relay client", () => {
         subscribed_calendars: true,
       },
     });
+    expect(body).toMatchObject({ provider: "apns", platform: "ios" });
+  });
+
+  it("forwards Android FCM registration without lowercasing its token", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const env = envWithSecrets(linkedSecrets());
+    const token = `${"A".repeat(24)}:APA91b-token_Value`;
+
+    await registerPushNotificationDevice(env, "owner", {
+      deviceId: "android-device-123",
+      token,
+      provider: "fcm",
+      platform: "android",
+      dailyBriefingEnabled: true,
+    });
+
+    const body = JSON.parse(String(
+      (fetchMock.mock.calls as unknown as Array<[URL, RequestInit]>)[0]?.[1]?.body,
+    ));
+    expect(body).toMatchObject({ token, provider: "fcm", platform: "android" });
   });
 
   it("forwards bounded briefing summary metadata and never fails the completed briefing", async () => {

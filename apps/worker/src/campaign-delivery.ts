@@ -1343,7 +1343,7 @@ async function managedCampaignBillingAction(
   if (!response.ok || isRedirect(response.status) || typeof result?.url !== "string") {
     throw new CampaignInputError(
       typeof result?.error === "string" ? result.error : "Campaign billing is unavailable",
-      response.status === 400 ? 400 : 409,
+      response.status === 400 ? 400 : response.status === 503 ? 503 : 409,
       typeof result?.code === "string" ? result.code : "campaign_billing_unavailable",
     );
   }

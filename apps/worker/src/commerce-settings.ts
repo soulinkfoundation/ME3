@@ -14,6 +14,7 @@ type CommerceSettingsRow = {
   encrypted_stripe_secret_key: string | null;
   stripe_key_hint: string | null;
   stripe_key_updated_at: string | null;
+  preferred_stripe_provider: string | null;
   default_currency: string | null;
   created_at: string;
   updated_at: string;
@@ -28,6 +29,10 @@ export type CommerceSettingsResponse = {
     keyHint: string | null;
     keyUpdatedAt: string | null;
     mode: "direct" | "managed";
+    preferredProvider: StripeProviderPreference;
+    directConfigured: boolean;
+    directSource: "environment" | "stored" | "not_configured";
+    managedAvailable: boolean;
     connectionStatus: ManagedCommerceConnectionStatus["status"] | "unavailable" | null;
     connected: boolean;
     chargesEnabled: boolean;
@@ -35,6 +40,8 @@ export type CommerceSettingsResponse = {
     requirementsDue: string[];
   };
 };
+
+type StripeProviderPreference = "auto" | "direct" | "managed";
 
 export class CommerceSettingsInputError extends Error {
   constructor(
@@ -57,10 +64,19 @@ export async function getCommerceSettings(
   const envKey = normalizeSecret(env.STRIPE_SECRET_KEY);
   const hasEnvKey = Boolean(envKey);
   const hasStoredKey = Boolean(row?.encrypted_stripe_secret_key);
+  const directConfigured = hasEnvKey || hasStoredKey;
   const hasManagedBridge = Boolean(await getManagedCommerceBridgeConfig(env));
+  const preferredProvider = normalizeStripeProviderPreference(
+    row?.preferred_stripe_provider,
+  );
+  const mode = resolveStripeProviderMode(
+    preferredProvider,
+    directConfigured,
+    hasManagedBridge,
+  );
   let managedStatus: ManagedCommerceConnectionStatus | null = null;
   let managedStatusUnavailable = false;
-  if (!hasEnvKey && !hasStoredKey && hasManagedBridge) {
+  if (hasManagedBridge) {
     try {
       managedStatus = await getManagedCommerceConnectionStatus(env);
     } catch (error) {
@@ -75,19 +91,27 @@ export async function getCommerceSettings(
     encryptionConfigured: await hasInstallEncryptionKey(env),
     defaultCurrency: await resolveDefaultCurrency(env, ownerId, row),
     stripe: {
-      configured: hasEnvKey || hasStoredKey || managedReady,
-      source: hasEnvKey
-        ? "environment"
-        : hasStoredKey
-          ? "stored"
-          : hasManagedBridge
-            ? "managed"
+      configured: mode === "managed" ? managedReady : directConfigured,
+      source: mode === "managed"
+        ? "managed"
+        : hasEnvKey
+          ? "environment"
+          : hasStoredKey
+            ? "stored"
             : "not_configured",
       keyHint: hasEnvKey
         ? getSecretHint(envKey)
         : row?.stripe_key_hint || null,
       keyUpdatedAt: hasEnvKey ? null : row?.stripe_key_updated_at || null,
-      mode: hasEnvKey || hasStoredKey ? "direct" : hasManagedBridge ? "managed" : "direct",
+      mode,
+      preferredProvider,
+      directConfigured,
+      directSource: hasEnvKey
+        ? "environment"
+        : hasStoredKey
+          ? "stored"
+          : "not_configured",
+      managedAvailable: hasManagedBridge,
       connectionStatus: hasManagedBridge
         ? managedStatusUnavailable
           ? "unavailable"
@@ -102,7 +126,24 @@ export async function getCommerceSettings(
 }
 
 export async function isCommerceReady(env: Env, ownerId: string): Promise<boolean> {
-  return (await getCommerceSettings(env, ownerId)).stripe.configured;
+  const row = await getCommerceSettingsRow(env, ownerId);
+  const directConfigured = Boolean(
+    normalizeSecret(env.STRIPE_SECRET_KEY) || row?.encrypted_stripe_secret_key,
+  );
+  const hasManagedBridge = Boolean(await getManagedCommerceBridgeConfig(env));
+  const mode = resolveStripeProviderMode(
+    normalizeStripeProviderPreference(row?.preferred_stripe_provider),
+    directConfigured,
+    hasManagedBridge,
+  );
+  if (mode === "direct") return directConfigured;
+
+  try {
+    const status = await getManagedCommerceConnectionStatus(env);
+    return isManagedCommerceReady(status);
+  } catch {
+    return false;
+  }
 }
 
 export async function updateCommerceSettings(
@@ -114,6 +155,13 @@ export async function updateCommerceSettings(
   const existingRow = await getCommerceSettingsRow(env, ownerId);
   const stripeSecretKey = normalizeSecret(body.stripeSecretKey);
   const clearStripeSecretKey = body.clearStripeSecretKey === true;
+  const hasPreferredProviderInput = Object.prototype.hasOwnProperty.call(
+    body,
+    "preferredStripeProvider",
+  );
+  const preferredProviderInput = hasPreferredProviderInput
+    ? parseStripeProviderPreference(body.preferredStripeProvider)
+    : null;
   const hasDefaultCurrencyInput = Object.prototype.hasOwnProperty.call(body, "defaultCurrency");
   const defaultCurrencyInput = hasDefaultCurrencyInput
     ? normalizeDefaultCurrency(body.defaultCurrency)
@@ -123,13 +171,25 @@ export async function updateCommerceSettings(
     throw new CommerceSettingsInputError("Use a three-letter default currency code.");
   }
 
-  if (!stripeSecretKey && !clearStripeSecretKey && !hasDefaultCurrencyInput) {
+  if (hasPreferredProviderInput && !preferredProviderInput) {
+    throw new CommerceSettingsInputError("Choose direct or managed Stripe payments.");
+  }
+
+  if (
+    !stripeSecretKey &&
+    !clearStripeSecretKey &&
+    !hasDefaultCurrencyInput &&
+    !hasPreferredProviderInput
+  ) {
     return getCommerceSettings(env, ownerId);
   }
 
   let encryptedStripeSecretKey = existingRow?.encrypted_stripe_secret_key || null;
   let stripeKeyHint = existingRow?.stripe_key_hint || null;
   let stripeKeyUpdatedAt = existingRow?.stripe_key_updated_at || null;
+  let preferredProvider = normalizeStripeProviderPreference(
+    existingRow?.preferred_stripe_provider,
+  );
   const defaultCurrency =
     defaultCurrencyInput || await resolveDefaultCurrency(env, ownerId, existingRow);
 
@@ -145,22 +205,69 @@ export async function updateCommerceSettings(
     encryptedStripeSecretKey = await encryptSecret(stripeSecretKey, installKey);
     stripeKeyHint = getSecretHint(stripeSecretKey);
     stripeKeyUpdatedAt = new Date().toISOString();
+    preferredProvider = "direct";
+  }
+
+  if (preferredProviderInput) preferredProvider = preferredProviderInput;
+
+  const directConfigured = Boolean(
+    normalizeSecret(env.STRIPE_SECRET_KEY) || encryptedStripeSecretKey,
+  );
+  if (clearStripeSecretKey && preferredProvider === "direct" && !directConfigured) {
+    preferredProvider = "auto";
+  }
+  if (preferredProvider === "direct" && !directConfigured) {
+    throw new CommerceSettingsInputError(
+      "Add a Stripe secret key before selecting direct payments.",
+    );
+  }
+  if (preferredProvider === "managed") {
+    if (!(await getManagedCommerceBridgeConfig(env))) {
+      throw new CommerceSettingsInputError(
+        "Stripe Connect is not available for this installation.",
+        503,
+      );
+    }
+    let status: ManagedCommerceConnectionStatus | null = null;
+    try {
+      status = await getManagedCommerceConnectionStatus(env);
+    } catch {
+      throw new CommerceSettingsInputError(
+        "ME3 could not verify the Stripe Connect account. Try again.",
+        502,
+      );
+    }
+    if (!isManagedCommerceReady(status)) {
+      throw new CommerceSettingsInputError(
+        "Finish Stripe Connect setup before using it for payments.",
+        409,
+      );
+    }
   }
 
   await env.DB.prepare(
     `INSERT INTO commerce_settings (
        user_id, encrypted_stripe_secret_key, stripe_key_hint,
-       stripe_key_updated_at, default_currency, created_at, updated_at
+       stripe_key_updated_at, preferred_stripe_provider, default_currency,
+       created_at, updated_at
      )
-     VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
      ON CONFLICT(user_id) DO UPDATE SET
        encrypted_stripe_secret_key = excluded.encrypted_stripe_secret_key,
        stripe_key_hint = excluded.stripe_key_hint,
        stripe_key_updated_at = excluded.stripe_key_updated_at,
+       preferred_stripe_provider = excluded.preferred_stripe_provider,
        default_currency = excluded.default_currency,
        updated_at = datetime('now')`,
   )
-    .bind(ownerId, encryptedStripeSecretKey, stripeKeyHint, stripeKeyUpdatedAt, defaultCurrency)
+    .bind(
+      ownerId,
+      encryptedStripeSecretKey,
+      stripeKeyHint,
+      stripeKeyUpdatedAt,
+      preferredProvider,
+      defaultCurrency,
+    )
     .run();
 
   return getCommerceSettings(env, ownerId);
@@ -178,10 +285,17 @@ export async function getStripeSecretKey(
   env: Env,
   ownerId: string,
 ): Promise<string | null> {
-  const envKey = normalizeSecret(env.STRIPE_SECRET_KEY);
-  if (envKey) return envKey;
-
   const row = await getCommerceSettingsRow(env, ownerId);
+  const envKey = normalizeSecret(env.STRIPE_SECRET_KEY);
+  const hasManagedBridge = Boolean(await getManagedCommerceBridgeConfig(env));
+  const directConfigured = Boolean(envKey || row?.encrypted_stripe_secret_key);
+  const mode = resolveStripeProviderMode(
+    normalizeStripeProviderPreference(row?.preferred_stripe_provider),
+    directConfigured,
+    hasManagedBridge,
+  );
+  if (mode === "managed") return null;
+  if (envKey) return envKey;
   if (!row?.encrypted_stripe_secret_key) return null;
 
   const installKey = await getOrCreateInstallEncryptionKey(env);
@@ -196,7 +310,8 @@ async function getCommerceSettingsRow(
     return (
       (await env.DB.prepare(
         `SELECT user_id, encrypted_stripe_secret_key, stripe_key_hint,
-                stripe_key_updated_at, default_currency, created_at, updated_at
+                stripe_key_updated_at, preferred_stripe_provider,
+                default_currency, created_at, updated_at
          FROM commerce_settings
          WHERE user_id = ?`,
       )
@@ -207,6 +322,32 @@ async function getCommerceSettingsRow(
     if (isMissingCommerceSettingsTableError(error)) return null;
     throw error;
   }
+}
+
+function parseStripeProviderPreference(value: unknown): "direct" | "managed" | null {
+  return value === "direct" || value === "managed" ? value : null;
+}
+
+function normalizeStripeProviderPreference(value: unknown): StripeProviderPreference {
+  return value === "direct" || value === "managed" ? value : "auto";
+}
+
+function resolveStripeProviderMode(
+  preference: StripeProviderPreference,
+  directConfigured: boolean,
+  managedAvailable: boolean,
+): "direct" | "managed" {
+  if (preference === "managed" && managedAvailable) return "managed";
+  if (preference === "direct") return "direct";
+  if (directConfigured) return "direct";
+  return managedAvailable ? "managed" : "direct";
+}
+
+function isManagedCommerceReady(
+  status: ManagedCommerceConnectionStatus | null,
+): boolean {
+  return status?.connected === true && status.status === "active" &&
+    status.chargesEnabled && status.payoutsEnabled;
 }
 
 function normalizeDefaultCurrency(value: unknown): string | null {

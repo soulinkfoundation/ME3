@@ -3,6 +3,7 @@ export const LANDING_PAGE_DESIGN_PACK_IDS = [
   "starter-event-01",
   "starter-service-01",
   "starter-waitlist-01",
+  "clinical-editorial-01",
 ] as const;
 
 export type LandingPageDesignPackId =
@@ -66,6 +67,17 @@ export const LANDING_PAGE_DESIGN_PACKS: readonly LandingPageDesignPackDefinition
     status: "starter",
     selectable: true,
     previewPath: "/landing-page-lab/northstar/index.html",
+  },
+  {
+    id: "clinical-editorial-01",
+    version: 1,
+    name: "Natural Editorial",
+    description: "A calm, image-led editorial system for expert services and information-rich Business Sites.",
+    bestFor: "Practices, retreats, specialists, trusted advisors, and thoughtful service businesses.",
+    purposes: ["event", "service", "waitlist"],
+    status: "starter",
+    selectable: true,
+    previewPath: null,
   },
 ] as const;
 

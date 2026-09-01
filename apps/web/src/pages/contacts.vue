@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRouter } from "vue-router";
 import Button from "../components/Button.vue";
 import ContactsPanel from "../components/ContactsPanel.vue";
 import UiIcon from "../components/UiIcon.vue";
 import WorkspaceTabs from "../components/WorkspaceTabs.vue";
+import { useMailboxCacheStore } from "../stores/mailbox";
 import type { UiIconName } from "../utils/icons";
 
 definePage({
@@ -21,20 +23,33 @@ definePage({
 const contactsPanel = ref<InstanceType<typeof ContactsPanel> | null>(null);
 const contactSearchQuery = ref("");
 const router = useRouter();
+const mailbox = useMailboxCacheStore();
+const { folderCounts } = storeToRefs(mailbox);
 
-const contactMailboxTabs: Array<{
+const contactMailboxTabs = computed<Array<{
   id: string;
   label: string;
   icon: UiIconName;
-}> = [
+  count?: number | null;
+}>>(() => [
   { id: "campaigns", label: "Campaigns", icon: "Send" },
-  { id: "inbox", label: "Inbox", icon: "Inbox" },
-  { id: "drafts", label: "Drafts", icon: "FileText" },
+  {
+    id: "inbox",
+    label: "Inbox",
+    icon: "Inbox",
+    count: folderCounts.value.inbox || null,
+  },
+  {
+    id: "drafts",
+    label: "Drafts",
+    icon: "FileText",
+    count: folderCounts.value.drafts || null,
+  },
   { id: "sent", label: "Sent", icon: "Send" },
   { id: "archive", label: "Archive", icon: "Archive" },
   { id: "trash", label: "Trash", icon: "Trash2" },
   { id: "contacts", label: "Contacts", icon: "UsersRound" },
-];
+]);
 
 function openContactModal() {
   contactsPanel.value?.openContactModal();
@@ -51,6 +66,10 @@ function switchContactMailboxTab(tabId: string) {
     query: tabId === "inbox" ? {} : { tab: tabId },
   });
 }
+
+onMounted(() => {
+  void mailbox.loadFolderCounts();
+});
 </script>
 
 <template>

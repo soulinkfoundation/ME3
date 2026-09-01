@@ -275,6 +275,7 @@ type StoredCommerceSettings = {
   encrypted_stripe_secret_key: string | null;
   stripe_key_hint: string | null;
   stripe_key_updated_at: string | null;
+  preferred_stripe_provider: string | null;
   default_currency: string | null;
   created_at: string;
   updated_at: string;
@@ -1207,7 +1208,8 @@ function createEnv(): Env & {
                   encrypted_stripe_secret_key: values[1] as string | null,
                   stripe_key_hint: values[2] as string | null,
                   stripe_key_updated_at: values[3] as string | null,
-                  default_currency: values[4] as string | null,
+                  preferred_stripe_provider: values[4] as string | null,
+                  default_currency: values[5] as string | null,
                   created_at: existing?.created_at || "2026-05-29T10:00:00Z",
                   updated_at: "2026-05-29T10:05:00Z",
                 };
@@ -8571,6 +8573,77 @@ describe("ME3 Worker auth", () => {
     expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
       country: "IE",
       returnUrl: "https://core.example/settings?section=payments",
+    });
+    fetchMock.mockRestore();
+  });
+
+  it("switches to Stripe Connect without deleting a stored direct key", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const directResponse = await app.fetch(
+      new Request("http://localhost/api/commerce/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          stripeSecretKey: ["sk", "test", "providerfallback1234"].join("_"),
+        }),
+      }),
+      env,
+    );
+    expect(directResponse.status).toBe(200);
+
+    env.ME3_COMMERCE_BRIDGE_ORIGIN = "https://commerce.me3.example";
+    env.ME3_COMMERCE_BRIDGE_TOKEN = "bridge-token";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({
+        connected: true,
+        status: "active",
+        accountId: "acct_123",
+        chargesEnabled: true,
+        payoutsEnabled: true,
+        requirementsDue: [],
+      }))
+    );
+
+    const managedResponse = await app.fetch(
+      new Request("http://localhost/api/commerce/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({ preferredStripeProvider: "managed" }),
+      }),
+      env,
+    );
+    expect(managedResponse.status).toBe(200);
+    expect(await managedResponse.json()).toMatchObject({
+      stripe: {
+        configured: true,
+        source: "managed",
+        mode: "managed",
+        preferredProvider: "managed",
+        directConfigured: true,
+        directSource: "stored",
+        managedAvailable: true,
+      },
+    });
+    expect(env.commerceSettings?.preferred_stripe_provider).toBe("managed");
+    expect(env.commerceSettings?.encrypted_stripe_secret_key).toBeTruthy();
+
+    const fallbackResponse = await app.fetch(
+      new Request("http://localhost/api/commerce/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({ preferredStripeProvider: "direct" }),
+      }),
+      env,
+    );
+    expect(fallbackResponse.status).toBe(200);
+    expect(await fallbackResponse.json()).toMatchObject({
+      stripe: {
+        source: "stored",
+        mode: "direct",
+        preferredProvider: "direct",
+      },
     });
     fetchMock.mockRestore();
   });

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   buildLandingPageDocument,
+  createBusinessSiteDocument,
   getLandingPageDesignPackId,
   getLandingPageRecipe,
   getLandingPageSectionImage,
   getLandingPageTemplateId,
   getSelectableLandingPageDesignPacks,
   normalizeLandingPageDocument,
+  normalizeBusinessSiteDocument,
   normalizeLandingRecipe,
   normalizeLandingTemplate,
   renderLandingPageHtml,
@@ -161,9 +163,83 @@ describe("landing pages package", () => {
       "starter-event-01",
       "starter-service-01",
       "starter-waitlist-01",
+      "clinical-editorial-01",
     ]);
     expect(packs.every((pack) => pack.version === 1)).toBe(true);
     expect(packs.every((pack) => pack.selectable)).toBe(true);
+    expect(packs.find((pack) => pack.id === "clinical-editorial-01")?.name).toBe(
+      "Natural Editorial",
+    );
+  });
+
+  it("renders a reusable Business Site shell with canonical metadata", () => {
+    const site = createBusinessSiteDocument("Harbour Practice", {
+      description: "Evidence-informed care for everyday health.",
+      designPackId: "clinical-editorial-01",
+    });
+    site.navigation.items = [
+      { id: "home", label: "Home", pageSlug: "home", visible: true },
+      { id: "about", label: "About", pageSlug: "about", visible: true },
+    ];
+    site.footer.note = "Independent, expert-led care.";
+    site.footer.links = [
+      { id: "privacy", label: "Privacy", href: "/privacy/" },
+    ];
+    site.organization.logo = "files/harbour-logo.png";
+    expect(normalizeBusinessSiteDocument(site)).toEqual(site);
+
+    const page = buildLandingPageDocument({
+      username: "harbour-practice",
+      brief: "A calm, expert-led health practice.",
+      template: "service",
+      designPackId: "clinical-editorial-01",
+      profile: { name: "Owner", bio: null, avatar: null, profileUrl: null },
+    });
+    if (page.version !== 3) throw new Error("Expected v3 service page");
+    page.hero.image = "files/harbour-hero.jpg";
+    page.hero.imageLayout = "background";
+    page.hero.showActions = false;
+    const html = renderLandingPageHtml(page, "harbour-practice", {
+      businessSite: site,
+      canonicalUrl: "https://harbour.example/about/",
+      siteBasePath: "/site/harbour-practice",
+    });
+    expect(html).toContain('data-design-pack="clinical-editorial-01"');
+    expect(html).toContain('href="https://harbour.example/about/"');
+    expect(html).toContain('href="/site/harbour-practice/about/"');
+    expect(html).toContain('href="/site/harbour-practice/privacy/"');
+    expect(html).toContain('src="/site/harbour-practice/files/harbour-logo.png"');
+    expect(html).toContain('src="/site/harbour-practice/files/harbour-hero.jpg"');
+    expect(html).toContain('data-hero-layout="background"');
+    expect(html).toContain('class="pack-hero pack-hero-background"');
+    expect(html).toContain('class="pack-menu-toggle"');
+    expect(html).toContain('aria-controls="pack-site-navigation"');
+    expect(html).not.toContain('class="pack-hero-actions"');
+    expect(html).toContain("Harbour Practice");
+    expect(html).toContain('type="application/ld+json"');
+    expect(html).toContain("Independent, expert-led care.");
+  });
+
+  it("renders allowed rich section copy and removes unsafe editor markup", () => {
+    const page = buildLandingPageDocument({
+      username: "harbour-practice",
+      brief: "A calm, expert-led health practice.",
+      template: "service",
+      designPackId: "clinical-editorial-01",
+      profile: { name: "Owner", bio: null, avatar: null, profileUrl: null },
+    });
+    if (page.version !== 3) throw new Error("Expected v3 service page");
+    const story = page.content.sections.find((section) => section.type === "story");
+    if (!story || story.type !== "story") throw new Error("Expected story section");
+    story.body =
+      '<p>Calm <strong>care</strong> with <a href="https://example.com" onclick="alert(1)">clear next steps</a>.</p><img src=x onerror=alert(1)><script>alert(1)</script>';
+
+    const html = renderLandingPageHtml(page, "harbour-practice");
+    expect(html).toContain("<strong>care</strong>");
+    expect(html).toContain('href="https://example.com"');
+    expect(html).not.toContain("onclick");
+    expect(html).not.toContain("<img src=x");
+    expect(html).not.toContain("<script>alert(1)</script>");
   });
 
   it("requires a complete design-pack identity while accepting pre-pack v3 pages", () => {
@@ -183,6 +259,10 @@ describe("landing pages package", () => {
     const missingVersion = structuredClone(page);
     delete missingVersion.design.packVersion;
     expect(normalizeLandingPageDocument(missingVersion)).toBeNull();
+
+    const invalidHeroLayout = structuredClone(page);
+    invalidHeroLayout.hero.imageLayout = "cinematic" as "split";
+    expect(normalizeLandingPageDocument(invalidHeroLayout)).toBeNull();
   });
 
   it("renders escaped HTML for persisted previews", () => {

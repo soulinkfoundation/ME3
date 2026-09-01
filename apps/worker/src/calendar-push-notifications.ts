@@ -19,6 +19,7 @@ import type {
 type OwnerRow = { id: string; timezone: string | null };
 type MissionTaskRow = {
   id: string;
+  title: string;
   due_at: string | null;
   scheduled_for: string | null;
 };
@@ -112,7 +113,7 @@ async function loadCalendarPushCandidates(
          )`,
     ).bind(owner.id, queryStart, queryEnd).all<DbCalendarSourceEvent>(),
     env.DB.prepare(
-      `SELECT id, due_at, scheduled_for FROM mission_tasks
+      `SELECT id, title, due_at, scheduled_for FROM mission_tasks
        WHERE user_id = ? AND archived_at IS NULL
          AND status IN ('backlog', 'in_progress')
          AND (due_at IS NOT NULL OR scheduled_for IS NOT NULL)`,
@@ -134,6 +135,9 @@ async function loadCalendarPushCandidates(
       owner.id,
       "bookings",
       booking.id,
+      booking.guest_name.trim()
+        ? `Booking with ${booking.guest_name.trim()}`
+        : "Booking",
       booking.starts_at,
       EVENT_ALERT_OFFSET_MINUTES,
     )),
@@ -141,6 +145,7 @@ async function loadCalendarPushCandidates(
       owner.id,
       "reminders",
       reminder.id,
+      reminder.title,
       reminder.remind_at,
       0,
     )),
@@ -148,6 +153,7 @@ async function loadCalendarPushCandidates(
       owner.id,
       "subscribed_calendars",
       event.id,
+      event.title,
       event.starts_at,
       event.all_day === 1,
       event.timezone,
@@ -156,7 +162,7 @@ async function loadCalendarPushCandidates(
     ...(tasks.results || []).flatMap((task) => {
       const due = task.due_at || task.scheduled_for;
       if (!due) return [];
-      return [taskCandidate(owner.id, task.id, due, ownerTimezone)];
+      return [taskCandidate(owner.id, task.id, task.title, due, ownerTimezone)];
     }),
   ];
 }
@@ -170,6 +176,7 @@ function eventCandidate(
     userId,
     event.kind === "birthday" ? "birthdays" : "events",
     event.id,
+    event.title,
     event.starts_at,
     event.all_day === 1 || event.kind === "birthday",
     event.timezone,
@@ -181,13 +188,14 @@ export function eventLikeCandidate(
   userId: string,
   category: Extract<CalendarPushCategory, "events" | "birthdays" | "subscribed_calendars">,
   itemId: string,
+  title: string,
   startsAt: string,
   allDay: boolean,
   timezone: string | null,
   ownerTimezone: string,
 ): CalendarPushCandidate {
   if (!allDay) {
-    return timedCandidate(userId, category, itemId, startsAt, EVENT_ALERT_OFFSET_MINUTES);
+    return timedCandidate(userId, category, itemId, title, startsAt, EVENT_ALERT_OFFSET_MINUTES);
   }
   const resolvedTimezone = normalizeTimeZone(timezone) || ownerTimezone;
   const dateKey = localDateKey(startsAt, resolvedTimezone);
@@ -195,6 +203,7 @@ export function eventLikeCandidate(
     userId,
     category,
     itemId,
+    title,
     occurrenceId: startsAt,
     alertOffsetMinutes: 0,
     alertAt: localTime(dateKey, 9, 0, resolvedTimezone),
@@ -204,6 +213,7 @@ export function eventLikeCandidate(
 export function taskCandidate(
   userId: string,
   itemId: string,
+  title: string,
   dueAt: string,
   ownerTimezone: string,
 ): CalendarPushCandidate {
@@ -212,6 +222,7 @@ export function taskCandidate(
     userId,
     category: "tasks",
     itemId,
+    title,
     occurrenceId: dueAt,
     alertOffsetMinutes: 0,
     alertAt: dateOnly ? localTime(dueAt, 9, 0, ownerTimezone) : new Date(dueAt).toISOString(),
@@ -222,6 +233,7 @@ function timedCandidate(
   userId: string,
   category: CalendarPushCategory,
   itemId: string,
+  title: string,
   occursAt: string,
   alertOffsetMinutes: number,
 ): CalendarPushCandidate {
@@ -229,6 +241,7 @@ function timedCandidate(
     userId,
     category,
     itemId,
+    title,
     occurrenceId: occursAt,
     alertOffsetMinutes,
     alertAt: new Date(

@@ -8,6 +8,7 @@ import CampaignEmailPreview from "../../../components/CampaignEmailPreview.vue";
 import PageLoading from "../../../components/PageLoading.vue";
 import TiptapEditor from "../../../components/TiptapEditor.vue";
 import UiIcon from "../../../components/UiIcon.vue";
+import { useAppToast } from "../../../composables/useAppToast";
 import { useAuthStore } from "../../../stores/auth";
 import { useSitesStore } from "../../../stores/sites";
 import {
@@ -38,6 +39,7 @@ type Campaign = {
     previewText: string;
     replyToAddress: string | null;
     document: CampaignDocument;
+    rendererVersion: string | null;
     renderedHtml: string | null;
     renderedText: string | null;
   };
@@ -63,11 +65,12 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const sites = useSitesStore();
+const { toastError, toastFromUnknown } = useAppToast();
 const remoteApiHost = import.meta.env.DEV
   ? import.meta.env.VITE_REMOTE_API_HOST || ""
   : "";
 const loading = ref(true);
-const error = ref("");
+const loadFailed = ref(false);
 const campaign = ref<Campaign | null>(null);
 const transport = ref<TransportStatus | null>(null);
 const review = ref<Review | null>(null);
@@ -116,10 +119,11 @@ const previewFromAddress = computed(() => transport.value?.sender?.fromAddress |
 const previewToLabel = computed(() =>
   campaign.value ? `@${campaign.value.siteUsername} subscribers` : "Subscribers",
 );
+const currentRendererVersion = "me3.email-renderer.v2";
 
 async function initialize() {
   loading.value = true;
-  error.value = "";
+  loadFailed.value = false;
   try {
     await sites.ensureSites();
     const transportResponse = await api.get<{ transport: TransportStatus }>(
@@ -133,7 +137,8 @@ async function initialize() {
       replyToAddress.value = ownerEmail.value;
     }
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Unable to open the campaign builder.";
+    loadFailed.value = true;
+    toastFromUnknown(caught, "Unable to open the campaign builder.");
   } finally {
     hydrating.value = false;
     loading.value = false;
@@ -146,6 +151,12 @@ async function loadCampaign(campaignId: string) {
   );
   applyCampaign(response.campaign);
   step.value = 2;
+  if (
+    response.campaign.status === "draft" &&
+    response.campaign.revision.rendererVersion !== currentRendererVersion
+  ) {
+    await saveDraft();
+  }
 }
 
 function applyCampaign(next: Campaign) {
@@ -157,7 +168,8 @@ function applyCampaign(next: Campaign) {
   replyToAddress.value = next.revision.replyToAddress || ownerEmail.value;
   brand.value = {
     ...next.revision.document.brand,
-    logoAlignment: next.revision.document.brand.logoAlignment === "left" ? "left" : "center",
+    logoUrl: null,
+    logoAlignment: "center",
   };
   richTextHtml.value = campaignDocumentToEditorHtml(next.revision.document);
   queueMicrotask(() => {
@@ -168,7 +180,6 @@ function applyCampaign(next: Campaign) {
 async function createDraft() {
   if (!canCreate.value || creating.value) return;
   creating.value = true;
-  error.value = "";
   try {
     const response = await api.post<{ campaign: Campaign }>("/email/campaigns", {
       siteId: selectedSiteId.value,
@@ -180,7 +191,7 @@ async function createDraft() {
       query: { campaign: response.campaign.id },
     });
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Unable to create campaign.";
+    toastFromUnknown(caught, "Unable to create campaign.");
   } finally {
     creating.value = false;
   }
@@ -189,13 +200,13 @@ async function createDraft() {
 function buildDocument(): CampaignDocument {
   return {
     version: "me3.campaign-document.v1",
-    brand: { ...brand.value },
+    brand: { ...brand.value, logoUrl: null, logoAlignment: "center" },
     blocks: campaignEditorHtmlToBlocks(richTextHtml.value),
   };
 }
 
-async function saveDraft(): Promise<void> {
-  if (!campaign.value || campaign.value.status !== "draft") return;
+async function saveDraft(): Promise<boolean> {
+  if (!campaign.value || campaign.value.status !== "draft") return true;
   if (saving.value) {
     await waitForCurrentSave();
     return saveDraft();
@@ -205,11 +216,11 @@ async function saveDraft(): Promise<void> {
     saveTimer = null;
   }
   saving.value = true;
-  error.value = "";
   try {
     const response = await api.put<{ campaign: Campaign }>(
       `/email/campaigns/${encodeURIComponent(campaign.value.id)}`,
       {
+        siteId: selectedSiteId.value,
         name: subject.value.trim() || campaign.value.name,
         subject: subject.value,
         previewText: previewText.value,
@@ -218,8 +229,10 @@ async function saveDraft(): Promise<void> {
       },
     );
     campaign.value = response.campaign;
+    return true;
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Unable to save campaign.";
+    toastFromUnknown(caught, "Unable to save campaign.");
+    return false;
   } finally {
     saving.value = false;
   }
@@ -244,28 +257,50 @@ function scheduleSave() {
 
 async function continueToReview() {
   if (!brand.value.name.trim()) {
-    error.value = "Add a sender name before reviewing your campaign.";
+    toastError("Add a sender name before continuing.");
     return;
   }
   if (!subject.value.trim()) {
-    error.value = "Add a subject before reviewing your campaign.";
+    toastError("Add a subject before continuing.");
     return;
   }
-  await saveDraft();
-  if (error.value || !campaign.value) return;
-  await loadReview();
-  step.value = 3;
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (!(await saveDraft()) || !campaign.value) return;
+  try {
+    await loadReview();
+    step.value = 3;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch (caught) {
+    toastFromUnknown(caught, "Unable to review this campaign.");
+  }
 }
 
 async function saveAndExit() {
-  await saveDraft();
-  if (!error.value) await router.push("/email/campaigns");
+  if (await saveDraft()) await router.push("/email/campaigns");
 }
 
 async function exitWizard() {
   if (campaign.value) await saveAndExit();
   else await router.push("/email/campaigns");
+}
+
+async function continueFromList() {
+  if (!selectedSiteId.value) {
+    toastError("Choose an email list before continuing.");
+    return;
+  }
+  if (!campaign.value) {
+    await createDraft();
+    return;
+  }
+  if (await saveDraft()) step.value = 2;
+}
+
+async function goToPreviousStep(target: number) {
+  if (target !== 1 && target !== 2) return;
+  if (target >= step.value) return;
+  if (step.value === 2 && !(await saveDraft())) return;
+  step.value = target;
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function loadReview() {
@@ -288,7 +323,7 @@ async function sendTest() {
       ? `Test sent to ${ownerEmail.value}.`
       : `Test status: ${response.test.status}.`;
   } catch (caught) {
-    testMessage.value = caught instanceof Error ? caught.message : "Unable to send test.";
+    toastFromUnknown(caught, "Unable to send test.");
   } finally {
     testing.value = false;
   }
@@ -297,15 +332,14 @@ async function sendTest() {
 async function approveSend() {
   if (!campaign.value || sending.value || !review.value?.transport.ready) return;
   if (review.value.audience.eligibleCount === 0) {
-    error.value = "This Site has no eligible subscribers.";
+    toastError("This Site has no eligible subscribers.");
     return;
   }
   if (sendMode.value === "schedule" && !scheduledLocal.value) {
-    error.value = "Choose a send time.";
+    toastError("Choose a send time.");
     return;
   }
   sending.value = true;
-  error.value = "";
   try {
     await api.post(
       `/email/campaigns/${encodeURIComponent(campaign.value.id)}/send`,
@@ -318,7 +352,7 @@ async function approveSend() {
     );
     await router.push("/email/campaigns");
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Unable to queue campaign.";
+    toastFromUnknown(caught, "Unable to queue campaign.");
   } finally {
     sending.value = false;
   }
@@ -377,12 +411,12 @@ onBeforeUnmount(() => {
           :class="{
             'is-current': step === number,
             'is-visited': number <= step,
-            'is-jumpable': step === 3 && number === 2,
+            'is-jumpable': number < step,
           }"
           :aria-label="number === 1 ? 'Choose email list' : number === 2 ? 'Compose campaign' : 'Review campaign'"
           :aria-current="step === number ? 'step' : undefined"
-          :disabled="number > step || (number === 1 && Boolean(campaign))"
-          @click="number === 2 && step === 3 ? (step = 2) : undefined"
+          :disabled="number > step"
+          @click="goToPreviousStep(number)"
         >
           <span class="progress-step-dot" aria-hidden="true">
             <span v-if="step === number" class="progress-step-core" />
@@ -395,10 +429,16 @@ onBeforeUnmount(() => {
     <main class="campaign-wizard-shell">
 
       <PageLoading v-if="loading" label="Opening campaign builder…" />
-      <p v-else-if="error && !campaign" class="notice notice--error" role="alert">{{ error }}</p>
+      <section v-else-if="loadFailed" class="availability-card" aria-labelledby="campaign-builder-load-failed">
+        <UiIcon name="Info" :size="22" aria-hidden="true" />
+        <div>
+          <h1 id="campaign-builder-load-failed">Campaign builder could not be opened</h1>
+          <p>Check your connection and try again.</p>
+          <Button color="primary" shape="soft" @click="initialize">Try again</Button>
+        </div>
+      </section>
 
       <template v-else>
-        <p v-if="error" class="notice notice--error" role="alert">{{ error }}</p>
         <section v-if="!canDraftCampaign && !campaign" class="availability-card">
           <UiIcon name="Info" :size="22" aria-hidden="true" />
           <div>
@@ -408,8 +448,8 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section v-else-if="!campaign" class="start-card">
-          <h1>Create Email Campaign</h1>
+        <section v-else-if="step === 1" class="start-card">
+          <h1>{{ campaign ? "Choose email list" : "Create Email Campaign" }}</h1>
           <label class="field">
             <span>Email list</span>
             <select v-model="selectedSiteId">
@@ -417,12 +457,18 @@ onBeforeUnmount(() => {
               <option v-for="site in sites.sites" :key="site.id" :value="site.id">@{{ site.username }}</option>
             </select>
           </label>
-          <Button color="neutral" shape="soft" size="large" :disabled="!canCreate || creating" @click="createDraft">
-            {{ creating ? "Creating…" : "Start composing" }}
+          <Button
+            color="neutral"
+            shape="soft"
+            size="large"
+            :disabled="campaign ? !selectedSiteId || saving : !canCreate || creating"
+            @click="continueFromList"
+          >
+            {{ creating ? "Creating…" : campaign ? "Next" : "Start composing" }}
           </Button>
         </section>
 
-        <template v-else-if="step === 2">
+        <template v-else-if="campaign && step === 2">
           <section class="compose-heading">
             <h1>Compose campaign</h1>
           </section>
@@ -438,36 +484,6 @@ onBeforeUnmount(() => {
                     placeholder="The name subscribers will see"
                   />
                 </label>
-                <fieldset class="campaign-logo-settings field--wide">
-                  <legend>Email header image</legend>
-                  <div class="campaign-logo-settings__fields">
-                    <label class="field">
-                      <span>Image URL</span>
-                      <input
-                        v-model="brand.logoUrl"
-                        type="url"
-                        placeholder="Leave blank for no header image"
-                      />
-                    </label>
-                    <label v-if="brand.logoUrl" class="field">
-                      <span>Alignment</span>
-                      <select v-model="brand.logoAlignment">
-                        <option value="left">Left</option>
-                        <option value="center">Center</option>
-                      </select>
-                    </label>
-                  </div>
-                  <Button
-                    v-if="brand.logoUrl"
-                    color="ghost"
-                    shape="soft"
-                    size="small"
-                    type="button"
-                    @click="brand.logoUrl = null"
-                  >
-                    Remove image
-                  </Button>
-                </fieldset>
                 <label class="field field--wide"><span>Subject</span><input v-model="subject" maxlength="200" placeholder="A useful update" /></label>
                 <label class="field field--wide"><span>Preview text</span><input v-model="previewText" maxlength="240" placeholder="A short line shown beside the subject" /></label>
                 <label class="field field--wide">
@@ -501,12 +517,12 @@ onBeforeUnmount(() => {
           </div>
 
           <nav class="wizard-actions" aria-label="Campaign steps">
-            <Button color="secondary" shape="soft" size="large" :disabled="saving" @click="saveAndExit">Save and exit</Button>
-            <Button color="neutral" shape="soft" size="large" :disabled="!canReview || saving" @click="continueToReview">Review audience</Button>
+            <Button color="secondary" shape="soft" size="large" :disabled="saving" @click="goToPreviousStep(1)">Back</Button>
+            <Button color="neutral" shape="soft" size="large" :disabled="!canReview || saving" @click="continueToReview">Next</Button>
           </nav>
         </template>
 
-        <template v-else>
+        <template v-else-if="campaign">
           <div class="send-review">
             <section class="review-heading">
               <h1>Review and schedule</h1>
@@ -570,7 +586,7 @@ onBeforeUnmount(() => {
               <Button class="send-action-primary" color="neutral" shape="soft" size="large" :disabled="sending || !review?.transport.ready || !review?.audience.eligibleCount" @click="approveSend">
                 {{ sending ? "Queuing…" : sendMode === "schedule" ? "Schedule campaign" : "Send campaign" }}
               </Button>
-              <Button class="send-action-back" color="secondary" shape="soft" size="large" @click="step = 2">Back</Button>
+              <Button class="send-action-back" color="secondary" shape="soft" size="large" @click="goToPreviousStep(2)">Back</Button>
             </nav>
           </div>
         </template>
@@ -606,8 +622,7 @@ onBeforeUnmount(() => {
 .progress-step:focus-visible .progress-step-dot { box-shadow: 0 0 0 4px var(--ui-border, var(--color-border)); }
 .progress-step-core { width: 8px; height: 8px; border-radius: 999px; background: currentColor; }
 .progress-step-check { font-size: 11px; font-weight: 700; line-height: 1; }
-.notice, .availability-card { margin-bottom: 20px; padding: 15px 16px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface-muted, var(--color-bg-subtle)); }
-.notice--error { color: var(--ui-danger, #b42318); }
+.availability-card { margin-bottom: 20px; padding: 15px 16px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 12px); background: var(--ui-surface-muted, var(--color-bg-subtle)); }
 .availability-card { display: flex; max-width: 680px; gap: 16px; margin: 70px auto; }
 .availability-card h1, .availability-card p { margin: 0 0 10px; }
 .availability-card p { color: var(--ui-text-muted, var(--color-text-muted)); line-height: 1.55; }
@@ -622,13 +637,10 @@ onBeforeUnmount(() => {
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 22px; }
 .field--wide { grid-column: 1 / -1; }
 .field { display: grid; gap: 6px; min-width: 0; }
-.field > span, .section-label > span, .send-choice legend, .campaign-logo-settings legend { font-size: .8rem; font-weight: 750; }
+.field > span, .section-label > span, .send-choice legend { font-size: .8rem; font-weight: 750; }
 .field small, .section-label small { color: var(--ui-text-muted, var(--color-text-muted)); font-size: .74rem; }
 .field input, .field select { width: 100%; min-height: 42px; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: 9px; background: var(--ui-surface, var(--color-bg)); color: var(--ui-text, var(--color-text)); font: inherit; }
 .field input:focus, .field select:focus { outline: 2px solid var(--ui-primary, var(--ui-accent)); outline-offset: 1px; }
-.campaign-logo-settings { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 14px; border: 1px solid var(--ui-border, var(--color-border)); border-radius: var(--ui-radius-md, 10px); }
-.campaign-logo-settings__fields { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 10px; }
-.campaign-logo-settings :deep(.me3-btn) { justify-self: start; }
 .section-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
 .wizard-actions { display: flex; justify-content: space-between; gap: 12px; padding-top: 40px; }
 .send-review { display: grid; width: min(100%, 720px); gap: 28px; margin: 0 auto; }
@@ -667,7 +679,6 @@ details ul { margin-bottom: 0; color: var(--ui-text-muted, var(--color-text-mute
   .progress-step-dot { width: 16px; height: 16px; }
   .progress-step.is-current .progress-step-dot { width: 20px; height: 20px; }
   .field-grid { grid-template-columns: 1fr; }
-  .campaign-logo-settings__fields { grid-template-columns: 1fr; }
   .wizard-actions { flex-direction: column-reverse; }
   .wizard-actions :deep(.me3-btn) { width: 100%; }
   .audience-count { align-items: flex-start; }

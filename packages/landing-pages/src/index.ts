@@ -6,6 +6,22 @@ import {
   normalizeLandingPageDesignPackId,
   type LandingPageDesignPackId,
 } from "./design-packs";
+import {
+  businessSitePageHref,
+  type BusinessSiteDocumentV1,
+} from "./business-sites";
+
+export {
+  BUSINESS_SITE_DOCUMENT_VERSION,
+  businessSitePageHref,
+  createBusinessSiteDocument,
+  normalizeBusinessSiteDocument,
+  normalizeBusinessSitePath,
+  normalizeBusinessSiteSlug,
+  type BusinessSiteDocumentV1,
+  type BusinessSiteLink,
+  type BusinessSiteNavigationItem,
+} from "./business-sites";
 
 export {
   LANDING_PAGE_DESIGN_PACK_IDS,
@@ -315,6 +331,71 @@ export type LandingPageV3Section =
       heading: string;
       body: string;
       actionId: string;
+    }
+  | {
+      id: string;
+      type: "image-text";
+      heading: string;
+      body: string;
+      image: string;
+      imageAlt: string;
+      imagePosition?: "left" | "right";
+    }
+  | {
+      id: string;
+      type: "testimonials";
+      heading: string;
+      items: Array<{ quote: string; name: string; role?: string }>;
+    }
+  | {
+      id: string;
+      type: "team";
+      heading: string;
+      body?: string;
+      items: Array<{
+        name: string;
+        role: string;
+        bio: string;
+        image?: string | null;
+      }>;
+    }
+  | {
+      id: string;
+      type: "pricing";
+      heading: string;
+      body?: string;
+      items: Array<{
+        name: string;
+        price: string;
+        description: string;
+        features: string[];
+        actionId?: string;
+      }>;
+    }
+  | {
+      id: string;
+      type: "logo-row";
+      heading: string;
+      items: Array<{ name: string; image?: string | null; href?: string }>;
+    }
+  | {
+      id: string;
+      type: "collection";
+      heading: string;
+      body?: string;
+      items: Array<{
+        title: string;
+        body: string;
+        href?: string;
+        image?: string | null;
+        label?: string;
+      }>;
+    }
+  | {
+      id: string;
+      type: "legal";
+      heading: string;
+      body: string;
     };
 
 export interface LandingPageDocumentV3 {
@@ -327,6 +408,8 @@ export interface LandingPageDocumentV3 {
     headline: string;
     subheadline: string;
     image?: string | null;
+    imageLayout?: "split" | "background";
+    showActions?: boolean;
     primaryActionId: string;
     secondaryActionId?: string;
     metadata?: Array<{ label: string; value: string }>;
@@ -645,6 +728,10 @@ export function normalizeLandingPageDocument(
       return null;
     }
     if (
+      (page.hero.imageLayout !== undefined &&
+        !["split", "background"].includes(page.hero.imageLayout)) ||
+      (page.hero.showActions !== undefined &&
+        typeof page.hero.showActions !== "boolean") ||
       hasDesignPackId !== hasDesignPackVersion ||
       (page.design.packId !== undefined && !designPackId) ||
       (page.design.packVersion !== undefined && page.design.packVersion !== 1) ||
@@ -856,6 +943,52 @@ export function getLandingPageSections(
           items: section.items,
         },
       ];
+    }
+    if (section.type === "testimonials") {
+      return [{
+        type: "list",
+        heading: section.heading,
+        items: section.items.map((item) => `${item.quote} — ${item.name}`),
+      }];
+    }
+    if (section.type === "team") {
+      return [{
+        type: "list",
+        heading: section.heading,
+        items: section.items.map((item) => `${item.name}, ${item.role}: ${item.bio}`),
+      }];
+    }
+    if (section.type === "pricing") {
+      return [{
+        type: "list",
+        heading: section.heading,
+        items: section.items.map((item) => `${item.name} — ${item.price}: ${item.description}`),
+      }];
+    }
+    if (section.type === "logo-row") {
+      return [{
+        type: "list",
+        heading: section.heading,
+        items: section.items.map((item) => item.name),
+      }];
+    }
+    if (section.type === "collection") {
+      return [{
+        type: "list",
+        heading: section.heading,
+        items: section.items.map((item) => `${item.title}: ${item.body}`),
+      }];
+    }
+    if (section.type === "image-text") {
+      return [{
+        type: "image",
+        heading: section.heading,
+        image: section.image,
+        caption: section.body,
+      }];
+    }
+    if (section.type === "legal") {
+      return [{ type: "text", heading: section.heading, body: section.body }];
     }
     return [{ type: "text", heading: section.heading, body: section.body }];
   });
@@ -1529,6 +1662,9 @@ export type LandingPageRenderContext = {
   actionUsername?: string;
   bookingPaymentMethods?: Record<string, "free" | "stripe" | "manual">;
   productPaymentMethods?: Record<string, "stripe" | "manual">;
+  businessSite?: BusinessSiteDocumentV1;
+  canonicalUrl?: string;
+  siteBasePath?: string;
 };
 
 function renderLegacyLandingPageHtmlV3(
@@ -1566,14 +1702,36 @@ function renderLegacyLandingPageHtmlV3(
             actionUsername,
             context,
           )
-        : renderLandingSectionV2(section),
+        : renderLegacyV3Section(section),
     )
     .join("");
   const socialImage = page.seo.socialImage
-    ? `<meta property="og:image" content="${escapeHtml(page.seo.socialImage)}">`
+    ? `<meta property="og:image" content="${escapeHtml(resolveBusinessSiteAsset(context, page.seo.socialImage))}">`
     : "";
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.seo.title)}</title><meta name="description" content="${escapeHtml(page.seo.description)}"><meta property="og:title" content="${escapeHtml(page.seo.title)}"><meta property="og:description" content="${escapeHtml(page.seo.description)}">${socialImage}<style>${renderLandingPageCssV2(theme)}${renderActionCss()}</style></head><body data-theme="${escapeHtml(page.design.theme)}"><a href="#main" class="skip-link">Skip to content</a><header class="site-top"><div class="shell site-top-inner"><strong>${escapeHtml(username)}</strong>${primaryAction ? `<a class="top-action" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}</div></header><main id="main"><section class="hero"><div class="shell hero-grid"><div class="hero-copy">${metadata ? `<div class="meta-grid">${metadata}</div>` : ""}<h1>${escapeHtml(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p><div class="hero-actions">${primaryAction ? `<a class="button primary" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}${secondaryAction ? `<a class="button secondary" href="${escapeHtml(actionHref(secondaryAction))}">${escapeHtml(secondaryAction.label)}</a>` : ""}</div></div><div class="hero-visual">${heroVisual}</div></div></section>${sections}</main><script>${landingActionScript()}</script></body></html>`;
+}
+
+function renderLegacyV3Section(
+  section: Exclude<LandingPageV3Section, { type: "action" }>,
+): string {
+  if (
+    section.type === "story" ||
+    section.type === "feature-list" ||
+    section.type === "details" ||
+    section.type === "steps" ||
+    section.type === "profile" ||
+    section.type === "faq"
+  ) {
+    return renderLandingSectionV2(section);
+  }
+  const summary =
+    "body" in section && typeof section.body === "string"
+      ? section.body
+      : "items" in section
+        ? `${section.items.length} items`
+        : "";
+  return `<section id="${escapeHtml(section.id)}" class="section"><div class="shell"><h2>${escapeHtml(section.heading)}</h2>${summary ? `<p>${escapeHtml(summary)}</p>` : ""}</div></section>`;
 }
 
 function renderStarterLandingPageHtml(
@@ -1591,7 +1749,7 @@ function renderStarterLandingPageHtml(
     : null;
   const actionHref = (action: LandingPageAction | null) =>
     action?.kind === "link"
-      ? action.href || "#"
+      ? resolveBusinessSiteHref(context, action.href || "#")
       : action
         ? `#action-${action.id}`
         : "#main";
@@ -1602,6 +1760,9 @@ function renderStarterLandingPageHtml(
         `<div><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></div>`,
     )
     .join("");
+  const heroImage = page.hero.image || page.assets.heroImage || page.assets.sectionImage;
+  const backgroundHero = page.hero.imageLayout === "background" && !!heroImage;
+  const showHeroActions = page.hero.showActions !== false;
   const sections = page.content.sections
     .map((section, index) =>
       renderStarterLandingPageSection(
@@ -1614,14 +1775,121 @@ function renderStarterLandingPageHtml(
     )
     .join("");
   const socialImage = page.seo.socialImage
-    ? `<meta property="og:image" content="${escapeHtml(page.seo.socialImage)}">`
+    ? `<meta property="og:image" content="${escapeHtml(resolveBusinessSiteAsset(context, page.seo.socialImage))}">`
     : "";
   const pack = getLandingPageDesignPack(designPackId);
+  const canonical = context.canonicalUrl
+    ? `<link rel="canonical" href="${escapeHtml(context.canonicalUrl)}"><meta property="og:url" content="${escapeHtml(context.canonicalUrl)}">`
+    : "";
+  const robots = context.businessSite?.seo.indexing === "noindex"
+    ? `<meta name="robots" content="noindex,nofollow">`
+    : "";
+  const organizationSchema = context.businessSite
+    ? renderBusinessSiteOrganizationSchema(context.businessSite, context.canonicalUrl, context)
+    : "";
   const announcement =
     designPackId === "starter-service-01"
       ? `<div class="pack-announcement" aria-hidden="true"><span>Clear offer · useful work · decisive next step · </span><span>Clear offer · useful work · decisive next step · </span></div>`
       : "";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.seo.title)}</title><meta name="description" content="${escapeHtml(page.seo.description)}"><meta property="og:title" content="${escapeHtml(page.seo.title)}"><meta property="og:description" content="${escapeHtml(page.seo.description)}">${socialImage}${starterLandingPageFontLinks(page, designPackId)}<style>${renderStarterLandingPageCss(page, designPackId)}${renderActionCss()}</style></head><body data-theme="${escapeHtml(page.design.theme)}" data-design-pack="${escapeHtml(designPackId)}" data-design-pack-version="${pack.version}"><a href="#main" class="skip-link">Skip to content</a>${announcement}<header class="pack-header shell"><a class="pack-brand" href="#">${escapeHtml(username)}</a><nav aria-label="Page navigation"><a href="#${escapeHtml(firstSection)}">Explore</a>${primaryAction ? `<a class="pack-nav-action" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}</nav></header><main id="main"><header class="pack-hero"><div class="shell pack-hero-grid"><div class="pack-hero-copy"><span class="pack-kicker">${escapeHtml(page.intent.audience)}</span><h1>${renderStarterHeadline(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p><div class="pack-hero-actions">${primaryAction ? `<a class="button primary" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}${secondaryAction ? `<a class="button secondary" href="${escapeHtml(actionHref(secondaryAction))}">${escapeHtml(secondaryAction.label)}</a>` : ""}</div></div><aside class="pack-hero-aside" aria-label="Page highlights">${renderStarterLandingPageVisual(page, designPackId)}${metadata ? `<div class="pack-meta">${metadata}</div>` : ""}</aside></div></header>${sections}</main><footer class="pack-footer"><div class="shell"><span>${escapeHtml(username)}</span><span>Built with ME3</span></div></footer><script>${landingActionScript()}</script></body></html>`;
+  const header = context.businessSite
+    ? renderBusinessSiteHeader(context.businessSite, primaryAction, actionHref, context)
+    : `<header class="pack-header shell"><a class="pack-brand" href="#">${escapeHtml(username)}</a><nav aria-label="Page navigation"><a href="#${escapeHtml(firstSection)}">Explore</a>${primaryAction ? `<a class="pack-nav-action" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}</nav></header>`;
+  const footer = context.businessSite
+    ? renderBusinessSiteFooter(context.businessSite, context)
+    : `<footer class="pack-footer"><div class="shell"><span>${escapeHtml(username)}</span><span>Built with ME3</span></div></footer>`;
+  const heroActions = showHeroActions
+    ? `<div class="pack-hero-actions">${primaryAction ? `<a class="button primary" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}${secondaryAction ? `<a class="button secondary" href="${escapeHtml(actionHref(secondaryAction))}">${escapeHtml(secondaryAction.label)}</a>` : ""}</div>`
+    : "";
+  const hero = backgroundHero
+    ? `<header class="pack-hero pack-hero-background"><figure class="pack-hero-media" aria-hidden="true"><img src="${escapeHtml(resolveBusinessSiteAsset(context, heroImage))}" alt="" loading="eager" decoding="async" fetchpriority="high"></figure><div class="shell pack-hero-grid"><div class="pack-hero-copy"><span class="pack-kicker">${escapeHtml(page.intent.audience)}</span><h1>${renderStarterHeadline(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p>${heroActions}${metadata ? `<div class="pack-meta">${metadata}</div>` : ""}</div></div></header>`
+    : `<header class="pack-hero"><div class="shell pack-hero-grid"><div class="pack-hero-copy"><span class="pack-kicker">${escapeHtml(page.intent.audience)}</span><h1>${renderStarterHeadline(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p>${heroActions}</div><aside class="pack-hero-aside" aria-label="Page highlights">${renderStarterLandingPageVisual(page, designPackId, context)}${metadata ? `<div class="pack-meta">${metadata}</div>` : ""}</aside></div></header>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.seo.title)}</title><meta name="description" content="${escapeHtml(page.seo.description)}"><meta property="og:type" content="website"><meta property="og:title" content="${escapeHtml(page.seo.title)}"><meta property="og:description" content="${escapeHtml(page.seo.description)}">${socialImage}${canonical}${robots}${organizationSchema}${starterLandingPageFontLinks(page, designPackId)}<style>${renderStarterLandingPageCss(page, designPackId)}${renderActionCss()}</style></head><body data-theme="${escapeHtml(page.design.theme)}" data-design-pack="${escapeHtml(designPackId)}" data-design-pack-version="${pack.version}" data-hero-layout="${backgroundHero ? "background" : "split"}"${context.businessSite ? " data-business-site" : ""}><a href="#main" class="skip-link">Skip to content</a>${announcement}${header}<main id="main">${hero}${sections}</main>${footer}<script>${landingNavigationScript()}${landingActionScript()}</script></body></html>`;
+}
+
+function renderBusinessSiteHeader(
+  site: BusinessSiteDocumentV1,
+  primaryAction: LandingPageAction | null,
+  actionHref: (action: LandingPageAction | null) => string,
+  context: LandingPageRenderContext,
+): string {
+  const items = site.navigation.items
+    .filter((item) => item.visible)
+    .map((item) => {
+      const href = item.pageSlug
+        ? businessSitePageHref(site, item.pageSlug)
+        : item.href || "#";
+      return `<a href="${escapeHtml(resolveBusinessSiteHref(context, href))}">${escapeHtml(item.label)}</a>`;
+    })
+    .join("");
+  const brand = site.organization.logo
+    ? `<img src="${escapeHtml(resolveBusinessSiteAsset(context, site.organization.logo))}" alt="${escapeHtml(site.name)}">`
+    : escapeHtml(site.name);
+  return `<header class="pack-header shell"><a class="pack-brand" href="${escapeHtml(resolveBusinessSiteHref(context, "/"))}">${brand}</a><button class="pack-menu-toggle" type="button" aria-expanded="false" aria-controls="pack-site-navigation" aria-label="Open site menu"><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span></button><nav id="pack-site-navigation" aria-label="Site navigation">${items}${primaryAction ? `<a class="pack-nav-action" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}</nav></header>`;
+}
+
+function renderBusinessSiteFooter(
+  site: BusinessSiteDocumentV1,
+  context: LandingPageRenderContext,
+): string {
+  const links = site.footer.links
+    .map((link) => `<a href="${escapeHtml(resolveBusinessSiteHref(context, link.href))}">${escapeHtml(link.label)}</a>`)
+    .join("");
+  return `<footer class="pack-footer"><div class="shell"><div><strong>${escapeHtml(site.name)}</strong>${site.footer.note ? `<p>${escapeHtml(site.footer.note)}</p>` : ""}</div>${links ? `<nav aria-label="Footer navigation">${links}</nav>` : ""}<span>Built with ME3</span></div></footer>`;
+}
+
+function resolveBusinessSiteHref(
+  context: LandingPageRenderContext,
+  href: string,
+): string {
+  const basePath = context.siteBasePath?.trim().replace(/\/+$/, "");
+  if (
+    !context.businessSite ||
+    !basePath ||
+    !href.startsWith("/") ||
+    href.startsWith("//") ||
+    href === basePath ||
+    href.startsWith(`${basePath}/`)
+  ) {
+    return href;
+  }
+  return `${basePath}${href}`;
+}
+
+function resolveBusinessSiteAsset(
+  context: LandingPageRenderContext,
+  source: string,
+): string {
+  if (
+    !context.businessSite ||
+    /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(source)
+  ) {
+    return source;
+  }
+  return resolveBusinessSiteHref(
+    context,
+    source.startsWith("/") ? source : `/${source}`,
+  );
+}
+
+function renderBusinessSiteOrganizationSchema(
+  site: BusinessSiteDocumentV1,
+  canonicalUrl?: string,
+  context: LandingPageRenderContext = {},
+): string {
+  const data = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: site.name,
+    ...(site.organization.description ? { description: site.organization.description } : {}),
+    ...(site.organization.logo
+      ? { logo: resolveBusinessSiteAsset(context, site.organization.logo) }
+      : {}),
+    ...(site.organization.email ? { email: site.organization.email } : {}),
+    ...(site.organization.telephone ? { telephone: site.organization.telephone } : {}),
+    ...(site.organization.address ? { address: site.organization.address } : {}),
+    ...(canonicalUrl ? { url: new URL(canonicalUrl).origin } : {}),
+  };
+  return `<script type="application/ld+json">${JSON.stringify(data).replace(/</g, "\\u003c")}</script>`;
 }
 
 function renderStarterHeadline(headline: string): string {
@@ -1631,19 +1899,94 @@ function renderStarterHeadline(headline: string): string {
   return `${words.length ? `${escapeHtml(words.join(" "))} ` : ""}<em>${escapeHtml(finalWord)}</em>`;
 }
 
+const STARTER_RICH_TEXT_TAGS = new Set([
+  "p",
+  "strong",
+  "em",
+  "u",
+  "s",
+  "h2",
+  "h3",
+  "ul",
+  "ol",
+  "li",
+  "blockquote",
+  "hr",
+  "br",
+  "a",
+]);
+
+function renderStarterRichTextBody(value: string, className = ""): string {
+  if (!/<\/?[a-z][^>]*>/i.test(value)) {
+    return `<p${className ? ` class="${className}"` : ""}>${escapeHtml(value)}</p>`;
+  }
+  const classes = [className, "pack-rich-text"].filter(Boolean).join(" ");
+  return `<div class="${classes}">${sanitizeStarterRichText(value)}</div>`;
+}
+
+function sanitizeStarterRichText(value: string): string {
+  let result = "";
+  let cursor = 0;
+  while (cursor < value.length) {
+    const tagStart = value.indexOf("<", cursor);
+    if (tagStart < 0) {
+      result += value.slice(cursor);
+      break;
+    }
+    result += value.slice(cursor, tagStart);
+    const tagEnd = value.indexOf(">", tagStart + 1);
+    if (tagEnd < 0) {
+      result += "&lt;";
+      cursor = tagStart + 1;
+      continue;
+    }
+    const source = value.slice(tagStart + 1, tagEnd).trim();
+    const parsed = source.match(/^(\/)?\s*([a-z0-9-]+)/i);
+    if (parsed) {
+      const closing = Boolean(parsed[1]);
+      const tag = parsed[2].toLowerCase();
+      if (STARTER_RICH_TEXT_TAGS.has(tag)) {
+        if (closing) {
+          if (tag !== "hr" && tag !== "br") result += `</${tag}>`;
+        } else if (tag === "a") {
+          const hrefMatch = source.match(
+            /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i,
+          );
+          const href = hrefMatch?.[1] || hrefMatch?.[2] || hrefMatch?.[3] || "#";
+          const safeHref = /^(?:https?:|mailto:|tel:|#|\/(?!\/)|\.\.?\/)/i.test(href)
+            ? href
+            : "#";
+          const external = /^https?:\/\//i.test(safeHref)
+            ? ' target="_blank" rel="noopener noreferrer"'
+            : "";
+          result += `<a href="${escapeHtml(safeHref)}"${external}>`;
+        } else {
+          result += `<${tag}>`;
+        }
+      }
+    }
+    cursor = tagEnd + 1;
+  }
+  return result;
+}
+
 function renderStarterLandingPageVisual(
   page: LandingPageDocumentV3,
   designPackId: LandingPageDesignPackId,
+  context: LandingPageRenderContext,
 ): string {
   const image = page.hero.image || page.assets.heroImage || page.assets.sectionImage;
   if (image) {
-    return `<figure class="pack-hero-image"><img src="${escapeHtml(image)}" alt="" loading="eager" decoding="async"></figure>`;
+    return `<figure class="pack-hero-image"><img src="${escapeHtml(resolveBusinessSiteAsset(context, image))}" alt="" loading="eager" decoding="async"></figure>`;
   }
   if (designPackId === "starter-event-01") {
     return `<div class="event-landscape" aria-hidden="true"><span class="event-sun"></span><span class="event-hill event-hill-one"></span><span class="event-hill event-hill-two"></span></div>`;
   }
   if (designPackId === "starter-service-01") {
     return `<div class="service-poster" aria-hidden="true"><span class="service-poster-word">MAKE</span><span class="service-poster-orbit"></span><span class="service-poster-word">IT CLEAR</span><span class="service-poster-note">Useful beats impressive.</span></div>`;
+  }
+  if (designPackId === "clinical-editorial-01") {
+    return `<div class="clinical-field" aria-hidden="true"><span class="clinical-orb"></span><span class="clinical-line clinical-line-one"></span><span class="clinical-line clinical-line-two"></span><strong>${escapeHtml(page.intent.offerName)}</strong></div>`;
   }
   return `<div class="waitlist-orbit" aria-hidden="true"><span class="orbit-ring orbit-ring-one"></span><span class="orbit-ring orbit-ring-two"></span><span class="orbit-ring orbit-ring-three"></span><article><span class="pack-kicker">Signal detected</span><strong>${escapeHtml(page.intent.offerName)}</strong><p>${escapeHtml(page.intent.goal)}</p><div><span>Ready</span><span>Focused</span><span>Early</span></div></article></div>`;
 }
@@ -1659,7 +2002,7 @@ function renderStarterLandingPageSection(
   const heading = escapeHtml(section.heading);
   const label = `<span class="pack-section-number">${sectionNumber}</span>`;
   if (section.type === "story") {
-    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-story"><div class="shell pack-split">${label}<div><h2>${heading}</h2><p class="pack-lead">${escapeHtml(section.body)}</p></div></div></section>`;
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-story"><div class="shell pack-split">${label}<div><h2>${heading}</h2>${renderStarterRichTextBody(section.body, "pack-lead")}</div></div></section>`;
   }
   if (section.type === "feature-list") {
     return `<section id="${escapeHtml(section.id)}" class="pack-section pack-features"><div class="shell"><header class="pack-section-head">${label}<div><h2>${heading}</h2>${section.body ? `<p>${escapeHtml(section.body)}</p>` : ""}</div></header><div class="pack-card-grid">${section.items.map((item, itemIndex) => `<article><span class="pack-card-number">${String(itemIndex + 1).padStart(2, "0")}</span><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.body)}</p></article>`).join("")}</div></div></section>`;
@@ -1672,18 +2015,54 @@ function renderStarterLandingPageSection(
   }
   if (section.type === "profile") {
     const profileVisual = section.profileImage
-      ? `<img src="${escapeHtml(section.profileImage)}" alt="${escapeHtml(section.profileName ? `${section.profileName} profile photo` : "Profile photo")}" loading="lazy" decoding="async">`
+      ? `<img src="${escapeHtml(resolveBusinessSiteAsset(context, section.profileImage))}" alt="${escapeHtml(section.profileName ? `${section.profileName} profile photo` : "Profile photo")}" loading="lazy" decoding="async">`
       : `<span class="pack-profile-shape" aria-hidden="true"></span>`;
-    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-profile"><div class="shell pack-profile-grid"><div class="pack-profile-visual">${profileVisual}</div><div>${label}<h2>${heading}</h2><p class="pack-lead">${escapeHtml(landingPageProfileBio(section.body))}</p>${section.profileName ? `<strong class="pack-profile-name">${escapeHtml(section.profileName)}${section.profileRole ? ` · ${escapeHtml(section.profileRole)}` : ""}</strong>` : ""}${section.profileLink ? `<a class="pack-text-link" href="${escapeHtml(section.profileLink)}">Visit profile</a>` : ""}</div></div></section>`;
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-profile"><div class="shell pack-profile-grid"><div class="pack-profile-visual">${profileVisual}</div><div>${label}<h2>${heading}</h2>${renderStarterRichTextBody(landingPageProfileBio(section.body), "pack-lead")}${section.profileName ? `<strong class="pack-profile-name">${escapeHtml(section.profileName)}${section.profileRole ? ` · ${escapeHtml(section.profileRole)}` : ""}</strong>` : ""}${section.profileLink ? `<a class="pack-text-link" href="${escapeHtml(resolveBusinessSiteHref(context, section.profileLink))}">Visit profile</a>` : ""}</div></div></section>`;
   }
   if (section.type === "faq") {
     return `<section id="${escapeHtml(section.id)}" class="pack-section pack-faq"><div class="shell pack-split">${label}<div><h2>${heading}</h2><div class="pack-faq-list">${section.items.map((item) => `<details><summary>${escapeHtml(item.question)}</summary><p>${escapeHtml(item.answer)}</p></details>`).join("")}</div></div></div></section>`;
+  }
+  if (section.type === "image-text") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-image-text"><div class="shell pack-media-grid${section.imagePosition === "right" ? " image-right" : ""}"><figure><img src="${escapeHtml(resolveBusinessSiteAsset(context, section.image))}" alt="${escapeHtml(section.imageAlt)}" loading="lazy" decoding="async"></figure><div>${label}<h2>${heading}</h2>${renderStarterRichTextBody(section.body, "pack-lead")}</div></div></section>`;
+  }
+  if (section.type === "testimonials") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-testimonials"><div class="shell"><header class="pack-section-head">${label}<h2>${heading}</h2></header><div class="pack-quote-grid">${section.items.map((item) => `<figure><blockquote>${escapeHtml(item.quote)}</blockquote><figcaption>${escapeHtml(item.name)}${item.role ? ` · ${escapeHtml(item.role)}` : ""}</figcaption></figure>`).join("")}</div></div></section>`;
+  }
+  if (section.type === "team") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-team"><div class="shell"><header class="pack-section-head">${label}<div><h2>${heading}</h2>${section.body ? `<p>${escapeHtml(section.body)}</p>` : ""}</div></header><div class="pack-team-grid">${section.items.map((item) => `<article>${item.image ? `<img src="${escapeHtml(resolveBusinessSiteAsset(context, item.image))}" alt="${escapeHtml(`${item.name} profile photo`)}" loading="lazy" decoding="async">` : ""}<h3>${escapeHtml(item.name)}</h3><strong>${escapeHtml(item.role)}</strong><p>${escapeHtml(item.bio)}</p></article>`).join("")}</div></div></section>`;
+  }
+  if (section.type === "pricing") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-pricing"><div class="shell"><header class="pack-section-head">${label}<div><h2>${heading}</h2>${section.body ? `<p>${escapeHtml(section.body)}</p>` : ""}</div></header><div class="pack-price-grid">${section.items.map((item) => {
+      const itemAction = item.actionId ? actions.get(item.actionId) : undefined;
+      const href = itemAction?.kind === "link"
+        ? resolveBusinessSiteHref(context, itemAction.href || "#")
+        : itemAction
+          ? `#action-${itemAction.id}`
+          : null;
+      return `<article><h3>${escapeHtml(item.name)}</h3><strong class="pack-price">${escapeHtml(item.price)}</strong><p>${escapeHtml(item.description)}</p><ul>${item.features.map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}</ul>${href && itemAction ? `<a class="button secondary" href="${escapeHtml(href)}">${escapeHtml(itemAction.label)}</a>` : ""}</article>`;
+    }).join("")}</div></div></section>`;
+  }
+  if (section.type === "logo-row") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-logos"><div class="shell"><header class="pack-section-head">${label}<h2>${heading}</h2></header><div class="pack-logo-row">${section.items.map((item) => {
+      const content = item.image
+        ? `<img src="${escapeHtml(resolveBusinessSiteAsset(context, item.image))}" alt="${escapeHtml(item.name)}" loading="lazy" decoding="async">`
+        : `<strong>${escapeHtml(item.name)}</strong>`;
+      return item.href
+        ? `<a href="${escapeHtml(resolveBusinessSiteHref(context, item.href))}">${content}</a>`
+        : `<span>${content}</span>`;
+    }).join("")}</div></div></section>`;
+  }
+  if (section.type === "collection") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-collection"><div class="shell"><header class="pack-section-head">${label}<div><h2>${heading}</h2>${section.body ? `<p>${escapeHtml(section.body)}</p>` : ""}</div></header><div class="pack-collection-grid">${section.items.map((item) => `<article>${item.image ? `<img src="${escapeHtml(resolveBusinessSiteAsset(context, item.image))}" alt="" loading="lazy" decoding="async">` : ""}${item.label ? `<span class="pack-kicker">${escapeHtml(item.label)}</span>` : ""}<h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.body)}</p>${item.href ? `<a class="pack-text-link" href="${escapeHtml(resolveBusinessSiteHref(context, item.href))}">Learn more</a>` : ""}</article>`).join("")}</div></div></section>`;
+  }
+  if (section.type === "legal") {
+    return `<section id="${escapeHtml(section.id)}" class="pack-section pack-legal"><div class="shell pack-split">${label}<div><h2>${heading}</h2>${renderStarterRichTextBody(section.body)}</div></div></section>`;
   }
   const action = actions.get(section.actionId);
   const widget = action
     ? renderLandingAction(action, username, context)
     : `<p class="action-error" role="alert">This action is no longer available.</p>`;
-  return `<section id="action-${escapeHtml(section.actionId)}" class="pack-section pack-action"><div class="shell pack-action-grid"><div>${label}<h2>${heading}</h2><p>${escapeHtml(section.body)}</p></div><div class="pack-action-widget">${widget}</div></div></section>`;
+  return `<section id="action-${escapeHtml(section.actionId)}" class="pack-section pack-action"><div class="shell pack-action-grid"><div>${label}<h2>${heading}</h2>${renderStarterRichTextBody(section.body)}</div><div class="pack-action-widget">${widget}</div></div></section>`;
 }
 
 function starterLandingPageFontLinks(
@@ -1710,15 +2089,31 @@ function renderStarterLandingPageCss(
       ? "#b05235"
       : designPackId === "starter-service-01"
         ? "#1847e8"
+        : designPackId === "clinical-editorial-01"
+          ? "#b66b46"
         : "#d9ff43",
   );
-  return `${starterLandingPageBaseCss()}${
+  return `${starterLandingPageBaseCss()}${starterRichTextCss()}${businessSiteShellCss()}${businessSiteOverlayPositionCss()}${
     designPackId === "starter-event-01"
       ? starterEventCss(accent)
       : designPackId === "starter-service-01"
         ? starterServiceCss(accent)
-        : starterWaitlistCss(accent)
-  }${renderLandingPageCustomizationCss(page, designPackId)}`;
+        : designPackId === "clinical-editorial-01"
+          ? clinicalEditorialCss(accent)
+          : starterWaitlistCss(accent)
+  }${designPackId === "clinical-editorial-01" ? naturalEditorialEnhancementCss() : ""}${renderLandingPageCustomizationCss(page, designPackId)}`;
+}
+
+function starterRichTextCss(): string {
+  return `.pack-rich-text>*:first-child{margin-top:0}.pack-rich-text>*:last-child{margin-bottom:0}.pack-rich-text p{line-height:1.55}.pack-rich-text ul,.pack-rich-text ol{padding-left:1.25em}.pack-rich-text blockquote{margin-left:0;padding-left:18px;border-left:2px solid var(--accent)}.pack-rich-text a{text-decoration-thickness:1px;text-underline-offset:3px}`;
+}
+
+function clinicalEditorialCss(accent: string): string {
+  return `:root{--bg:#f4f1ea;--surface:#e6ebe5;--text:#18342f;--muted:#536b64;--line:rgba(24,52,47,.2);--accent:${accent};--accent-contrast:${readableTextColor(accent)};--focus:#b66b46;--display-font:"Newsreader",Georgia,serif;--accent-font:"Newsreader",Georgia,serif;--body-font:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--meta-font:"DM Mono",monospace;--shell:1240px;--footer-bg:#18342f;--footer-text:#f4f1ea}.pack-header{min-height:92px}.pack-brand{font-family:var(--display-font);font-size:1.35rem;font-weight:500}.pack-hero-grid{min-height:min(720px,calc(100vh - 92px))}.pack-hero-copy{padding-top:88px;padding-bottom:88px}.pack-hero h1{max-width:11ch;font-size:clamp(4.2rem,8vw,8.2rem);font-weight:350;line-height:.88}.pack-hero h1 em{color:var(--accent);font-style:italic}.clinical-field{position:relative;min-height:520px;overflow:hidden;background:linear-gradient(145deg,#dfe8e1,#f4f1ea)}.clinical-field:before{content:"";position:absolute;inset:8%;border:1px solid var(--line);border-radius:50% 50% 44% 56%}.clinical-orb{position:absolute;width:44%;aspect-ratio:1;left:28%;top:22%;border-radius:50%;background:var(--accent);opacity:.84}.clinical-line{position:absolute;width:70%;height:1px;left:15%;top:50%;background:var(--text);transform-origin:center}.clinical-line-one{transform:rotate(32deg)}.clinical-line-two{transform:rotate(-32deg)}.clinical-field strong{position:absolute;left:32px;bottom:28px;max-width:70%;font-family:var(--display-font);font-size:2rem;font-weight:400}.pack-story,.pack-testimonials{background:#18342f;color:#f4f1ea;--text:#f4f1ea;--muted:rgba(244,241,234,.72);--line:rgba(244,241,234,.22)}.pack-features,.pack-team,.pack-collection{background:#e6ebe5}.pack-image-text{background:#fff}.pack-media-grid{display:grid;grid-template-columns:1fr 1fr;gap:80px;align-items:center}.pack-media-grid.image-right figure{order:2}.pack-media-grid figure{margin:0;min-height:540px}.pack-media-grid img{display:block;width:100%;height:100%;min-height:540px;object-fit:cover}.pack-quote-grid,.pack-team-grid,.pack-price-grid,.pack-collection-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}.pack-quote-grid figure,.pack-team-grid article,.pack-price-grid article,.pack-collection-grid article{margin:0;padding:34px;background:var(--bg)}.pack-quote-grid blockquote{margin:0 0 48px;font-family:var(--display-font);font-size:1.65rem;line-height:1.2}.pack-quote-grid figcaption{font-family:var(--meta-font);font-size:.72rem;text-transform:uppercase}.pack-team-grid img,.pack-collection-grid img{width:100%;aspect-ratio:4/3;object-fit:cover;margin-bottom:24px}.pack-team-grid h3,.pack-price-grid h3,.pack-collection-grid h3{font-family:var(--display-font);font-size:2rem;font-weight:400}.pack-team-grid p,.pack-price-grid p,.pack-collection-grid p,.pack-legal p{color:var(--muted);line-height:1.65}.pack-price{display:block;margin:18px 0;font-family:var(--display-font);font-size:2.8rem}.pack-price-grid ul{min-height:130px;padding-left:20px;color:var(--muted)}.pack-logo-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:50px}.pack-logo-row img{display:block;max-width:150px;max-height:54px;filter:grayscale(1)}.pack-footer .shell{align-items:start}.pack-footer p{max-width:520px;margin:.7rem 0 0;color:rgba(244,241,234,.7);text-transform:none;letter-spacing:0}.pack-footer nav{display:flex;flex-wrap:wrap;gap:18px}.pack-footer a{text-decoration:none}@media(max-width:900px){.pack-media-grid{grid-template-columns:1fr;gap:42px}.pack-media-grid.image-right figure{order:0}.pack-quote-grid,.pack-team-grid,.pack-price-grid,.pack-collection-grid{grid-template-columns:1fr 1fr}}@media(max-width:620px){.pack-header nav{max-width:65%;overflow-x:auto}.pack-header nav a:not(.pack-nav-action){display:none}.clinical-field{min-height:380px}.pack-quote-grid,.pack-team-grid,.pack-price-grid,.pack-collection-grid{grid-template-columns:1fr}.pack-media-grid figure,.pack-media-grid img{min-height:360px}}`;
+}
+
+function naturalEditorialEnhancementCss(): string {
+  return `body[data-design-pack=clinical-editorial-01][data-hero-layout=background]>.pack-header{color:#18342f}body[data-design-pack=clinical-editorial-01][data-hero-layout=background]>.pack-header .pack-brand{font-size:2rem;color:inherit}body[data-design-pack=clinical-editorial-01][data-hero-layout=background]>.pack-header .pack-brand img{filter:brightness(0) invert(1)}body[data-design-pack=clinical-editorial-01] .pack-hero-background .pack-kicker{font-size:.78rem;letter-spacing:.12em}body[data-design-pack=clinical-editorial-01] .pack-hero-background h1{max-width:20ch;margin:18px 0;font-size:clamp(3.3rem,5.4vw,5.7rem);font-weight:350;line-height:1;letter-spacing:-.045em}body[data-design-pack=clinical-editorial-01] .pack-hero-background h1 em{color:inherit}body[data-design-pack=clinical-editorial-01] .pack-hero-background .pack-hero-copy>p{font-family:var(--display-font);font-size:clamp(1.35rem,2.1vw,2rem);line-height:1.2}body[data-design-pack=clinical-editorial-01] .pack-hero-background .button{background:rgba(244,241,234,.78);backdrop-filter:blur(8px)}@media(max-width:900px){body[data-design-pack=clinical-editorial-01] .pack-header #pack-site-navigation{background:#dce7e3}body[data-design-pack=clinical-editorial-01] .pack-hero-background .pack-hero-copy{padding-top:clamp(195px,26vh,245px)}body[data-design-pack=clinical-editorial-01] .pack-hero-background h1{max-width:18ch;font-size:clamp(2.6rem,6.3vw,3.35rem);line-height:1.04}body[data-design-pack=clinical-editorial-01] .pack-hero-background .pack-hero-copy>p{font-size:clamp(1.25rem,3.3vw,1.6rem)}body[data-design-pack=clinical-editorial-01] .pack-hero-background .pack-kicker{font-size:.7rem}}`;
 }
 
 function resolveLandingPageFontPreset(
@@ -1727,7 +2122,7 @@ function resolveLandingPageFontPreset(
 ): LandingPageFontPreset {
   return (
     normalizeLandingPageFontPreset(page.design.customization?.fontPreset) ||
-    (designPackId === "starter-event-01"
+    (designPackId === "starter-event-01" || designPackId === "clinical-editorial-01"
       ? "editorial"
       : designPackId === "starter-service-01"
         ? "bold"
@@ -1813,6 +2208,14 @@ function starterLandingPageBaseCss(): string {
   return `*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body-font);font-size:18px}a{color:inherit}button,input,textarea{font:inherit}.shell{width:min(var(--shell,1240px),calc(100% - 48px));margin:0 auto}.skip-link{position:fixed;left:16px;top:-80px;z-index:100;padding:12px 18px;background:var(--accent);color:var(--accent-contrast)}.skip-link:focus{top:16px}.pack-header{display:flex;align-items:center;justify-content:space-between;min-height:82px;border-bottom:1px solid var(--line)}.pack-brand{font-family:var(--display-font);font-weight:700;text-decoration:none}.pack-header nav{display:flex;align-items:center;gap:24px;font-family:var(--meta-font);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}.pack-header nav a{text-decoration:none}.pack-nav-action{display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border:1px solid currentColor}.pack-hero{overflow:hidden;border-bottom:1px solid var(--line)}.pack-hero-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.72fr);min-height:min(780px,calc(100vh - 82px))}.pack-hero-copy{display:flex;flex-direction:column;justify-content:center;padding:70px 64px 70px 0;border-right:1px solid var(--line)}.pack-kicker,.pack-section-number,.pack-card-number,.pack-meta span,.pack-footer,.pack-details dt,.pack-steps li>span{font-family:var(--meta-font);font-size:.7rem;line-height:1.4;letter-spacing:.1em;text-transform:uppercase}.pack-hero h1{max-width:10ch;margin:30px 0;font-family:var(--display-font);font-size:clamp(4.6rem,10vw,10rem);font-weight:400;line-height:.82;letter-spacing:-.07em}.pack-hero h1 em{font-family:var(--accent-font);font-weight:400}.pack-hero-copy>p{max-width:650px;margin:0;color:var(--muted);font-size:clamp(1.15rem,2vw,1.45rem);line-height:1.5}.pack-hero-actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:36px}.button{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 20px;border:1px solid var(--line);text-decoration:none;font-family:var(--meta-font);font-size:.76rem;font-weight:700;letter-spacing:.04em}.button.primary{border-color:var(--accent);background:var(--accent);color:var(--accent-contrast)}.button.secondary{background:transparent;color:var(--text)}.pack-hero-aside{display:grid;grid-template-rows:minmax(320px,1fr) auto;padding:38px 0 42px 38px}.pack-hero-image{min-height:420px;margin:0;overflow:hidden}.pack-hero-image img{width:100%;height:100%;object-fit:cover;display:block}.pack-meta{display:grid;gap:0;margin-top:24px}.pack-meta div{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-top:1px solid var(--line)}.pack-meta strong{font-weight:600}.pack-section{padding:110px 0;border-bottom:1px solid var(--line)}.pack-split,.pack-section-head{display:grid;grid-template-columns:minmax(100px,.35fr) minmax(0,1.65fr);gap:50px}.pack-section h2{max-width:980px;margin:0 0 34px;font-family:var(--display-font);font-size:clamp(3.2rem,7vw,7rem);font-weight:400;line-height:.9;letter-spacing:-.055em}.pack-lead{max-width:980px;margin:0;color:var(--muted);font-size:clamp(1.7rem,3.6vw,3.7rem);line-height:1.1;letter-spacing:-.025em}.pack-section-head{align-items:start;margin-bottom:54px}.pack-section-head p{max-width:600px;color:var(--muted);line-height:1.55}.pack-card-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--line);border-left:1px solid var(--line)}.pack-card-grid article{min-height:310px;padding:28px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.pack-card-grid h3{margin:80px 0 16px;font-family:var(--display-font);font-size:clamp(1.6rem,3vw,2.8rem);line-height:1}.pack-card-grid p,.pack-steps p,.pack-faq p,.pack-action p{color:var(--muted);line-height:1.55}.pack-details dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:0;border-top:1px solid var(--line);border-left:1px solid var(--line)}.pack-details dl>div{min-height:190px;padding:28px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.pack-details dd{margin:32px 0 0;font-family:var(--display-font);font-size:clamp(1.6rem,3vw,3rem);line-height:1}.pack-details dl p{color:var(--muted)}.pack-steps ol{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}.pack-steps li{display:grid;grid-template-columns:90px .8fr 1.2fr;gap:36px;align-items:start;padding:30px 0;border-bottom:1px solid var(--line)}.pack-steps li strong{font-family:var(--display-font);font-size:1.6rem}.pack-steps li p{margin:0}.pack-profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:90px;align-items:center}.pack-profile-visual{position:relative;min-height:590px;overflow:hidden;background:var(--surface)}.pack-profile-visual img{width:100%;height:100%;position:absolute;inset:0;object-fit:cover}.pack-profile-shape{position:absolute;width:54%;height:75%;left:23%;bottom:-5%;border-radius:48% 48% 12% 12%;background:var(--accent)}.pack-profile-shape:after{content:"";position:absolute;width:62%;aspect-ratio:1;left:19%;top:-20%;border-radius:48%;background:var(--profile-face,#c18564);box-shadow:-24px -20px 0 5px var(--text)}.pack-profile-name{display:block;margin-top:34px;font-family:var(--meta-font);font-size:.78rem;text-transform:uppercase}.pack-text-link{display:inline-flex;margin-top:28px;padding-bottom:6px;border-bottom:1px solid currentColor;text-decoration:none}.pack-faq-list{border-top:1px solid var(--line)}.pack-faq details{border-bottom:1px solid var(--line);padding:24px 0}.pack-faq summary{cursor:pointer;font-family:var(--display-font);font-size:1.45rem}.pack-faq details p{max-width:720px}.pack-action-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:80px;align-items:start}.pack-action h2{margin-top:24px}.pack-action-widget{padding-top:34px}.pack-footer{padding:28px 0;background:var(--footer-bg,var(--text));color:var(--footer-text,var(--bg))}.pack-footer .shell{display:flex;justify-content:space-between;gap:24px}.pack-announcement{display:flex;overflow:hidden;border-bottom:1px solid #12120f;background:#dfff39;color:#12120f;font-family:"IBM Plex Mono",monospace;font-size:.68rem;letter-spacing:.1em;text-transform:uppercase}.pack-announcement span{flex:none;padding:9px 18px;white-space:nowrap;animation:packTicker 18s linear infinite}@keyframes packTicker{to{transform:translateX(-100%)}}:focus-visible{outline:3px solid var(--focus,var(--accent));outline-offset:4px}@media(max-width:900px){.pack-hero-grid,.pack-profile-grid,.pack-action-grid{grid-template-columns:1fr}.pack-hero-copy{padding-right:0;border-right:0;border-bottom:1px solid var(--line)}.pack-hero-aside{padding-left:0}.pack-split,.pack-section-head{grid-template-columns:1fr;gap:20px}.pack-card-grid,.pack-details dl{grid-template-columns:1fr 1fr}.pack-steps li{grid-template-columns:60px 1fr}.pack-steps li p{grid-column:2}.pack-profile-grid{gap:48px}}@media(max-width:620px){.shell{width:min(100% - 28px,var(--shell,1240px))}.pack-header nav>a:first-child{display:none}.pack-hero-grid{min-height:auto}.pack-hero-copy{padding:54px 0}.pack-hero h1{font-size:clamp(4rem,22vw,6.8rem)}.pack-hero-aside{min-width:0}.pack-section{padding:76px 0}.pack-card-grid,.pack-details dl{grid-template-columns:1fr}.pack-card-grid article{min-height:240px}.pack-card-grid h3{margin-top:48px}.pack-steps li{grid-template-columns:1fr;gap:10px}.pack-steps li p{grid-column:auto}.pack-profile-visual{min-height:430px}.pack-action-grid{gap:30px}.pack-footer .shell{display:grid}.page-action-form .button{width:100%}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.pack-announcement span,.orbit-ring{animation:none!important}}`;
 }
 
+function businessSiteShellCss(): string {
+  return `.pack-brand img{display:block;width:auto;max-width:112px;height:52px;object-fit:contain}.pack-menu-toggle{display:none;width:48px;height:48px;padding:10px;border:0;background:transparent;color:inherit;cursor:pointer}.pack-menu-toggle span{display:block;width:28px;height:1px;margin:6px auto;background:currentColor;transition:transform .2s ease,opacity .2s ease}.pack-hero-background{position:relative;isolation:isolate;min-height:max(720px,100svh);border:0}.pack-hero-media{position:absolute;z-index:-2;inset:0;margin:0;overflow:hidden}.pack-hero-media img{display:block;width:100%;height:100%;object-fit:cover}.pack-hero-background:after{content:"";position:absolute;z-index:-1;inset:0;background:linear-gradient(180deg,rgba(244,241,234,.44) 0%,rgba(244,241,234,.18) 46%,rgba(24,52,47,.08) 100%);pointer-events:none}.pack-hero-background .pack-hero-grid{display:flex;min-height:max(720px,100svh);align-items:flex-start;justify-content:center}.pack-hero-background .pack-hero-copy{width:min(920px,100%);padding:clamp(190px,24vh,270px) 0 90px;border:0;text-align:center;align-items:center}.pack-hero-background .pack-hero-copy>p{max-width:840px;color:var(--text)}.pack-hero-background .pack-hero-actions{justify-content:center}.pack-hero-background .pack-meta{width:min(520px,100%);margin-top:30px}.pack-hero-background .pack-meta div{border-color:currentColor}.pack-hero-background .pack-meta span,.pack-hero-background .pack-meta strong{color:inherit}body[data-hero-layout=background]>.pack-header{position:absolute;z-index:20;top:0;left:50%;width:min(var(--shell,1240px),calc(100% - 48px));transform:translateX(-50%);border-bottom-color:transparent}body.pack-menu-active{overflow:hidden}@media(max-width:900px){.pack-header{position:relative;z-index:20}.pack-header .pack-brand,.pack-menu-toggle{position:relative;z-index:22}.pack-menu-toggle{display:block}.pack-header #pack-site-navigation{position:fixed;z-index:21;inset:0;display:none;max-width:none;overflow:auto;flex-direction:column;align-items:center;justify-content:center;gap:24px;padding:118px 24px 42px;background:var(--surface);color:var(--text);font-family:var(--display-font);font-size:clamp(1.7rem,8vw,3rem);letter-spacing:-.02em;text-align:center;text-transform:none}.pack-header[data-menu-open] #pack-site-navigation{display:flex}.pack-header #pack-site-navigation>a,.pack-header #pack-site-navigation>a:first-child{display:flex}.pack-header #pack-site-navigation .pack-nav-action{min-height:48px;margin-top:14px;padding:0 22px;border-radius:999px;font-family:var(--meta-font);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}.pack-header[data-menu-open] .pack-menu-toggle span:nth-child(1){transform:translateY(7px) rotate(45deg)}.pack-header[data-menu-open] .pack-menu-toggle span:nth-child(2){opacity:0}.pack-header[data-menu-open] .pack-menu-toggle span:nth-child(3){transform:translateY(-7px) rotate(-45deg)}body[data-hero-layout=background]>.pack-header{width:min(var(--shell,1240px),calc(100% - 28px))}.pack-hero-background,.pack-hero-background .pack-hero-grid{min-height:100svh}.pack-hero-background .pack-hero-copy{padding:clamp(174px,24vh,220px) 0 48px}.pack-hero-background .pack-kicker{max-width:32ch}.pack-hero-background .pack-hero-actions{margin-top:26px}}@media(prefers-reduced-motion:reduce){.pack-menu-toggle span{transition:none}}`;
+}
+
+function businessSiteOverlayPositionCss(): string {
+  return `body[data-hero-layout=background]>.pack-header{left:0;right:0;margin-inline:auto;transform:none}body[data-design-pack=clinical-editorial-01][data-hero-layout=background]>.pack-header[data-menu-open] .pack-brand img{filter:brightness(0)}`;
+}
+
 function starterEventCss(accent: string): string {
   const actionText = readableTextColor(accent);
   const actionContrast = actionText === "#111111" ? "#ffffff" : "#111111";
@@ -1856,7 +2259,7 @@ function renderLandingAction(
   context: LandingPageRenderContext,
 ): string {
   if (action.kind === "link") {
-    return `<a class="button primary" href="${escapeHtml(action.href || "#")}">${escapeHtml(action.label)}</a>`;
+    return `<a class="button primary" href="${escapeHtml(resolveBusinessSiteHref(context, action.href || "#"))}">${escapeHtml(action.label)}</a>`;
   }
   const attribution = `<input type="hidden" name="pageId" value="${escapeHtml(context.pageId || "")}"><input type="hidden" name="actionId" value="${escapeHtml(action.id)}"><input type="hidden" name="campaign" value="${escapeHtml(context.campaign || context.slug || "")}">`;
   if (action.kind === "subscribe") {
@@ -1885,6 +2288,10 @@ function renderLandingAction(
 
 function renderActionCss(): string {
   return `.page-action-form,.booking-action{display:grid;gap:14px;max-width:520px}.page-action-form label,.booking-action>label{display:grid;gap:7px;font-weight:700}.page-action-form label span{font-weight:400;color:var(--muted,var(--text-muted))}.page-action-form input,.page-action-form textarea,.booking-action input{width:100%;min-height:48px;border:2px solid var(--field-border,var(--line,var(--border)));border-radius:8px;background:var(--surface);color:var(--field-text,var(--text,#111));padding:12px 14px;font:inherit}.page-action-form input::placeholder,.page-action-form textarea::placeholder{color:color-mix(in srgb,var(--field-text,var(--text,#111)) 62%,transparent);opacity:1}.page-action-form textarea{resize:vertical}.page-action-form .button{width:fit-content;min-height:50px;padding-inline:22px;border:2px solid var(--accent);background:var(--accent);color:var(--accent-contrast);box-shadow:0 3px 0 color-mix(in srgb,var(--text) 42%,transparent);cursor:pointer}.payment-later-note{margin:0;padding:12px 14px;border:1px solid var(--line,var(--border));border-radius:8px;color:var(--text);font-size:.95rem;line-height:1.5}.action-status{min-height:1.5em;margin:0;color:var(--muted,var(--text-muted))}.action-status.is-error,.action-error{color:#b42318}.honeypot{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important}.booking-slots{display:flex;flex-wrap:wrap;gap:8px}.booking-slot{min-height:44px;border:1px solid var(--line,var(--border));border-radius:999px;background:transparent;color:var(--text);padding:0 14px;font:inherit;cursor:pointer}.booking-slot[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-contrast)}button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 72%,white);outline-offset:3px}@media(max-width:640px){.page-action .section-grid{gap:22px}.page-action-form .button{width:100%}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto!important}}`;
+}
+
+function landingNavigationScript(): string {
+  return `(()=>{document.querySelectorAll('.pack-menu-toggle').forEach(button=>{const header=button.closest('.pack-header');const navigation=header?.querySelector('#pack-site-navigation');if(!header||!navigation)return;const setOpen=open=>{header.toggleAttribute('data-menu-open',open);button.setAttribute('aria-expanded',String(open));button.setAttribute('aria-label',open?'Close site menu':'Open site menu');document.body.classList.toggle('pack-menu-active',open)};button.addEventListener('click',()=>setOpen(button.getAttribute('aria-expanded')!=='true'));navigation.querySelectorAll('a').forEach(link=>link.addEventListener('click',()=>setOpen(false)));document.addEventListener('keydown',event=>{if(event.key==='Escape'&&button.getAttribute('aria-expanded')==='true'){setOpen(false);button.focus()}});const desktop=window.matchMedia('(min-width:901px)');desktop.addEventListener?.('change',event=>{if(event.matches)setOpen(false)})})})();`;
 }
 
 function landingActionScript(): string {

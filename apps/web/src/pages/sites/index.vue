@@ -45,28 +45,35 @@ const visibleSitesError = computed(() => {
   }
   return message;
 });
-const canAddSite = computed(
+const canCreateProfile = computed(
+  () =>
+    !profileSite.value &&
+    quota.value?.can_create_profile === true,
+);
+const canCreateBusinessSite = computed(
   () =>
     Boolean(profileSite.value) &&
     quota.value?.can_create_additional_site === true,
 );
-const quotaFull = computed(
-  () =>
-    Boolean(profileSite.value) &&
-    quota.value !== null &&
-    !quota.value.can_create_additional_site,
-);
-const quotaUnavailable = computed(
-  () => Boolean(profileSite.value) && !quotaLoading.value && !quota.value,
-);
+const profileCreationBlockReason = computed(() => {
+  if (!sitesReady.value || quotaLoading.value) return "Checking availability…";
+  if (!quota.value) {
+    return "Site availability could not be loaded. Refresh and try again.";
+  }
+  return "Your current plan’s ME3 Profile limit has been reached.";
+});
+const businessSiteCreationBlockReason = computed(() => {
+  if (sitesReady.value && !profileSite.value) return "Create a ME3 Profile first.";
+  if (!sitesReady.value || quotaLoading.value) return "Checking availability…";
+  if (!quota.value) {
+    return "Site availability could not be loaded. Refresh and try again.";
+  }
+  return "Your current plan’s Business Site limit has been reached.";
+});
 
 const createProfileRoute = {
   path: "/create",
   query: { new: "1", siteRole: "profile", return: "/sites" },
-};
-const createAdditionalSiteRoute = {
-  path: "/create",
-  query: { new: "1", siteRole: "organization", return: "/sites" },
 };
 const buildWithMe3Route = {
   path: "/assistant",
@@ -143,7 +150,6 @@ onMounted(async () => {
       <h1 class="sr-only">Sites</h1>
       <header class="sites-header">
         <Button
-          v-if="canAddSite"
           color="ghost"
           shape="soft"
           size="compact"
@@ -184,15 +190,6 @@ onMounted(async () => {
           Create ME3 Profile
         </Button>
       </section>
-
-      <p v-if="quotaFull" class="sites-message" role="status">
-        You have used all {{ quota?.additional_sites.limit }} additional site
-        slots on your current plan.
-      </p>
-      <p v-else-if="quotaUnavailable" class="sites-message" role="status">
-        Site availability could not be loaded. Refresh before creating another
-        site.
-      </p>
 
       <section
         v-if="sitesReady && persistentSites.length"
@@ -244,8 +241,8 @@ onMounted(async () => {
           <div>
             <h2 id="add-site-title">Create a site</h2>
             <p id="add-site-description">
-              Choose how you want to build. Both options create a ME3 site you
-              can manage and share.
+              Choose what you want to create. You can manage and publish both
+              from ME3.
             </p>
           </div>
           <Button
@@ -264,18 +261,66 @@ onMounted(async () => {
 
         <div class="add-site-options">
           <RouterLink
-            class="add-site-option add-site-option--agent"
+            v-if="canCreateProfile"
+            class="add-site-option"
+            :to="createProfileRoute"
+            @click="addSiteDialogOpen = false"
+          >
+            <span class="add-site-option__icon" aria-hidden="true">
+              <UiIcon name="UserRound" :size="24" />
+            </span>
+            <span class="add-site-option__copy">
+              <strong>ME3 Profile</strong>
+              <span>
+                A simple site and digital business card for you or your
+                business. It creates a structured identity you can use across
+                ME3 and Soulink.
+              </span>
+            </span>
+            <UiIcon
+              class="add-site-option__arrow"
+              name="ArrowRight"
+              :size="20"
+              aria-hidden="true"
+            />
+          </RouterLink>
+          <button
+            v-else
+            class="add-site-option add-site-option--disabled"
+            type="button"
+            disabled
+          >
+            <span class="add-site-option__icon" aria-hidden="true">
+              <UiIcon name="UserRound" :size="24" />
+            </span>
+            <span class="add-site-option__copy">
+              <strong>ME3 Profile</strong>
+              <span>
+                A simple site and digital business card for you or your
+                business. It creates a structured identity you can use across
+                ME3 and Soulink.
+              </span>
+              <span class="add-site-option__status">
+                {{ profileCreationBlockReason }}
+              </span>
+            </span>
+          </button>
+
+          <RouterLink
+            v-if="canCreateBusinessSite"
+            class="add-site-option add-site-option--business"
             :to="buildWithMe3Route"
             @click="addSiteDialogOpen = false"
           >
             <span class="add-site-option__icon" aria-hidden="true">
-              <UiIcon name="Sparkles" :size="24" />
+              <UiIcon name="BriefcaseBusiness" :size="24" />
             </span>
             <span class="add-site-option__copy">
-              <strong>Build with ME3</strong>
+              <strong>Business Site</strong>
               <span>
-                Describe what you need, add images, and build with your agent
-                beside a live preview.
+                Build a flexible, branded website with ME3. Best for
+                organisations and established businesses that need custom
+                pages, styling, and room to grow.
               </span>
             </span>
             <UiIcon
@@ -285,29 +330,27 @@ onMounted(async () => {
               aria-hidden="true"
             />
           </RouterLink>
-
-          <RouterLink
-            class="add-site-option"
-            :to="createAdditionalSiteRoute"
-            @click="addSiteDialogOpen = false"
+          <button
+            v-else
+            class="add-site-option add-site-option--business add-site-option--disabled"
+            type="button"
+            disabled
           >
             <span class="add-site-option__icon" aria-hidden="true">
-              <UiIcon name="Pencil" :size="24" />
+              <UiIcon name="BriefcaseBusiness" :size="24" />
             </span>
             <span class="add-site-option__copy">
-              <strong>Create manually</strong>
+              <strong>Business Site</strong>
               <span>
-                Use the guided wizard for a structured ME3 site you control
-                step by step.
+                Build a flexible, branded website with ME3. Best for
+                organisations and established businesses that need custom
+                pages, styling, and room to grow.
+              </span>
+              <span class="add-site-option__status">
+                {{ businessSiteCreationBlockReason }}
               </span>
             </span>
-            <UiIcon
-              class="add-site-option__arrow"
-              name="ArrowRight"
-              :size="20"
-              aria-hidden="true"
-            />
-          </RouterLink>
+          </button>
         </div>
       </section>
     </AppDialog>
@@ -331,7 +374,7 @@ onMounted(async () => {
 .add-site-dialog {
   display: grid;
   gap: 22px;
-  width: min(620px, 100%);
+  width: min(780px, 100%);
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-lg, 16px);
   padding: 22px;
@@ -365,24 +408,28 @@ onMounted(async () => {
 
 .add-site-options {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
 .add-site-option {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 14px;
-  min-height: 92px;
+  min-height: 210px;
+  width: 100%;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-md, 12px);
-  padding: 14px;
+  padding: 18px;
   background: var(--ui-surface, var(--color-bg));
   color: inherit;
+  font: inherit;
+  text-align: left;
   text-decoration: none;
 }
 
-.add-site-option--agent {
+.add-site-option--business {
   border-color: color-mix(
     in oklab,
     var(--ui-accent, var(--color-accent)) 38%,
@@ -390,18 +437,18 @@ onMounted(async () => {
   );
   background: color-mix(
     in oklab,
-    var(--ui-accent-soft, var(--color-bg-subtle)) 54%,
+    var(--ui-accent, var(--color-accent)) 10%,
     var(--ui-surface, var(--color-bg))
   );
 }
 
-.add-site-option:hover {
+.add-site-option:hover:not(:disabled) {
   border-color: var(--ui-border-strong, var(--color-border));
   background: var(--ui-surface-muted, var(--color-bg-subtle));
 }
 
 .add-site-option:focus-visible {
-  outline: 3px solid var(--ui-accent, var(--color-accent));
+  outline: 3px solid var(--ui-focus, var(--ui-accent, var(--color-accent)));
   outline-offset: 2px;
 }
 
@@ -415,13 +462,14 @@ onMounted(async () => {
   color: var(--ui-text-muted, var(--color-text-muted));
 }
 
-.add-site-option--agent .add-site-option__icon {
+.add-site-option--business .add-site-option__icon {
   background: var(--ui-accent-soft, var(--color-bg-subtle));
   color: var(--ui-accent, var(--color-accent));
 }
 
 .add-site-option__copy {
   display: grid;
+  flex: 1;
   gap: 4px;
 }
 
@@ -435,8 +483,21 @@ onMounted(async () => {
   line-height: 1.45;
 }
 
+.add-site-option__status {
+  margin-top: 8px;
+  color: var(--ui-text, var(--color-text)) !important;
+  font-weight: 700;
+}
+
 .add-site-option__arrow {
+  align-self: flex-end;
   color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.add-site-option--disabled {
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text-muted, var(--color-text-muted));
+  cursor: not-allowed;
 }
 
 .sr-only {
@@ -637,6 +698,14 @@ onMounted(async () => {
   .sites-grid {
     grid-template-columns: 1fr;
   }
+
+  .add-site-options {
+    grid-template-columns: 1fr;
+  }
+
+  .add-site-option {
+    min-height: 0;
+  }
 }
 
 @media (max-width: 520px) {
@@ -647,12 +716,5 @@ onMounted(async () => {
     padding: 20px 16px calc(20px + env(safe-area-inset-bottom, 0px));
   }
 
-  .add-site-option {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .add-site-option__arrow {
-    display: none;
-  }
 }
 </style>

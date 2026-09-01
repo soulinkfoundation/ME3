@@ -3042,7 +3042,7 @@ function assistantToolStatusText(capabilityId: unknown): string {
   if (capabilityId.startsWith("core.calendar.")) return "Checking your calendar…";
   if (capabilityId.startsWith("core.reminders.")) return "Checking your reminders…";
   if (capabilityId.startsWith("core.scheduling.")) return "Checking availability…";
-  if (capabilityId.startsWith("core.network.")) return "Searching the ME3 Network…";
+  if (capabilityId === "core.people.search") return "Finding people…";
   if (capabilityId.startsWith("core.journal.")) return "Reading your Journal…";
   if (capabilityId.startsWith("core.mission.")) return "Checking your tasks…";
   if (capabilityId.startsWith("core.social.")) return "Preparing social content…";

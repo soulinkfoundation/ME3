@@ -10,6 +10,7 @@ describe("calendar push notification timing", () => {
       "owner",
       "events",
       "event-1",
+      "Planning call",
       "2026-08-19T10:30:00.000Z",
       false,
       "Europe/Dublin",
@@ -18,6 +19,7 @@ describe("calendar push notification timing", () => {
       userId: "owner",
       category: "events",
       itemId: "event-1",
+      title: "Planning call",
       occurrenceId: "2026-08-19T10:30:00.000Z",
       alertOffsetMinutes: 15,
       alertAt: "2026-08-19T10:15:00.000Z",
@@ -29,6 +31,7 @@ describe("calendar push notification timing", () => {
       "owner",
       "birthdays",
       "birthday-1",
+      "Kieran’s birthday",
       "2026-08-18T23:00:00.000Z",
       true,
       "Europe/Dublin",
@@ -37,11 +40,12 @@ describe("calendar push notification timing", () => {
   });
 
   it("alerts date-only tasks at nine and timed tasks at their due time", () => {
-    expect(taskCandidate("owner", "task-1", "2026-08-19", "Europe/Dublin").alertAt)
+    expect(taskCandidate("owner", "task-1", "Send proposal", "2026-08-19", "Europe/Dublin").alertAt)
       .toBe("2026-08-19T08:00:00.000Z");
     expect(taskCandidate(
       "owner",
       "task-2",
+      "Call supplier",
       "2026-08-19T12:45:00.000Z",
       "Europe/Dublin",
     ).alertAt).toBe("2026-08-19T12:45:00.000Z");

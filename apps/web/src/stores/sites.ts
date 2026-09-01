@@ -7,6 +7,7 @@ import type {
   LandingPageDocument,
   LandingPageDocumentV3,
   LandingPageTemplateId,
+  LandingPageDesignPackId,
   SiteType,
 } from "@me3-core/plugin-landing-pages";
 
@@ -16,6 +17,7 @@ export interface Site {
   user_id: string;
   site_type?: SiteType;
   site_role: "profile" | "organization" | null;
+  profile_site_id?: string | null;
   template_id?: string | null;
   builder_thread_id?: string | null;
   custom_domain: string | null;
@@ -1064,6 +1066,7 @@ export const useSitesStore = defineStore("sites", () => {
       slug: string;
       brief: string;
       templateId: LandingPageTemplateId;
+      designPackId?: LandingPageDesignPackId;
     },
   ): Promise<SitePage | null> {
     loading.value = true;

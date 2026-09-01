@@ -2,14 +2,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   runCoreAgentToolTurn,
   type AgentToolMessage,
-  type CoreNetworkDirectoryToolServices,
+  type CorePeopleSearchToolServices,
 } from "@me3-core/plugin-agent-chat";
 import {
-  getNetworkDirectoryBridgeConfig,
-  authorizeMe3NetworkSchedulingTarget,
-  removePublishedProfileFromMe3Network,
-  searchMe3Network,
-  syncPublishedProfileToMe3Network,
+  authorizePublicProfileSchedulingTarget,
+  getSoulinkDirectoryBridgeConfig,
+  removePublishedProfileFromSoulinkDirectory,
+  searchPeople,
+  searchPublicSoulinkDirectory,
+  syncPublishedProfileToSoulinkDirectory,
 } from "./network-directory";
 import type { Env } from "./types";
 
@@ -21,9 +22,9 @@ const SECRETS = {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("ME3 Network directory bridge", () => {
+describe("Soulink directory bridge", () => {
   it("uses only the linked installation identity", async () => {
-    await expect(getNetworkDirectoryBridgeConfig(createEnv(SECRETS))).resolves.toEqual({
+    await expect(getSoulinkDirectoryBridgeConfig(createEnv(SECRETS))).resolves.toEqual({
       origin: "https://api.me3.app",
       headers: {
         "X-ME3-Core-Owner-ID": "owner-1",
@@ -43,7 +44,7 @@ describe("ME3 Network directory bridge", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      syncPublishedProfileToMe3Network(createEnv(SECRETS), {
+      syncPublishedProfileToSoulinkDirectory(createEnv(SECRETS), {
         version: "0.3",
         kind: "person",
         visibility: "private",
@@ -59,7 +60,7 @@ describe("ME3 Network directory bridge", () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(removePublishedProfileFromMe3Network(createEnv(SECRETS)))
+    await expect(removePublishedProfileFromSoulinkDirectory(createEnv(SECRETS)))
       .resolves.toBe("removed");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.me3.app/v1/network/profile",
@@ -100,13 +101,14 @@ describe("ME3 Network directory bridge", () => {
       }],
     })));
 
-    const result = await searchMe3Network(createEnv(SECRETS), {
+    const result = await searchPublicSoulinkDirectory(createEnv(SECRETS), {
       query: "event photographer",
       offeringType: "service",
       countryCode: "ie",
     });
 
     expect(result.results[0]).toMatchObject({
+      relationshipTier: "public",
       profileId: "profile-aoife",
       name: "Aoife Lens",
       location: { label: "Galway, Ireland", countryCode: "IE" },
@@ -126,7 +128,7 @@ describe("ME3 Network directory bridge", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      authorizeMe3NetworkSchedulingTarget(
+      authorizePublicProfileSchedulingTarget(
         createEnv(SECRETS),
         "profile-aoife",
         "schedule-request",
@@ -151,13 +153,83 @@ describe("ME3 Network directory bridge", () => {
   });
 });
 
-describe("ME3 Network agent tool", () => {
-  it("searches the directory for an explicit network discovery request", async () => {
-    const search = vi.fn<CoreNetworkDirectoryToolServices["search"]>(async () => ({
+describe("unified people search", () => {
+  it("ranks a matching direct Link before an unknown public profile", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      query: "developer",
+      results: [
+        publicProfile({
+          profileId: "profile-public",
+          name: "Public Developer",
+          handle: "public-dev",
+          profileUrl: "https://public.example/me.json",
+          publicUrl: "https://public.example/",
+        }),
+        publicProfile({
+          profileId: "profile-link",
+          name: "Linked Developer",
+          handle: "linked-dev",
+          profileUrl: "https://linked.example/me.json",
+          publicUrl: "https://linked.example/",
+        }),
+      ],
+    })));
+
+    const result = await searchPeople(
+      createEnv(SECRETS, [soulinkContact({
+        name: "Linked Developer",
+        handle: "linked-dev",
+        me3Url: "https://linked.example/",
+      })]),
+      "owner",
+      { query: "developer" },
+    );
+
+    expect(result.results.map((item) => [item.name, item.relationshipTier])).toEqual([
+      ["Linked Developer", "link"],
+      ["Public Developer", "public"],
+    ]);
+    expect(result.results[0]).toMatchObject({
+      contactName: "Linked Developer",
+      profileId: "profile-link",
+      reasons: ["One of your Soulink Links", "Offers Software development"],
+    });
+  });
+
+  it("still finds a named Link when public search is unavailable", async () => {
+    const result = await searchPeople(
+      createEnv({}, [soulinkContact({
+        name: "Sarah Byrne",
+        handle: "sarah",
+        me3Url: "https://sarah.example/",
+      })]),
+      "owner",
+      { query: "Sarah" },
+    );
+
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        name: "Sarah Byrne",
+        relationshipTier: "link",
+        profileId: null,
+      }),
+    ]);
+    expect(result.warnings).toContain(
+      "Public Soulink profiles are unavailable until this installation is linked to me3.app.",
+    );
+  });
+});
+
+describe("people-search agent tool", () => {
+  it("presents people search as the preferred semantic tool beside public-web search", async () => {
+    const search = vi.fn<CorePeopleSearchToolServices["search"]>(async () => ({
       query: "event photographer in Ireland",
       total: 1,
+      warnings: [],
       results: [{
+        relationshipTier: "public",
         profileId: "profile-aoife",
+        contactName: null,
         name: "Aoife Lens",
         handle: "aoife",
         kind: "person",
@@ -189,8 +261,8 @@ describe("ME3 Network agent tool", () => {
     const aiRun = vi.fn()
       .mockResolvedValueOnce({
         tool_calls: [{
-          id: "network-search-1",
-          name: "core_network_directory_search",
+          id: "people-search-1",
+          name: "core_people_search",
           arguments: {
             query: "event photographer in Ireland",
             offeringType: "service",
@@ -205,8 +277,8 @@ describe("ME3 Network agent tool", () => {
     const response = await runCoreAgentToolTurn({
       db: createExecutionDb(),
       userId: "owner",
-      requestId: "network-request",
-      turnId: "network-turn",
+      requestId: "people-request",
+      turnId: "people-turn",
       ownerTimezone: "Europe/Dublin",
       route: {
         providerId: "workers-ai",
@@ -217,10 +289,12 @@ describe("ME3 Network agent tool", () => {
         aiGateway: null,
         configured: true,
       } as never,
-      messages: baseMessages(
-        "Find someone on the ME3 Network who can photograph an event in Ireland.",
-      ),
-      networkDirectoryServices: { search },
+      messages: baseMessages("I need an event photographer in Ireland."),
+      peopleSearchServices: { search },
+      webResearchServices: {
+        search: vi.fn(),
+        open: vi.fn(),
+      } as never,
     });
 
     expect(search).toHaveBeenCalledWith({
@@ -230,9 +304,32 @@ describe("ME3 Network agent tool", () => {
       limit: undefined,
     });
     expect(response).toMatchObject({
-      specialist: "core.network.directory.search",
+      specialist: "core.people.search",
     });
-    expect(response.replyText).toContain("ME3 profile reference: profile-aoife");
+    expect(aiRun.mock.calls[0]?.[1]?.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        function: expect.objectContaining({
+          name: "core_people_search",
+          description: expect.stringContaining("Prefer this over core_web_search"),
+        }),
+      }),
+      expect.objectContaining({
+        function: expect.objectContaining({
+          name: "core_web_search",
+          description: expect.stringContaining("use core_people_search for discovery"),
+        }),
+      }),
+    ]));
+    expect(response.replyText).not.toContain("profile-aoife");
+    expect(response.peopleSearchReference).toEqual({
+      results: [{
+        position: 1,
+        kind: "public_profile",
+        name: "Aoife Lens",
+        contactName: null,
+        profileId: "profile-aoife",
+      }],
+    });
   });
 });
 
@@ -243,16 +340,25 @@ function baseMessages(message: string): AgentToolMessage[] {
   ];
 }
 
-function createEnv(secrets: Record<string, string>): Env {
+function createEnv(
+  secrets: Record<string, string>,
+  contacts: Array<Record<string, unknown>> = [],
+): Env {
   return {
     DB: {
-      prepare() {
+      prepare(sql: string) {
         return {
-          bind(name: string) {
+          bind(...values: unknown[]) {
             return {
               async first<T>() {
-                const value = secrets[name];
+                if (!sql.includes("install_secrets")) return null as T;
+                const value = secrets[String(values[0])];
                 return value ? ({ value } as T) : null;
+              },
+              async all<T>() {
+                return {
+                  results: sql.includes("FROM contacts") ? contacts as T[] : [],
+                };
               },
             };
           },
@@ -260,6 +366,52 @@ function createEnv(secrets: Record<string, string>): Env {
       },
     } as unknown as D1Database,
   } as Env;
+}
+
+function publicProfile(input: {
+  profileId: string;
+  name: string;
+  handle: string;
+  profileUrl: string;
+  publicUrl: string;
+}) {
+  return {
+    ...input,
+    kind: "person",
+    bio: "Software developer",
+    location: null,
+    offerings: [{
+      type: "service",
+      id: "software-development",
+      title: "Software development",
+      description: "Web application development",
+    }],
+    reasons: ["Offers Software development"],
+    indexedAt: "2026-08-31T12:00:00.000Z",
+  };
+}
+
+function soulinkContact(input: { name: string; handle: string; me3Url: string }) {
+  return {
+    id: `contact-${input.handle}`,
+    user_id: "owner",
+    name: input.name,
+    email: null,
+    phone: null,
+    source: "soulink",
+    source_ref: `node-${input.handle}`,
+    relationship: "contact",
+    status: "active",
+    notes: null,
+    tags: "[]",
+    last_interaction_at: "2026-08-31T12:00:00.000Z",
+    next_followup_at: null,
+    outreach_status: null,
+    social_handles: JSON.stringify({ soulink: input.handle, me3: input.me3Url }),
+    metadata: JSON.stringify({ me3Url: input.me3Url, soulinkHandle: input.handle }),
+    created_at: "2026-08-01T12:00:00.000Z",
+    updated_at: "2026-08-31T12:00:00.000Z",
+  };
 }
 
 function createExecutionDb() {

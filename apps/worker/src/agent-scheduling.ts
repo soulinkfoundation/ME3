@@ -22,7 +22,7 @@ import type {
   Env,
 } from "./types";
 import { ensureSoulinkContactsFresh } from "./routes/channels";
-import { authorizeMe3NetworkSchedulingTarget } from "./network-directory";
+import { authorizePublicProfileSchedulingTarget } from "./network-directory";
 
 const DEFAULT_SOULINK_API_ORIGIN = "https://soulinkfoundation.org";
 const AGENT_SCHEDULING_PROTOCOL_VERSION = "2026-08-24";
@@ -637,7 +637,7 @@ async function requestNetworkAgentScheduling(
   });
   if (proposedSlots.length === 0) {
     return {
-      contactName: "the selected ME3 Network profile",
+      contactName: "the selected public Soulink profile",
       durationMinutes: defaults.durationMinutes,
       dateRange: defaults.dateRange,
       usedDefaultDuration: defaults.usedDefaultDuration,
@@ -655,7 +655,7 @@ async function requestNetworkAgentScheduling(
   if (!sourceNodeId) {
     throw new AgentSchedulingError("The Soulink connection is missing its owner identity.", 409);
   }
-  const authorized = await authorizeMe3NetworkSchedulingTarget(
+  const authorized = await authorizePublicProfileSchedulingTarget(
     env,
     profileId,
     idempotencyKey,

@@ -245,7 +245,7 @@ describe("ME3 agent scheduling", () => {
     });
   });
 
-  it("uses the stable directory profile identity for an explicit network request", async () => {
+  it("uses the stable public profile identity for an explicit request", async () => {
     const database = createExecutionDb();
     const requestNetwork = vi.fn<NonNullable<CoreSchedulingToolServices["requestNetwork"]>>(
       async () => ({
@@ -277,7 +277,7 @@ describe("ME3 agent scheduling", () => {
       .mockResolvedValueOnce({
         tool_calls: [{
           id: "network-schedule-1",
-          name: "core_network_scheduling_request",
+          name: "core_scheduling_request_profile",
           arguments: { profileId: "profile-aoife", confirmed: true },
         }],
       })
@@ -304,7 +304,7 @@ describe("ME3 agent scheduling", () => {
         { role: "system", content: "You are ME3." },
         {
           role: "assistant",
-          content: "2. Aoife Lens\nME3 profile reference: profile-aoife",
+          content: "2. Aoife Lens\nRelationship: Public Soulink profile",
         },
         { role: "user", content: "Schedule a meeting with the second result." },
       ],
@@ -320,14 +320,14 @@ describe("ME3 agent scheduling", () => {
       reason: undefined,
     }, expect.any(String));
     expect(aiRun.mock.calls[0]?.[1]).toMatchObject({
-      tools: [{ function: { name: "core_network_scheduling_request" } }],
+      tools: [{ function: { name: "core_scheduling_request_profile" } }],
       tool_choice: {
         type: "function",
-        function: { name: "core_network_scheduling_request" },
+        function: { name: "core_scheduling_request_profile" },
       },
     });
     expect(response).toMatchObject({
-      specialist: "core.network.scheduling.request",
+      specialist: "core.scheduling.request_profile",
     });
   });
 

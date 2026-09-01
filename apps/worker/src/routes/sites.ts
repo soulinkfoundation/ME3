@@ -2,6 +2,7 @@ import {
   LANDING_PAGES_PLUGIN_ID,
   buildLandingPageDocument,
   normalizeLandingPageDocument,
+  normalizeLandingPageDesignPackId,
   normalizeLandingTemplate,
   renderLandingPageHtml,
 } from "@me3-core/plugin-landing-pages";
@@ -9,8 +10,8 @@ import { isCorePluginEnabled } from "../plugins";
 import { generateSiteHtml, markdownToHtml, type Me3SiteProfile } from "@me3-core/site-renderer";
 import { buildPublicMe3Profile } from "../public-me-profile";
 import {
-  removePublishedProfileFromMe3Network,
-  syncPublishedProfileToMe3Network,
+  removePublishedProfileFromSoulinkDirectory,
+  syncPublishedProfileToSoulinkDirectory,
 } from "../network-directory";
 import {
   bookingDetailsFromBooking,
@@ -128,6 +129,7 @@ import {
   parseSiteRole,
   renamePersistentSite,
   renameProfileSite,
+  assignBusinessSiteProfile,
 } from "../site-lifecycle";
 import {
   SiteBrandingInputError,
@@ -157,7 +159,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     const [result, profileMetadata] = await Promise.all([
       c.env.DB.prepare(
-        `SELECT id, user_id, username, site_type, site_role, template_id, custom_domain,
+        `SELECT id, user_id, username, site_type, site_role, template_id, profile_site_id, custom_domain,
                 custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
          FROM sites
          WHERE user_id = ?
@@ -841,6 +843,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         siteType?: unknown;
         siteRole?: unknown;
         templateId?: unknown;
+        profileSiteId?: unknown;
         renameFromSiteId?: unknown;
         renameFromUsername?: unknown;
       }>()
@@ -850,6 +853,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
           siteType?: unknown;
           siteRole?: unknown;
           templateId?: unknown;
+          profileSiteId?: unknown;
           renameFromSiteId?: unknown;
           renameFromUsername?: unknown;
         } => ({}),
@@ -892,6 +896,13 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (renameFromSiteId && renameFromUsername) {
       return c.json({ error: "Choose one site rename target" }, 400);
     }
+    const profileSiteId =
+      typeof body.profileSiteId === "string" && body.profileSiteId.trim()
+        ? body.profileSiteId.trim()
+        : null;
+    if (body.profileSiteId !== undefined && !profileSiteId) {
+      return c.json({ error: "The selected ME3 Profile is invalid" }, 400);
+    }
 
     const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(c.env, username);
     if (cloudUsernameError) return c.json({ error: cloudUsernameError }, 409);
@@ -924,6 +935,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
           typeof body.templateId === "string" && body.templateId.trim()
             ? body.templateId.trim()
             : null,
+        profileSiteId,
       });
       return c.json({ site }, 201);
     } catch (error) {
@@ -932,6 +944,34 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       }
       console.error("Create site error:", error);
       return c.json({ error: "Failed to create site" }, 500);
+    }
+  });
+
+  app.put("/api/sites/:username/profile-owner", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const body = await c.req
+      .json<{ profileSiteId?: unknown }>()
+      .catch((): { profileSiteId?: unknown } => ({}));
+    const profileSiteId =
+      typeof body.profileSiteId === "string" ? body.profileSiteId.trim() : "";
+    if (!profileSiteId) {
+      return c.json({ error: "Choose a ME3 Profile" }, 400);
+    }
+    try {
+      return c.json({
+        site: await assignBusinessSiteProfile(c.env, {
+          ownerId,
+          username: c.req.param("username"),
+          profileSiteId,
+        }),
+      });
+    } catch (error) {
+      if (error instanceof SiteLifecycleError) {
+        return siteLifecycleErrorResponse(c, error);
+      }
+      console.error("Business Site profile assignment error:", error);
+      return c.json({ error: "Could not assign the ME3 Profile" }, 500);
     }
   });
 
@@ -1531,7 +1571,12 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
     if (!site) return c.json({ error: "Site not found" }, 404);
     const body = await c.req
-      .json<{ slug?: unknown; brief?: unknown; templateId?: unknown }>()
+      .json<{
+        slug?: unknown;
+        brief?: unknown;
+        templateId?: unknown;
+        designPackId?: unknown;
+      }>()
       .catch(() => null);
     if (!body || typeof body.brief !== "string" || !body.brief.trim()) {
       return c.json({ error: "Brief is required" }, 400);
@@ -1544,6 +1589,8 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         slug: typeof body.slug === "string" ? body.slug : template,
         brief: body.brief,
         template,
+        designPackId:
+          normalizeLandingPageDesignPackId(body.designPackId) || undefined,
         profile: {
           name: owner?.name || site.username,
           bio: owner?.bio || null,
@@ -1902,8 +1949,8 @@ function queueNetworkDirectoryProfileSync(c: AppContext, profile: unknown): void
     return;
   }
   executionCtx.waitUntil(
-    syncPublishedProfileToMe3Network(c.env, profile).catch((error) => {
-      console.error("Failed to sync published profile to the ME3 Network:", error);
+    syncPublishedProfileToSoulinkDirectory(c.env, profile).catch((error) => {
+      console.error("Failed to sync the published profile to Soulink:", error);
     }),
   );
 }
@@ -1916,7 +1963,7 @@ function queueNetworkDirectoryProfileRemoval(c: AppContext): void {
     return;
   }
   executionCtx.waitUntil(
-    removePublishedProfileFromMe3Network(c.env).catch((error) => {
+    removePublishedProfileFromSoulinkDirectory(c.env).catch((error) => {
       console.error("Failed to remove the public profile directory entry:", error);
     }),
   );

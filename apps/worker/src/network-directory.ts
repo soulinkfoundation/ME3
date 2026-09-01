@@ -1,44 +1,54 @@
 import type {
-  CoreNetworkDirectoryOffering,
-  CoreNetworkDirectoryToolServices,
+  CorePeopleSearchOffering,
+  CorePeopleSearchResult,
+  CorePeopleSearchToolServices,
 } from "./agent-chat";
+import { ensureSoulinkContactsFresh } from "./routes/channels";
 import { getMe3CloudApiOrigin } from "./sites";
-import type { Env } from "./types";
+import type { DbContact, Env } from "./types";
 
 const OWNER_SECRET = "ME3_CLOUD_OWNER_ID";
 const INSTALL_SECRET = "ME3_CORE_INSTALL_ID";
 const TOKEN_SECRET = "ME3_CLOUD_CORE_TOKEN";
 const REQUEST_TIMEOUT_MS = 5_000;
 
-type NetworkDirectoryBridgeConfig = {
+type SoulinkDirectoryBridgeConfig = {
   origin: string;
   headers: Record<string, string>;
 };
 
-export class Me3NetworkDirectoryError extends Error {
+type SoulinkLinkCandidate = {
+  name: string;
+  handle: string | null;
+  me3Url: string | null;
+  updatedAt: string;
+};
+
+export class SoulinkDirectoryError extends Error {
   constructor(
     message: string,
     public readonly status = 502,
     public readonly code: string | null = null,
   ) {
     super(message);
-    this.name = "Me3NetworkDirectoryError";
+    this.name = "SoulinkDirectoryError";
   }
 }
 
-export function createMe3NetworkDirectoryToolServices(
+export function createPeopleSearchToolServices(
   env: Env,
-): CoreNetworkDirectoryToolServices {
+  ownerId: string,
+): CorePeopleSearchToolServices {
   return {
-    search: (input) => searchMe3Network(env, input),
+    search: (input) => searchPeople(env, ownerId, input),
   };
 }
 
-export async function syncPublishedProfileToMe3Network(
+export async function syncPublishedProfileToSoulinkDirectory(
   env: Env,
   profile: unknown,
 ): Promise<"synced" | "not_connected" | "not_listed"> {
-  const config = await getNetworkDirectoryBridgeConfig(env);
+  const config = await getSoulinkDirectoryBridgeConfig(env);
   if (!config) return "not_connected";
   const response = await fetchWithTimeout(`${config.origin}/v1/network/profile`, {
     method: "PUT",
@@ -52,14 +62,14 @@ export async function syncPublishedProfileToMe3Network(
   ) {
     return "not_listed";
   }
-  if (!response.ok) throw bridgeError(data, response.status, "Failed to sync the ME3 Network profile.");
+  if (!response.ok) throw bridgeError(data, response.status, "Failed to sync the public Soulink profile.");
   return "synced";
 }
 
-export async function removePublishedProfileFromMe3Network(
+export async function removePublishedProfileFromSoulinkDirectory(
   env: Env,
 ): Promise<"removed" | "not_connected"> {
-  const config = await getNetworkDirectoryBridgeConfig(env);
+  const config = await getSoulinkDirectoryBridgeConfig(env);
   if (!config) return "not_connected";
   const response = await fetchWithTimeout(`${config.origin}/v1/network/profile`, {
     method: "DELETE",
@@ -72,14 +82,69 @@ export async function removePublishedProfileFromMe3Network(
   return "removed";
 }
 
-export async function searchMe3Network(
+export async function searchPeople(
   env: Env,
-  input: Parameters<CoreNetworkDirectoryToolServices["search"]>[0],
-): ReturnType<CoreNetworkDirectoryToolServices["search"]> {
-  const config = await getNetworkDirectoryBridgeConfig(env);
+  ownerId: string,
+  input: Parameters<CorePeopleSearchToolServices["search"]>[0],
+): ReturnType<CorePeopleSearchToolServices["search"]> {
+  const limit = Math.min(10, Math.max(1, Math.floor(input.limit || 5)));
+  const publicLimit = Math.max(limit, 10);
+  const [linkState, publicState] = await Promise.all([
+    loadSoulinkLinkCandidates(env, ownerId),
+    searchPublicSoulinkDirectory(env, { ...input, limit: publicLimit }).then(
+      (value) => ({ value, warning: null as string | null }),
+      (error) => ({
+        value: null,
+        warning: error instanceof SoulinkDirectoryError && error.code === "me3_cloud_not_connected"
+          ? "Public Soulink profiles are unavailable until this installation is linked to me3.app."
+          : "Public Soulink search is temporarily unavailable; these results include current Links only.",
+      }),
+    ),
+  ]);
+
+  const publicResults = publicState.value?.results || [];
+  const annotatedPublicResults = publicResults.map((result) => {
+    const link = linkState.links.find((candidate) => publicResultMatchesLink(result, candidate));
+    return link
+      ? {
+          ...result,
+          relationshipTier: "link" as const,
+          contactName: link.name,
+          reasons: uniqueStrings(["One of your Soulink Links", ...result.reasons]).slice(0, 3),
+        }
+      : result;
+  });
+  const localMatches = linkState.links
+    .filter((link) => linkMatchesQuery(link, input.query))
+    .filter((link) => !annotatedPublicResults.some((result) => publicResultMatchesLink(result, link)))
+    .map(linkCandidateToPeopleResult);
+  const merged = deduplicatePeopleResults([
+    ...localMatches,
+    ...annotatedPublicResults.filter((result) => result.relationshipTier === "link"),
+    ...annotatedPublicResults.filter((result) => result.relationshipTier === "public"),
+  ]).slice(0, limit);
+  const warnings = uniqueStrings([
+    linkState.warning,
+    publicState.warning,
+    ...(publicState.value?.warnings || []),
+  ].filter((value): value is string => Boolean(value)));
+
+  return {
+    query: input.query.trim().slice(0, 200),
+    results: merged,
+    total: merged.length,
+    warnings,
+  };
+}
+
+export async function searchPublicSoulinkDirectory(
+  env: Env,
+  input: Parameters<CorePeopleSearchToolServices["search"]>[0],
+): ReturnType<CorePeopleSearchToolServices["search"]> {
+  const config = await getSoulinkDirectoryBridgeConfig(env);
   if (!config) {
-    throw new Me3NetworkDirectoryError(
-      "Connect this installation to me3.app before searching the ME3 Network.",
+    throw new SoulinkDirectoryError(
+      "Link this installation to me3.app before searching public Soulink profiles.",
       503,
       "me3_cloud_not_connected",
     );
@@ -95,11 +160,11 @@ export async function searchMe3Network(
     }),
   });
   const data = await readJson(response);
-  if (!response.ok) throw bridgeError(data, response.status, "Failed to search the ME3 Network.");
+  if (!response.ok) throw bridgeError(data, response.status, "Failed to search public Soulink profiles.");
   return normalizeSearchResponse(data, input.query);
 }
 
-export async function authorizeMe3NetworkSchedulingTarget(
+export async function authorizePublicProfileSchedulingTarget(
   env: Env,
   profileIdInput: string,
   requestIdInput: string,
@@ -107,16 +172,16 @@ export async function authorizeMe3NetworkSchedulingTarget(
   const profileId = string(profileIdInput, 200);
   const requestId = string(requestIdInput, 160);
   if (!profileId || !requestId) {
-    throw new Me3NetworkDirectoryError(
-      "Select one exact ME3 Network profile before requesting a meeting.",
+    throw new SoulinkDirectoryError(
+      "Select one exact public Soulink profile before requesting a meeting.",
       400,
       "network_profile_required",
     );
   }
-  const config = await getNetworkDirectoryBridgeConfig(env);
+  const config = await getSoulinkDirectoryBridgeConfig(env);
   if (!config) {
-    throw new Me3NetworkDirectoryError(
-      "Connect this installation to me3.app before requesting a network meeting.",
+    throw new SoulinkDirectoryError(
+      "Link this installation to me3.app before requesting a meeting with a public profile.",
       503,
       "me3_cloud_not_connected",
     );
@@ -134,7 +199,7 @@ export async function authorizeMe3NetworkSchedulingTarget(
     throw bridgeError(
       data,
       response.status,
-      "The selected ME3 Network profile could not receive a meeting request.",
+      "The selected public Soulink profile could not receive a meeting request.",
     );
   }
   const authorizedProfileId = string(data.profileId, 200);
@@ -148,8 +213,8 @@ export async function authorizeMe3NetworkSchedulingTarget(
     !expiresAt ||
     !Number.isFinite(Date.parse(expiresAt))
   ) {
-    throw new Me3NetworkDirectoryError(
-      "ME3 Cloud returned an invalid network scheduling authorization.",
+    throw new SoulinkDirectoryError(
+      "ME3 Cloud returned an invalid public-profile scheduling authorization.",
       502,
       "invalid_network_scheduling_authorization",
     );
@@ -163,9 +228,9 @@ export async function authorizeMe3NetworkSchedulingTarget(
   };
 }
 
-export async function getNetworkDirectoryBridgeConfig(
+export async function getSoulinkDirectoryBridgeConfig(
   env: Env,
-): Promise<NetworkDirectoryBridgeConfig | null> {
+): Promise<SoulinkDirectoryBridgeConfig | null> {
   const [ownerId, installId, token] = await Promise.all([
     getInstallSecret(env, OWNER_SECRET),
     getInstallSecret(env, INSTALL_SECRET),
@@ -185,7 +250,7 @@ export async function getNetworkDirectoryBridgeConfig(
 function normalizeSearchResponse(
   data: Record<string, unknown>,
   fallbackQuery: string,
-): Awaited<ReturnType<CoreNetworkDirectoryToolServices["search"]>> {
+): Awaited<ReturnType<CorePeopleSearchToolServices["search"]>> {
   const results = Array.isArray(data.results)
     ? data.results.slice(0, 10).flatMap((value) => {
         if (!value || typeof value !== "object") return [];
@@ -198,7 +263,9 @@ function normalizeSearchResponse(
           ? result.location as Record<string, unknown>
           : null;
         return [{
+          relationshipTier: "public" as const,
           profileId,
+          contactName: null,
           name,
           handle: string(result.handle, 120),
           kind: string(result.kind, 40) || "person",
@@ -228,15 +295,16 @@ function normalizeSearchResponse(
     query: string(data.query, 200) || fallbackQuery,
     results,
     total: results.length,
+    warnings: [],
   };
 }
 
-function normalizeOfferings(value: unknown): CoreNetworkDirectoryOffering[] {
+function normalizeOfferings(value: unknown): CorePeopleSearchOffering[] {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 20).flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];
     const offering = entry as Record<string, unknown>;
-    const type: CoreNetworkDirectoryOffering["type"] | null =
+    const type: CorePeopleSearchOffering["type"] | null =
       offering.type === "service" || offering.type === "product"
       ? offering.type
       : null;
@@ -262,6 +330,150 @@ function normalizeOfferings(value: unknown): CoreNetworkDirectoryOffering[] {
   });
 }
 
+async function loadSoulinkLinkCandidates(
+  env: Env,
+  ownerId: string,
+): Promise<{ links: SoulinkLinkCandidate[]; warning: string | null }> {
+  let warning: string | null = null;
+  try {
+    await ensureSoulinkContactsFresh(env, ownerId);
+  } catch {
+    warning = "Soulink Links could not be refreshed; results may use the last synchronized Links.";
+  }
+
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT id, user_id, name, email, phone, source, source_ref,
+              relationship, status, notes, tags, last_interaction_at,
+              next_followup_at, outreach_status, social_handles, metadata,
+              created_at, updated_at
+       FROM contacts
+       WHERE user_id = ? AND status = 'active' AND source = 'soulink'
+       ORDER BY COALESCE(last_interaction_at, updated_at, created_at) DESC
+       LIMIT 250`,
+    )
+      .bind(ownerId)
+      .all<DbContact>();
+    const links = (rows.results || []).map((contact) => {
+      const metadata = parseRecord(contact.metadata);
+      const socialHandles = parseRecord(contact.social_handles);
+      return {
+        name: contact.name,
+        handle: string(socialHandles.soulink, 120) || string(metadata.soulinkHandle, 120),
+        me3Url: string(metadata.me3Url, 2_000) || string(socialHandles.me3, 2_000),
+        updatedAt:
+          string(metadata.soulinkLastActiveAt, 80) ||
+          string(contact.last_interaction_at, 80) ||
+          contact.updated_at,
+      };
+    });
+    return { links, warning };
+  } catch {
+    return {
+      links: [],
+      warning: warning || "Soulink Links are temporarily unavailable.",
+    };
+  }
+}
+
+function linkCandidateToPeopleResult(link: SoulinkLinkCandidate): CorePeopleSearchResult {
+  const profileUrl = httpsUrl(link.me3Url);
+  return {
+    relationshipTier: "link",
+    profileId: null,
+    contactName: link.name,
+    name: link.name,
+    handle: link.handle,
+    kind: "person",
+    bio: null,
+    avatarUrl: null,
+    profileUrl,
+    publicUrl: publicOrigin(profileUrl),
+    location: null,
+    offerings: [],
+    reasons: ["One of your Soulink Links"],
+    indexedAt: link.updatedAt,
+  };
+}
+
+function linkMatchesQuery(link: SoulinkLinkCandidate, query: string): boolean {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return false;
+  const haystack = normalizeSearchText([link.name, link.handle].filter(Boolean).join(" "));
+  return haystack.includes(normalizedQuery) ||
+    normalizedQuery.split(" ").every((token) => token.length > 1 && haystack.includes(token));
+}
+
+function publicResultMatchesLink(
+  result: CorePeopleSearchResult,
+  link: SoulinkLinkCandidate,
+): boolean {
+  const resultOrigins = [result.profileUrl, result.publicUrl]
+    .map(publicOrigin)
+    .filter((value): value is string => Boolean(value));
+  const linkOrigin = publicOrigin(link.me3Url);
+  if (linkOrigin && resultOrigins.includes(linkOrigin)) return true;
+  const resultHandle = normalizeHandle(result.handle);
+  const linkHandle = normalizeHandle(link.handle);
+  return Boolean(resultHandle && linkHandle && resultHandle === linkHandle);
+}
+
+function deduplicatePeopleResults(
+  results: readonly CorePeopleSearchResult[],
+): CorePeopleSearchResult[] {
+  const seen = new Set<string>();
+  return results.filter((result) => {
+    const key = result.profileId
+      ? `profile:${result.profileId}`
+      : publicOrigin(result.profileUrl || result.publicUrl) ||
+        (normalizeHandle(result.handle) ? `handle:${normalizeHandle(result.handle)}` : null) ||
+        `name:${normalizeSearchText(result.name)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .toLocaleLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function normalizeHandle(value: string | null): string | null {
+  const normalized = value?.trim().replace(/^@/, "").toLocaleLowerCase() || "";
+  return normalized || null;
+}
+
+function publicOrigin(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function parseRecord(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 async function getInstallSecret(env: Env, name: string): Promise<string | null> {
   try {
     const row = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
@@ -280,7 +492,7 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Me3NetworkDirectoryError("ME3 Network search timed out.", 504, "network_timeout");
+      throw new SoulinkDirectoryError("Soulink people search timed out.", 504, "network_timeout");
     }
     throw error;
   } finally {
@@ -299,8 +511,8 @@ function bridgeError(
   data: Record<string, unknown>,
   status: number,
   fallback: string,
-): Me3NetworkDirectoryError {
-  return new Me3NetworkDirectoryError(
+): SoulinkDirectoryError {
+  return new SoulinkDirectoryError(
     string(data.error, 500) || fallback,
     status,
     string(data.code, 100),

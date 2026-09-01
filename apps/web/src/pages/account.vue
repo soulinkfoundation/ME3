@@ -347,7 +347,7 @@ const sites = useSitesStore();
 const { themePreference, setThemePreference } = useTheme();
 const route = useRoute();
 const router = useRouter();
-const { toastSuccess } = useAppToast();
+const { toastFromUnknown, toastSuccess } = useAppToast();
 
 const loading = ref(false);
 const saving = ref(false);
@@ -463,10 +463,10 @@ const telegramSetupOpen = ref(route.query.section === "telegram");
 const openSection = ref({
   ai: false,
   appConnections: false,
+  account: false,
   mailbox: false,
   payments: false,
   plugins: false,
-  signin: false,
   storage: route.query.section === "storage",
   timezone: false,
 });
@@ -865,7 +865,9 @@ const managedStripeStatusTone = computed(() => {
 const managedStripeDescription = computed(() => {
   const status = commerceSettings.value?.stripe.connectionStatus;
   if (status === "active") {
-    return "Stripe can accept payments and send payouts for your published offers.";
+    return commerceSettings.value?.stripe.mode === "managed"
+      ? "Stripe Connect is active. Processing fees, refunds, and disputes are handled on your Stripe account."
+      : "Stripe Connect is ready. Switch to it to stop using the stored API key for customer payments.";
   }
   if (status === "restricted") {
     return "Stripe needs more information before payments and payouts are ready.";
@@ -876,13 +878,12 @@ const managedStripeDescription = computed(() => {
   if (status === "unavailable") {
     return "ME3 could not check Stripe right now. Try again before publishing paid offers.";
   }
-  return "Connect a Stripe Express account before publishing paid bookings or products.";
+  return "Connect your Stripe account before publishing paid bookings or products.";
 });
 
 const managedStripeActionLabel = computed(() => {
   const status = commerceSettings.value?.stripe.connectionStatus;
   if (commerceConnecting.value) return "Opening Stripe...";
-  if (status === "active") return "Review Stripe account";
   if (status === "pending" || status === "restricted") return "Continue Stripe setup";
   return "Connect Stripe";
 });
@@ -1820,8 +1821,8 @@ async function startManagedStripeOnboarding(
       { country: stripeConnectCountry.value },
     );
     window.location.assign(response.url);
-  } catch (e: any) {
-    commerceError.value = e.message || "Failed to open Stripe setup";
+  } catch (error) {
+    toastFromUnknown(error, "Failed to open Stripe setup.");
     commerceConnecting.value = false;
   }
 }
@@ -1848,7 +1849,36 @@ async function completeStripeConnectReturn() {
   await loadCommerceSettings();
   clearStripeConnectQuery();
   if (commerceSettings.value?.stripe.connectionStatus === "active") {
-    toastSuccess("Stripe is connected and ready for payments.");
+    await selectCommerceStripeProvider(
+      "managed",
+      "Stripe Connect is active for customer payments.",
+    );
+  }
+}
+
+async function selectCommerceStripeProvider(
+  provider: "direct" | "managed",
+  successMessage?: string,
+) {
+  if (commerceSaving.value) return;
+  commerceSaving.value = true;
+  commerceError.value = null;
+  try {
+    const response = await api.put<CommerceSettingsResponse>(
+      "/commerce/settings",
+      { preferredStripeProvider: provider },
+    );
+    syncCommerceSettings(response);
+    toastSuccess(
+      successMessage ||
+        (provider === "managed"
+          ? "Stripe Connect is now handling customer payments."
+          : "The configured Stripe API key is now handling customer payments."),
+    );
+  } catch (error) {
+    toastFromUnknown(error, "Failed to change the Stripe payment provider.");
+  } finally {
+    commerceSaving.value = false;
   }
 }
 
@@ -1873,8 +1903,8 @@ async function saveCommerceSettings() {
     toastSuccess(hasStripeSecret
       ? "Payment settings saved."
       : "Default currency saved.");
-  } catch (e: any) {
-    commerceError.value = e.message || "Failed to save payment settings";
+  } catch (error) {
+    toastFromUnknown(error, "Failed to save payment settings.");
   } finally {
     commerceSaving.value = false;
   }
@@ -1893,8 +1923,8 @@ async function clearCommerceStripeKey() {
     );
     syncCommerceSettings(response);
     toastSuccess("Stored Stripe key removed.");
-  } catch (e: any) {
-    commerceError.value = e.message || "Failed to remove Stripe key";
+  } catch (error) {
+    toastFromUnknown(error, "Failed to remove the Stripe key.");
   } finally {
     commerceSaving.value = false;
   }
@@ -2466,32 +2496,26 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section class="card accordion-card signin-section primary-section">
+        <section class="card accordion-card account-section primary-section">
           <button
-            id="account-trigger-signin"
+            id="account-trigger-account"
             class="accordion-trigger"
             type="button"
-            :aria-expanded="openSection.signin"
-            aria-controls="account-panel-signin"
-            @click="openSection.signin = !openSection.signin"
+            :aria-expanded="openSection.account"
+            aria-controls="account-panel-account"
+            @click="openSection.account = !openSection.account"
           >
             <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Account email</h2>
-              <span class="accordion-header-hint">
-                {{
-                  auth.user?.email ||
-                  "Used for signing in to this ME3 account."
-                }}
-              </span>
+              <h2>Account</h2>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
           <div
-            id="account-panel-signin"
+            id="account-panel-account"
             class="accordion-panel"
             role="region"
-            aria-labelledby="account-trigger-signin"
-            :hidden="!openSection.signin"
+            aria-labelledby="account-trigger-account"
+            :hidden="!openSection.account"
           >
             <p class="hint account-signin-hint">
               Used for signing in to this ME3 account.
@@ -2516,6 +2540,44 @@ onBeforeUnmount(() => {
                 Sign out
               </Button>
             </div>
+
+            <div class="account-resources">
+              <nav class="account-resource-links" aria-label="Account resources">
+                <a
+                  v-if="me3Connection?.connected"
+                  :href="me3AccountURL"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Manage account
+                </a>
+                <a
+                  href="https://me3.app/support"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Support
+                </a>
+                <a href="https://me3.app/terms" target="_blank" rel="noopener">
+                  Terms
+                </a>
+                <a
+                  href="https://me3.app/privacy"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Privacy
+                </a>
+              </nav>
+
+              <p
+                v-if="me3Connection?.connected"
+                class="account-resources__billing-note"
+              >
+                Deleting your ME3 account does not cancel Apple subscriptions.
+                Cancel them in App Store settings.
+              </p>
+            </div>
           </div>
         </section>
 
@@ -2529,7 +2591,7 @@ onBeforeUnmount(() => {
             @click="openSection.mailbox = !openSection.mailbox"
           >
             <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Mailbox &amp; email domain</h2>
+              <h2>Mailbox &amp; domains</h2>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
@@ -2552,11 +2614,6 @@ onBeforeUnmount(() => {
                   <div class="setup-disclosure-intro">
                     <div>
                       <h3>Sites and website domains</h3>
-                      <p>
-                        Public website domains are managed from each selected
-                        site. They do not change this installation's login,
-                        private API, or mailbox domain.
-                      </p>
                     </div>
                   </div>
 
@@ -2574,18 +2631,8 @@ onBeforeUnmount(() => {
                 <section class="mailbox-setup">
                   <div class="setup-disclosure-intro">
                     <div>
-                      <h3>
-                        {{
-                          mailboxCloudflareManaged
-                            ? "ME3 mailbox"
-                            : "Mailbox"
-                        }}
-                      </h3>
-                      <p v-if="mailboxCloudflareManaged">
-                        This permanent address keeps receiving mail even if you
-                        configure a separate custom sender.
-                      </p>
-                      <p v-else>
+                      <h3>Mailbox</h3>
+                      <p v-if="!mailboxCloudflareManaged">
                         Follow the steps in the
                         <button
                           class="setup-guide-link"
@@ -3688,7 +3735,7 @@ onBeforeUnmount(() => {
 
               <template v-else>
                 <div
-                  v-if="commerceSettings?.stripe.mode === 'managed'"
+                  v-if="commerceSettings?.stripe.managedAvailable"
                   class="managed-stripe-panel"
                 >
                   <div class="managed-stripe-panel__header">
@@ -3734,6 +3781,7 @@ onBeforeUnmount(() => {
                     </label>
 
                     <Button
+                      v-if="commerceSettings.stripe.connectionStatus !== 'active'"
                       color="primary"
                       size="compact"
                       type="button"
@@ -3741,6 +3789,31 @@ onBeforeUnmount(() => {
                       @click="startManagedStripeOnboarding(commerceSettings.stripe.connected ? 'refresh' : 'onboard')"
                     >
                       {{ managedStripeActionLabel }}
+                    </Button>
+
+                    <Button
+                      v-if="
+                        commerceSettings.stripe.connectionStatus === 'active' &&
+                        commerceSettings.stripe.mode !== 'managed'
+                      "
+                      color="primary"
+                      size="compact"
+                      type="button"
+                      :disabled="commerceSaving"
+                      @click="selectCommerceStripeProvider('managed')"
+                    >
+                      Use Stripe Connect
+                    </Button>
+
+                    <Button
+                      v-if="commerceSettings.stripe.connectionStatus === 'active'"
+                      color="outline"
+                      size="compact"
+                      href="https://dashboard.stripe.com/"
+                      target="_blank"
+                      rel="noopener"
+                    >
+                      Open Stripe dashboard
                     </Button>
                   </div>
                 </div>
@@ -3760,10 +3833,7 @@ onBeforeUnmount(() => {
                   </label>
 
                   <div
-                    v-if="
-                      !commerceSettings?.stripe.keyHint &&
-                      commerceSettings?.stripe.source !== 'managed'
-                    "
+                    v-if="!commerceSettings?.stripe.directConfigured"
                     class="field commerce-settings-row__field commerce-settings-row__field--secret payment-key-field"
                   >
                     <label for="stripe-secret-key-input">
@@ -3812,7 +3882,7 @@ onBeforeUnmount(() => {
 
                 <p
                   v-if="
-                    commerceSettings?.stripe.source === 'environment' &&
+                    commerceSettings?.stripe.directSource === 'environment' &&
                     commerceSettings?.stripe.keyHint
                   "
                   class="field-hint"
@@ -3831,16 +3901,43 @@ onBeforeUnmount(() => {
                   key is stored.
                 </p>
 
-                <Button
-                  v-if="commerceSettings?.stripe.source === 'stored'"
-                  color="outline"
-                  size="compact"
-                  type="button"
-                  :disabled="commerceClearDisabled"
-                  @click="clearCommerceStripeKey"
+                <p
+                  v-if="
+                    commerceSettings?.stripe.mode === 'managed' &&
+                    commerceSettings.stripe.directConfigured
+                  "
+                  class="field-hint"
                 >
-                  Remove stored key
-                </Button>
+                  The configured API key is retained as a fallback and is not
+                  used while Stripe Connect is active.
+                </p>
+
+                <div
+                  v-if="commerceSettings?.stripe.directConfigured"
+                  class="commerce-provider-actions"
+                >
+                  <Button
+                    v-if="commerceSettings.stripe.mode === 'managed'"
+                    color="outline"
+                    size="compact"
+                    type="button"
+                    :disabled="commerceSaving"
+                    @click="selectCommerceStripeProvider('direct')"
+                  >
+                    Use configured API key
+                  </Button>
+
+                  <Button
+                    v-if="commerceSettings.stripe.directSource === 'stored'"
+                    color="outline"
+                    size="compact"
+                    type="button"
+                    :disabled="commerceClearDisabled"
+                    @click="clearCommerceStripeKey"
+                  >
+                    Remove stored key
+                  </Button>
+                </div>
 
                 <p v-if="commerceError" class="error">{{ commerceError }}</p>
               </template>
@@ -3917,49 +4014,6 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section class="card account-resources-section">
-          <div class="account-resources">
-            <div>
-              <h2 class="account-section-heading">Account &amp; legal</h2>
-              <p class="hint account-resources__hint">
-                Get help, review ME3 policies, or manage your ME3.app account.
-              </p>
-            </div>
-
-            <nav class="account-resource-links" aria-label="Account resources">
-              <a
-                v-if="me3Connection?.connected"
-                :href="me3AccountURL"
-                target="_blank"
-                rel="noopener"
-              >
-                Review or delete ME3 account
-              </a>
-              <a
-                href="https://me3.app/support"
-                target="_blank"
-                rel="noopener"
-              >
-                Support
-              </a>
-              <a href="https://me3.app/terms" target="_blank" rel="noopener">
-                Terms of Service
-              </a>
-              <a href="https://me3.app/privacy" target="_blank" rel="noopener">
-                Privacy Policy
-              </a>
-            </nav>
-
-            <p
-              v-if="me3Connection?.connected"
-              class="account-resources__billing-note"
-            >
-              Deleting your ME3 account does not cancel Apple billing. If you
-              subscribed through Apple, cancel it separately in App Store
-              subscription settings.
-            </p>
-          </div>
-        </section>
       </template>
     </main>
 
@@ -4492,13 +4546,6 @@ h1 {
   text-align: center;
 }
 
-.account-section-heading {
-  margin: 0;
-  color: var(--ui-text, var(--color-text));
-  font-size: 18px;
-  line-height: 1.2;
-}
-
 .primary-section {
   order: 2;
 }
@@ -4527,22 +4574,16 @@ h1 {
   order: 8;
 }
 
-.account-resources-section {
-  order: 9;
-}
-
 .account-resources {
   display: grid;
   gap: 14px;
-  padding: 16px;
-}
-
-.account-resources__hint,
-.account-resources__billing-note {
-  margin: 6px 0 0;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ui-border, var(--color-border));
 }
 
 .account-resources__billing-note {
+  margin: 0;
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 12px;
   line-height: 1.45;
@@ -5753,9 +5794,20 @@ h1 {
   flex-wrap: wrap;
 }
 
+.managed-stripe-panel__actions .me3-btn,
+.commerce-provider-actions .me3-btn {
+  min-height: 44px;
+}
+
 .managed-stripe-panel__country {
   width: min(280px, 100%);
   margin: 0;
+}
+
+.commerce-provider-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .commerce-settings-row__field {

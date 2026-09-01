@@ -57,10 +57,24 @@ describe("Sites dashboard", () => {
     expect(wrapper.text()).toContain("Create your ME3 Profile");
     expect(wrapper.text()).toContain("@studio");
     expect(wrapper.text()).not.toMatch(/organization sites/i);
-    expect(wrapper.find('[aria-label="Add site"]').exists()).toBe(false);
+    expect(wrapper.find('[aria-label="Add site"]').exists()).toBe(true);
     expect(
       wrapper.findAll("a").some((link) => link.attributes("href") === "/sites/studio"),
     ).toBe(true);
+
+    await wrapper.get('[aria-label="Add site"]').trigger("click");
+
+    const chooser = wrapper.get('[role="dialog"]');
+    expect(chooser.get("a.add-site-option").text()).toContain("ME3 Profile");
+    expect(chooser.get("a.add-site-option").attributes("href")).toContain(
+      "/create?new=1",
+    );
+    expect(chooser.get("button.add-site-option").text()).toContain(
+      "Create a ME3 Profile first.",
+    );
+    expect(
+      chooser.get("button.add-site-option").attributes("disabled"),
+    ).toBeDefined();
   });
 
   it("renders every persistent site as one minimal clickable card", async () => {
@@ -120,7 +134,7 @@ describe("Sites dashboard", () => {
     expect(wrapper.text()).not.toContain("Landing pages");
   });
 
-  it("offers agent and manual creation from the Add site chooser", async () => {
+  it("offers Profile and Business Site choices from the Add site chooser", async () => {
     const wrapper = await mountDashboard(
       [siteRecord("owner", "profile")],
       quotaResponse({
@@ -133,24 +147,31 @@ describe("Sites dashboard", () => {
     await wrapper.get('[aria-label="Add site"]').trigger("click");
 
     const chooser = wrapper.get('[role="dialog"]');
-    expect(chooser.text()).toContain("Build with ME3");
-    expect(chooser.text()).toContain("Create manually");
+    expect(chooser.text()).toContain("ME3 Profile");
+    expect(chooser.text()).toContain("Business Site");
+    expect(chooser.text()).not.toContain("Create manually");
 
     const links = chooser.findAll("a");
-    const agentLink = links.find((link) => link.text().includes("Build with ME3"));
-    const manualLink = links.find((link) => link.text().includes("Create manually"));
-    expect(agentLink?.attributes("href")).toContain(
+    const businessSiteLink = links.find((link) =>
+      link.text().includes("Business Site"),
+    );
+    expect(businessSiteLink?.attributes("href")).toContain(
       "/assistant?mode=site-builder",
     );
-    expect(agentLink?.attributes("href")).toContain(
+    expect(businessSiteLink?.attributes("href")).toContain(
       "prompt=Build+me+a+landing+page+site+for+",
     );
-    expect(agentLink?.attributes("href")).not.toContain("send=");
-    expect(manualLink?.attributes("href")).toContain("/create?new=1");
-    expect(manualLink?.attributes("href")).toContain("siteRole=organization");
+    expect(businessSiteLink?.attributes("href")).not.toContain("send=");
+
+    const profileOption = chooser.get("button.add-site-option");
+    expect(profileOption.text()).toContain("ME3 Profile");
+    expect(profileOption.text()).toContain(
+      "Your current plan’s ME3 Profile limit has been reached.",
+    );
+    expect(profileOption.attributes("disabled")).toBeDefined();
   });
 
-  it("hides Add site and explains when the quota is full", async () => {
+  it("keeps Add site visible and explains when the Business Site quota is full", async () => {
     const wrapper = await mountDashboard(
       [siteRecord("owner", "profile")],
       quotaResponse({
@@ -160,9 +181,30 @@ describe("Sites dashboard", () => {
       }),
     );
 
-    expect(wrapper.find('[aria-label="Add site"]').exists()).toBe(false);
-    expect(wrapper.text()).toContain(
-      "You have used all 1 additional site slots on your current plan.",
+    expect(wrapper.find('[aria-label="Add site"]').exists()).toBe(true);
+
+    await wrapper.get('[aria-label="Add site"]').trigger("click");
+
+    expect(wrapper.get('[role="dialog"]').text()).toContain(
+      "Your current plan’s Business Site limit has been reached.",
+    );
+  });
+
+  it("keeps both choices visible while site availability is unavailable", async () => {
+    const sites = useSitesStore();
+    sites.sites = [siteRecord("owner", "profile")];
+    sites.ensureSites = vi.fn(async () => undefined) as never;
+    sites.fetchSitePages = vi.fn(async () => []) as never;
+    sites.getSiteQuota = vi.fn(async () => null) as never;
+
+    const wrapper = mount(SitesPage, mountOptions(router));
+    await flushPromises();
+    await wrapper.get('[aria-label="Add site"]').trigger("click");
+
+    const chooser = wrapper.get('[role="dialog"]');
+    expect(chooser.findAll("button.add-site-option")).toHaveLength(2);
+    expect(chooser.text()).toContain(
+      "Site availability could not be loaded. Refresh and try again.",
     );
   });
 

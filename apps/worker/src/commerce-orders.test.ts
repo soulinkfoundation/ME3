@@ -71,6 +71,18 @@ function createEnv(
               (order) => order.site_id === values[0] && order.checkout_session_id === values[1],
             ) || null) as T | null;
           }
+          if (sql.includes("FROM commerce_settings")) {
+            return {
+              user_id: site.user_id,
+              encrypted_stripe_secret_key: "retained-direct-key",
+              stripe_key_hint: "***1234",
+              stripe_key_updated_at: "2026-08-31T10:00:00Z",
+              preferred_stripe_provider: "managed",
+              default_currency: "EUR",
+              created_at: "2026-08-31T10:00:00Z",
+              updated_at: "2026-08-31T10:00:00Z",
+            } as T;
+          }
           return null;
         },
         async run() {
@@ -129,7 +141,7 @@ function createEnv(
 }
 
 describe("managed commerce orders", () => {
-  it("keeps the order locally while delegating payment creation and verification", async () => {
+  it("keeps the direct key as fallback while delegating payment creation and verification", async () => {
     const { env, orders } = createEnv();
     const fetchMock = vi
       .fn()

@@ -5,7 +5,7 @@ import {
   type AgentChatRuntimeStreamEvent,
 } from "./agent-chat";
 import { createAgentSchedulingToolServices } from "./agent-scheduling";
-import { createMe3NetworkDirectoryToolServices } from "./network-directory";
+import { createPeopleSearchToolServices } from "./network-directory";
 import { createWebResearchToolServices } from "./web-research";
 
 const RECONSTRUCTABLE_STORAGE_KEYS = new Set([
@@ -81,7 +81,7 @@ export class Me3UserAgent {
         input,
         undefined,
         createAgentSchedulingToolServices(this.env, input.userId),
-        createMe3NetworkDirectoryToolServices(this.env),
+        createPeopleSearchToolServices(this.env, input.userId),
         createWebResearchToolServices(this.env, input.userId),
       );
       return Response.json(response, { status: response.ok ? 200 : 500 });
@@ -126,7 +126,7 @@ export class Me3UserAgent {
               input,
               { signal: request.signal, onEvent: forward },
               createAgentSchedulingToolServices(this.env, input.userId),
-              createMe3NetworkDirectoryToolServices(this.env),
+              createPeopleSearchToolServices(this.env, input.userId),
               createWebResearchToolServices(this.env, input.userId),
             );
             const completedResponse = response.performance

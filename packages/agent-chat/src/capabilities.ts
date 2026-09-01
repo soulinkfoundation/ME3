@@ -60,7 +60,7 @@ export const CORE_CHAT_CAPABILITIES = [
     pluginId: null,
     ownerFacingLabel: "Search the public web",
     summary:
-      "Search current public web sources and return grounded answers with source links.",
+      "Research current public-web information and return grounded answers with source links. Do not use this to find a person, provider, business, service, product, skill, or collaborator; use core_people_search for discovery.",
     category: "web",
     handler: {
       surface: "chat",
@@ -425,20 +425,20 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
-    id: "core.network.directory.search",
+    id: "core.people.search",
     owner: "core",
     pluginId: null,
-    ownerFacingLabel: "Search ME3 Network",
+    ownerFacingLabel: "Find people",
     summary:
-      "Search public ME3 Network profiles and offerings for people, services, or products that match the owner's need.",
+      "Primary discovery tool for finding a person, provider, business, service, product, skill, or collaborator across the owner's Soulink Links and public Soulink profiles. Prefer this over core_web_search for requests such as 'I need a parent coach' or 'do I know a developer?'.",
     category: "messaging",
     handler: {
       surface: "chat",
-      route: "core.network.directory.search",
+      route: "core.people.search",
     },
     sideEffect: "read_external",
     approvalMode: "none",
-    requiresSetup: ["me3.app"],
+    requiresSetup: [],
     inputSchema: {
       type: "object",
       required: ["query"],
@@ -463,13 +463,14 @@ export const CORE_CHAT_CAPABILITIES = [
       },
       additionalProperties: false,
     },
-    auditEventKind: "core_network_directory_searched",
+    auditEventKind: "core_people_searched",
     examples: {
       positive: [
-        "Find someone on the ME3 Network who can photograph an event.",
-        "Search ME3 for a product designer in Ireland.",
+        "Find me a parent coach.",
+        "Do I know a product designer in Ireland?",
+        "Who could photograph an event in Galway?",
       ],
-      negative: ["Find Sarah in my contacts."],
+      negative: ["Explain what a parent coach does."],
     },
     chat: {
       intentKind: "read_action",
@@ -477,16 +478,16 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
-    id: "core.network.scheduling.request",
+    id: "core.scheduling.request_profile",
     owner: "core",
     pluginId: null,
-    ownerFacingLabel: "Request time with a network profile",
+    ownerFacingLabel: "Request time with a public Soulink profile",
     summary:
-      "Send a free one-to-one meeting request to one exact public ME3 Network profile previously selected by its stable profile ID. This does not create a contact.",
+      "Send a free one-to-one meeting request to one exact public Soulink profile previously selected by its stable profile ID. This does not create a Link or contact.",
     category: "calendar",
     handler: {
       surface: "chat",
-      route: "core.network.scheduling.request",
+      route: "core.scheduling.request_profile",
     },
     sideEffect: "external_send",
     approvalMode: "approval_required",
@@ -497,7 +498,7 @@ export const CORE_CHAT_CAPABILITIES = [
       properties: {
         profileId: {
           type: "string",
-          description: "Stable profile ID copied exactly from one unambiguous ME3 Network search result.",
+          description: "Stable profile ID copied exactly from one unambiguous public Soulink profile result.",
         },
         durationMinutes: {
           type: "integer",
@@ -524,10 +525,10 @@ export const CORE_CHAT_CAPABILITIES = [
       },
       additionalProperties: false,
     },
-    auditEventKind: "core_network_scheduling_requested",
+    auditEventKind: "core_public_profile_scheduling_requested",
     examples: {
       positive: [
-        "Request a 30-minute meeting with the second ME3 Network result.",
+        "Request a 30-minute meeting with the second public profile result.",
         "Ask that selected profile to meet next week about the launch.",
       ],
       negative: [
@@ -967,7 +968,7 @@ export const CORE_CHAT_CAPABILITIES = [
         designPackId: {
           type: "string",
           description: "Optional compatible starter design-pack ID. Omit for the recommended design.",
-          enum: ["starter-event-01", "starter-service-01", "starter-waitlist-01"],
+          enum: ["starter-event-01", "starter-service-01", "starter-waitlist-01", "clinical-editorial-01"],
         },
         brief: {
           type: "string",
@@ -1056,7 +1057,7 @@ export const CORE_CHAT_CAPABILITIES = [
         designPackId: {
           type: "string",
           description: "Optional compatible replacement design-pack ID.",
-          enum: ["starter-event-01", "starter-service-01", "starter-waitlist-01"],
+          enum: ["starter-event-01", "starter-service-01", "starter-waitlist-01", "clinical-editorial-01"],
         },
         headline: { type: "string", description: "Optional replacement headline." },
         subheadline: { type: "string", description: "Optional replacement introduction." },

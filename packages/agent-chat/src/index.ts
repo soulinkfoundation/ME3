@@ -76,7 +76,7 @@ export {
 } from "@me3-core/plugin-mission-control";
 import {
   runCoreAgentToolTurn,
-  type CoreNetworkDirectoryToolServices,
+  type CorePeopleSearchToolServices,
   type CoreSchedulingToolServices,
   type CoreWebResearchToolServices,
 } from "./core-agent-runtime";
@@ -86,9 +86,9 @@ import type { AgentModelUsage } from "./tool-runtime";
 export {
   buildReminderActionCard,
   runCoreAgentToolTurn,
-  type CoreNetworkDirectoryOffering,
-  type CoreNetworkDirectoryResult,
-  type CoreNetworkDirectoryToolServices,
+  type CorePeopleSearchOffering,
+  type CorePeopleSearchResult,
+  type CorePeopleSearchToolServices,
   type CoreWebResearchToolServices,
   type CoreSchedulingContact,
   type CoreSchedulingOption,
@@ -379,6 +379,16 @@ export type AgentOwnerContentSourceReference = {
   sourceId: string;
 };
 
+export type AgentPeopleSearchReference = {
+  results: Array<{
+    position: number;
+    kind: "link" | "public_profile";
+    name: string;
+    contactName: string | null;
+    profileId: string | null;
+  }>;
+};
+
 export type AgentSandboxDispatchResponse = {
   ok: boolean;
   auditId: string | null;
@@ -417,6 +427,7 @@ export type AgentSandboxDispatchResponse = {
   performance?: AgentChatPerformanceMetrics | null;
   trace?: AgentChatTurnTrace | null;
   sourceReference?: AgentOwnerContentSourceReference | null;
+  peopleSearchReference?: AgentPeopleSearchReference | null;
   error?: string;
 };
 
@@ -757,6 +768,7 @@ type CoreChatToolTurnPlan = {
   recent: Array<{ role: "user" | "assistant"; content: string }>;
   sourceReference: AgentOwnerContentSourceReference | null;
   landingPageReference: AgentLandingPageReference | null;
+  peopleSearchReference: AgentPeopleSearchReference | null;
 };
 
 type AgentLandingPageReference = {
@@ -2106,7 +2118,7 @@ export async function dispatchAgentSandboxTurn(
   input: AgentSandboxDispatchInput,
   streamOptions?: AgentChatRuntimeStreamOptions,
   schedulingServices?: CoreSchedulingToolServices,
-  networkDirectoryServices?: CoreNetworkDirectoryToolServices,
+  peopleSearchServices?: CorePeopleSearchToolServices,
   webResearchServices?: CoreWebResearchToolServices,
 ): Promise<AgentSandboxDispatchResponse> {
   const dispatchStartedAt = performance.now();
@@ -2354,6 +2366,7 @@ export async function dispatchAgentSandboxTurn(
     buildCoreChatOrientationPrompt(toolPlan.decision, setupReadiness),
     contextFreeTurn ? null : toolPlan.sourceReference,
     contextFreeTurn ? null : toolPlan.landingPageReference,
+    contextFreeTurn ? null : toolPlan.peopleSearchReference,
   );
   let imageInputs: AgentChatImageInput[] = [];
   let imageInputError: string | null = null;
@@ -2422,7 +2435,7 @@ export async function dispatchAgentSandboxTurn(
               createAgentMailboxDraft(env, input.userId, draft, { idempotencyKey }),
           },
           schedulingServices,
-          networkDirectoryServices,
+          peopleSearchServices,
           webResearchServices,
           landingPageEnv: env,
           streamOptions,
@@ -3161,6 +3174,7 @@ async function loadCoreChatToolTurnPlan(
     recent: recent.messages,
     sourceReference: recent.sourceReference,
     landingPageReference: recent.landingPageReference,
+    peopleSearchReference: recent.peopleSearchReference,
     decision: buildCoreConversationDecision(input.messageText),
   };
 }
@@ -5069,6 +5083,7 @@ async function loadRecentMessages(
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   sourceReference: AgentOwnerContentSourceReference | null;
   landingPageReference: AgentLandingPageReference | null;
+  peopleSearchReference: AgentPeopleSearchReference | null;
 }> {
   try {
     const hasThread = typeof threadId === "string" && threadId.trim().length > 0;
@@ -5100,15 +5115,25 @@ async function loadRecentMessages(
       .map((message) => assistantLandingPageReferenceFromMetadata(message.metadata_json))
       .filter((reference): reference is AgentLandingPageReference => Boolean(reference))
       .at(-1) || null;
+    const peopleSearchReference = recent
+      .map((message) => assistantPeopleSearchReferenceFromMetadata(message.metadata_json))
+      .filter((reference): reference is AgentPeopleSearchReference => Boolean(reference))
+      .at(-1) || null;
     return {
       messages: recent.filter(
         (message) => !isProviderSetupFallbackMessage(message.content),
       ).map(({ role, content }) => ({ role, content })),
       sourceReference,
       landingPageReference,
+      peopleSearchReference,
     };
   } catch {
-    return { messages: [], sourceReference: null, landingPageReference: null };
+    return {
+      messages: [],
+      sourceReference: null,
+      landingPageReference: null,
+      peopleSearchReference: null,
+    };
   }
 }
 
@@ -5121,6 +5146,7 @@ function buildChatMessages(
   orientationPrompt: string | null,
   sourceReference: AgentOwnerContentSourceReference | null,
   landingPageReference: AgentLandingPageReference | null,
+  peopleSearchReference: AgentPeopleSearchReference | null,
 ): Array<{ role: "system" | "user" | "assistant"; content: string }> {
   const ownerName = owner?.name?.trim() || owner?.username?.trim() || "the owner";
   const assistantName = normalizeAssistantDisplayName(owner?.assistant_name);
@@ -5139,6 +5165,9 @@ function buildChatMessages(
       : null,
     landingPageReference
       ? `Private landing-page follow-up context: site=${landingPageReference.siteUsername}; pageId=${landingPageReference.pageId}. Use these exact values for revisions in this thread. Never show the internal page ID to the owner.`
+      : null,
+    peopleSearchReference?.results.length
+      ? `Private people-search follow-up context: ${JSON.stringify(peopleSearchReference.results)}. Resolve references such as first, second, last, or a displayed name against this exact list. Use contactName with core_scheduling_request for a Link and profileId with core_scheduling_request_profile for a public_profile. Never show profileId to the owner.`
       : null,
     "Answer helpfully and plainly. Do not claim external actions are complete unless a tool result says they are.",
     "The ME3 owner snapshot contains all owner data available without a tool call. Never claim Journal-entry content, task details, or email content from memory or prior assistant replies. Use the relevant read tool in this turn.",
@@ -5526,7 +5555,7 @@ function isCoreRuntimeToolSpecialist(specialist: string | null): boolean {
       specialist === "core.calendar.event.create" ||
       specialist === "core.bookings.lookup" ||
       specialist === "core.contacts.search" ||
-      specialist === "core.network.directory.search" ||
+      specialist === "core.people.search" ||
       specialist?.startsWith("core.scheduling.") ||
       specialist === "core.sites.blog_post.read" ||
       specialist?.startsWith("core.reminders.") ||
@@ -6451,13 +6480,16 @@ async function persistAssistantMessageAssetLinks(
 function assistantMessageMetadataForResponse(
   response: Pick<
     AgentSandboxDispatchResponse,
-    "actionCards" | "imageAction" | "sourceReference"
+    "actionCards" | "imageAction" | "sourceReference" | "peopleSearchReference"
   >,
 ): Record<string, unknown> | null {
   const metadata: Record<string, unknown> = {};
   if (response.actionCards?.length) metadata.actionCards = response.actionCards;
   if (response.imageAction) metadata.imageAction = response.imageAction;
   if (response.sourceReference) metadata.sourceReference = response.sourceReference;
+  if (response.peopleSearchReference?.results.length) {
+    metadata.peopleSearchReference = response.peopleSearchReference;
+  }
   return Object.keys(metadata).length ? metadata : null;
 }
 
@@ -6476,6 +6508,41 @@ function assistantSourceReferenceFromMetadata(
     /[\u0000-\u001f\u007f]/.test(sourceId)
   ) return null;
   return { sourceType, sourceId };
+}
+
+function assistantPeopleSearchReferenceFromMetadata(
+  metadataJson: string | null | undefined,
+): AgentPeopleSearchReference | null {
+  const reference = parseJsonRecord(metadataJson || null).peopleSearchReference;
+  if (!reference || typeof reference !== "object" || Array.isArray(reference)) return null;
+  const rawResults = (reference as Record<string, unknown>).results;
+  if (!Array.isArray(rawResults)) return null;
+  const results = rawResults.slice(0, 10).flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const result = value as Record<string, unknown>;
+    const position = Number(result.position);
+    const kind = result.kind;
+    const name = normalizeNullableText(result.name)?.slice(0, 160) || "";
+    const contactName = normalizeNullableText(result.contactName)?.slice(0, 160) || null;
+    const profileId = normalizeNullableText(result.profileId)?.slice(0, 200) || null;
+    if (
+      !Number.isInteger(position) ||
+      position < 1 ||
+      position > 10 ||
+      !name ||
+      (kind !== "link" && kind !== "public_profile") ||
+      (kind === "link" && !contactName) ||
+      (kind === "public_profile" && !profileId)
+    ) return [];
+    return [{
+      position,
+      kind: kind as "link" | "public_profile",
+      name,
+      contactName,
+      profileId,
+    }];
+  });
+  return results.length ? { results } : null;
 }
 
 function assistantLandingPageReferenceFromMetadata(

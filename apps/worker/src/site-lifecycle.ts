@@ -5,6 +5,7 @@ export const ADDITIONAL_SITE_LIMIT = 3;
 export const PERSISTENT_SITE_LIMIT = PROFILE_SITE_LIMIT + ADDITIONAL_SITE_LIMIT;
 
 const SITE_COLUMNS = `id, user_id, username, site_type, site_role, template_id,
+  profile_site_id,
   custom_domain, custom_domain_status, custom_domain_cf_id,
   created_at, updated_at, published_at`;
 
@@ -43,6 +44,8 @@ type SiteCountRow = {
 
 export type SiteLifecycleErrorCode =
   | "profile_limit"
+  | "profile_required"
+  | "profile_invalid"
   | "organization_limit"
   | "username_conflict"
   | "site_not_found"
@@ -110,14 +113,27 @@ export async function createPersistentSite(
     username: string;
     role: SiteRole;
     templateId: string | null;
+    profileSiteId?: string | null;
   },
 ): Promise<DbSite> {
+  const profileSiteId =
+    input.role === "organization"
+      ? await resolveProfileSiteId(env, input.ownerId, input.profileSiteId)
+      : null;
   try {
     await env.DB.prepare(
-      `INSERT INTO sites (id, user_id, username, site_type, site_role, template_id)
-       VALUES (?, ?, ?, 'profile', ?, ?)`,
+      `INSERT INTO sites
+         (id, user_id, username, site_type, site_role, template_id, profile_site_id)
+       VALUES (?, ?, ?, 'profile', ?, ?, ?)`,
     )
-      .bind(input.id, input.ownerId, input.username, input.role, input.templateId)
+      .bind(
+        input.id,
+        input.ownerId,
+        input.username,
+        input.role,
+        input.templateId,
+        profileSiteId,
+      )
       .run();
   } catch (error) {
     throw mapSiteWriteError(error);
@@ -128,6 +144,39 @@ export async function createPersistentSite(
     throw new Error("Created site could not be loaded");
   }
   return site;
+}
+
+export async function assignBusinessSiteProfile(
+  env: Env,
+  input: {
+    ownerId: string;
+    username: string;
+    profileSiteId: string;
+  },
+): Promise<DbSite> {
+  const site = await getSiteByUsername(env, input.ownerId, input.username);
+  if (!site || site.site_role !== "organization") {
+    throw new SiteLifecycleError("site_not_found", "Business Site not found");
+  }
+  const profileSiteId = await resolveProfileSiteId(
+    env,
+    input.ownerId,
+    input.profileSiteId,
+  );
+  try {
+    await env.DB.prepare(
+      `UPDATE sites
+       SET profile_site_id = ?, updated_at = datetime('now')
+       WHERE id = ? AND user_id = ? AND site_role = 'organization'`,
+    )
+      .bind(profileSiteId, site.id, input.ownerId)
+      .run();
+  } catch (error) {
+    throw mapSiteWriteError(error);
+  }
+  const updated = await getSiteById(env, site.id, input.ownerId);
+  if (!updated) throw new Error("Updated Business Site could not be loaded");
+  return updated;
 }
 
 export async function renameProfileSite(
@@ -270,6 +319,38 @@ async function getSiteByUsername(
   );
 }
 
+async function resolveProfileSiteId(
+  env: Env,
+  ownerId: string,
+  requestedId?: string | null,
+): Promise<string> {
+  const profile = requestedId
+    ? await env.DB.prepare(
+        `SELECT id FROM sites
+         WHERE id = ? AND user_id = ? AND site_role = 'profile'`,
+      )
+        .bind(requestedId, ownerId)
+        .first<{ id: string }>()
+    : await env.DB.prepare(
+        `SELECT id FROM sites
+         WHERE user_id = ? AND site_role = 'profile'
+         ORDER BY created_at ASC, id ASC
+         LIMIT 1`,
+      )
+        .bind(ownerId)
+        .first<{ id: string }>();
+
+  if (!profile) {
+    throw new SiteLifecycleError(
+      requestedId ? "profile_invalid" : "profile_required",
+      requestedId
+        ? "Choose a ME3 Profile owned by this account."
+        : "Create your ME3 Profile before creating a Business Site.",
+    );
+  }
+  return profile.id;
+}
+
 function buildRoleQuota(current: number, limit: number): SiteRoleQuota {
   const remaining = Math.max(0, limit - current);
   return {
@@ -352,6 +433,12 @@ function mapSiteWriteError(error: unknown): Error {
     return new SiteLifecycleError(
       "profile_limit",
       "This installation already has its ME3 Profile.",
+    );
+  }
+  if (message.includes("ME3_SITE_PROFILE_OWNERSHIP")) {
+    return new SiteLifecycleError(
+      "profile_invalid",
+      "Choose a ME3 Profile owned by this account.",
     );
   }
   if (message.includes("ME3_SITE_ORGANIZATION_LIMIT")) {

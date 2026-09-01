@@ -6,6 +6,7 @@ const INSTALL_SECRET = "ME3_CORE_INSTALL_ID";
 const TOKEN_SECRET = "ME3_CLOUD_CORE_TOKEN";
 const DEVICE_ID = /^[A-Za-z0-9._:-]{8,200}$/;
 const APNS_TOKEN = /^[0-9a-f]{64}$/;
+const FCM_TOKEN = /^[^\s\u0000-\u001f\u007f]{20,4096}$/;
 
 export class PushNotificationInputError extends Error {
   constructor(message: string, readonly status: 400 | 409 | 502) {
@@ -34,6 +35,7 @@ export type CalendarPushAlert = {
   itemId: string;
   occurrenceId: string;
   alertOffsetMinutes: number;
+  title: string;
 };
 
 export async function getPushNotificationDevice(
@@ -60,8 +62,16 @@ export async function registerPushNotificationDevice(
 ) {
   if (!isRecord(input)) throw new PushNotificationInputError("Invalid push device", 400);
   const deviceId = normalizeDeviceId(input.deviceId);
-  const token = typeof input.token === "string" ? input.token.trim().toLowerCase() : "";
-  if (!APNS_TOKEN.test(token)) throw new PushNotificationInputError("Invalid APNs token", 400);
+  const provider = input.provider === "fcm" ? "fcm" : "apns";
+  const platform = input.platform === "android" ? "android" : "ios";
+  const rawToken = typeof input.token === "string" ? input.token.trim() : "";
+  const token = provider === "apns" ? rawToken.toLowerCase() : rawToken;
+  if (
+    (provider === "apns" && (!APNS_TOKEN.test(token) || platform !== "ios")) ||
+    (provider === "fcm" && (!FCM_TOKEN.test(token) || platform !== "android"))
+  ) {
+    throw new PushNotificationInputError("Invalid push token", 400);
+  }
   const dailyBriefingEnabled = input.dailyBriefingEnabled !== false;
   const calendarNotifications = normalizeCalendarPushPreferences(input.calendarNotifications);
   await upsertLocalPushPreferences(env, userId, deviceId, {
@@ -73,6 +83,8 @@ export async function registerPushNotificationDevice(
     body: JSON.stringify({
       deviceId,
       token,
+      provider,
+      platform,
       environment: input.environment === "production" ? "production" : "sandbox",
       dailyBriefingEnabled,
       calendarNotifications,

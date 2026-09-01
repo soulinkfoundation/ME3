@@ -48,6 +48,7 @@ const isNestedSitesTool = computed(
     route.path.startsWith("/sites/") &&
     (route.path.endsWith("/build") ||
       route.path.includes("/landing-pages/") ||
+      route.path.endsWith("/business-site") ||
       route.path.includes("/pages/")),
 );
 
@@ -394,6 +395,10 @@ function wizardSiteQuery() {
 }
 
 function editSite() {
+  if (site.value?.site_role === "organization") {
+    router.push(`/sites/${username.value}/business-site`);
+    return;
+  }
   if (isAgentBuiltSite.value) {
     router.push({
       path: "/assistant",
@@ -882,13 +887,15 @@ Note: Opening index.html directly (file://) won't work due to browser security.
             @click="editSite"
           >
             <span class="action-icon">
-              <UiIcon :name="isAgentBuiltSite ? 'Sparkles' : 'Pencil'" :size="24" />
+              <UiIcon :name="site?.site_role === 'organization' ? 'LayoutGrid' : isAgentBuiltSite ? 'Sparkles' : 'Pencil'" :size="24" />
             </span>
             <div class="action-content">
-              <strong>{{ isAgentBuiltSite ? "Continue building" : "Edit Site" }}</strong>
+              <strong>{{ site?.site_role === "organization" ? "Manage Business Site" : isAgentBuiltSite ? "Continue building" : "Edit Site" }}</strong>
               <p>
                 {{
-                  isAgentBuiltSite
+                  site?.site_role === "organization"
+                    ? "Pages, navigation, SEO, profile ownership, and publishing"
+                    : isAgentBuiltSite
                     ? "Edit with ME3 in site builder"
                     : "Update your site using the wizard"
                 }}

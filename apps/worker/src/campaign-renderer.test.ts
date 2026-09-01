@@ -98,12 +98,14 @@ describe("campaign renderer", () => {
     });
 
     expect(first).toEqual(second);
-    expect(first.rendererVersion).toBe("me3.email-renderer.v1");
+    expect(first.rendererVersion).toBe("me3.email-renderer.v2");
     expect(first.html).toContain('role="presentation"');
     expect(first.html).toContain("The short preview");
     expect(first.html).toContain("A useful update");
     expect(first.html).toContain("{{unsubscribe_url}}");
+    expect(first.html).not.toContain("https://example.com/logo.png");
     expect(first.html).toContain('align="center"');
+    expect(first.text.startsWith("Example Studio")).toBe(false);
     expect(first.text).toContain("• One clear point");
     expect(first.text).toContain("Read more: https://example.com/story");
   });

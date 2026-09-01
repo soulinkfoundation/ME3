@@ -18,6 +18,7 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("core_runtime_migrations")).toBe(true);
     expect(db.columns.get("mission_tasks")?.has("pinned_at")).toBe(true);
     expect(db.columns.get("commerce_settings")?.has("default_currency")).toBe(true);
+    expect(db.columns.get("commerce_settings")?.has("preferred_stripe_provider")).toBe(true);
     expect(db.tables.has("ai_usage_events")).toBe(true);
     expect(db.tables.has("agent_turn_results")).toBe(true);
     expect(db.tables.has("agent_tool_executions")).toBe(true);
@@ -72,6 +73,7 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("drive_multipart_parts")).toBe(true);
     expect(db.tables.has("social_media_delivery_grants")).toBe(true);
     expect(db.columns.get("sites")?.has("site_role")).toBe(true);
+    expect(db.columns.get("sites")?.has("profile_site_id")).toBe(true);
     expect(
       db.statements.some(
         (sql) =>
@@ -184,6 +186,12 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.get("0044_site_branding")).toBe(
       "2026-08-27-site-branding-v1",
     );
+    expect(db.migrations.get("0045_commerce_stripe_provider")).toBe(
+      "2026-08-31-commerce-stripe-provider-v1",
+    );
+    expect(db.migrations.get("0046_business_site_profile_ownership")).toBe(
+      "2026-08-31-business-site-profile-ownership-v1",
+    );
     expect(
       db.statements.some(
         (sql) => sql.includes("UPDATE mission_tasks") && sql.includes("status = 'backlog'") &&
@@ -295,7 +303,10 @@ describe("Core runtime migrations", () => {
       ),
     ).toBe(false);
     expect(
-      db.statements.some((sql) => sql.includes("ALTER TABLE sites")),
+      db.statements.some(
+        (sql) =>
+          sql.includes("ALTER TABLE sites") && sql.includes("site_role"),
+      ),
     ).toBe(false);
   });
 
@@ -581,10 +592,13 @@ class RuntimeMigrationStatement {
     }
     if (this.sql.includes("ALTER TABLE commerce_settings")) {
       const columns = this.db.columns.get("commerce_settings");
-      if (columns?.has("default_currency")) {
-        throw new Error("duplicate column name: default_currency");
+      const column = this.sql.includes("preferred_stripe_provider")
+        ? "preferred_stripe_provider"
+        : "default_currency";
+      if (columns?.has(column)) {
+        throw new Error(`duplicate column name: ${column}`);
       }
-      columns?.add("default_currency");
+      columns?.add(column);
       return { success: true };
     }
     if (this.sql.includes("ALTER TABLE financial_entries")) {
@@ -610,8 +624,11 @@ class RuntimeMigrationStatement {
     }
     if (this.sql.includes("ALTER TABLE sites")) {
       const columns = this.db.columns.get("sites");
-      if (columns?.has("site_role")) throw new Error("duplicate column name: site_role");
-      columns?.add("site_role");
+      const column = this.sql.includes("profile_site_id")
+        ? "profile_site_id"
+        : "site_role";
+      if (columns?.has(column)) throw new Error(`duplicate column name: ${column}`);
+      columns?.add(column);
       return { success: true };
     }
     if (this.sql.includes("ALTER TABLE mailbox_messages")) {

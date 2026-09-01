@@ -425,6 +425,8 @@ CREATE TABLE commerce_settings (
   encrypted_stripe_secret_key TEXT,
   stripe_key_hint TEXT,
   stripe_key_updated_at TEXT,
+  preferred_stripe_provider TEXT NOT NULL DEFAULT 'auto'
+    CHECK (preferred_stripe_provider IN ('auto', 'direct', 'managed')),
   default_currency TEXT NOT NULL DEFAULT 'USD',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
