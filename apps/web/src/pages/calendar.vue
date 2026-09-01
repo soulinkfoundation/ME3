@@ -16,6 +16,7 @@ import CalendarMonthBoard from "../components/calendar/CalendarMonthBoard.vue";
 import CalendarWeekBoard from "../components/calendar/CalendarWeekBoard.vue";
 import CalendarEventPopover from "../components/calendar/CalendarEventPopover.vue";
 import CalendarQuickEventPopover from "../components/calendar/CalendarQuickEventPopover.vue";
+import { calendarEventEndOneHourAfter } from "../components/calendar/calendarEventForm";
 import AppDialog from "../components/AppDialog.vue";
 import Button from "../components/Button.vue";
 import PageLoading from "../components/PageLoading.vue";
@@ -811,15 +812,10 @@ function syncEventEndFromStart() {
     form.endDate = form.startDate;
     return;
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(form.startDate) || !/^\d{2}:\d{2}$/.test(form.startTime)) {
-    return;
-  }
-
-  const [year, month, day] = form.startDate.split("-").map(Number);
-  const [hour, minute] = form.startTime.split(":").map(Number);
-  const end = new Date(year, month - 1, day, hour + 1, minute, 0, 0);
-  form.endDate = dateInputFromDate(end);
-  form.endTime = `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+  const end = calendarEventEndOneHourAfter(form.startDate, form.startTime);
+  if (!end) return;
+  form.endDate = end.endDate;
+  form.endTime = end.endTime;
 }
 
 function dateInputFromIso(value: string, subtractDays = 0): string {
