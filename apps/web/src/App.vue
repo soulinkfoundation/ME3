@@ -6,6 +6,7 @@ import { api } from "./api";
 import AgentChatLauncher from "./components/AgentChatLauncher.vue";
 import AppSideNav from "./components/AppSideNav.vue";
 import SoulinkJoinPrompt from "./components/SoulinkJoinPrompt.vue";
+import { useMailboxRealtime } from "./composables/useMailboxRealtime";
 import { useAuthStore } from "./stores/auth";
 
 /** Set true to show the floating agent chat launcher on supported pages. */
@@ -13,6 +14,7 @@ const AGENT_LAUNCHER_UI_ENABLED = false;
 
 const route = useRoute();
 const auth = useAuthStore();
+useMailboxRealtime();
 const remoteApiHost = import.meta.env.DEV
   ? import.meta.env.VITE_REMOTE_API_HOST || ""
   : "";

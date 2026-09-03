@@ -68,6 +68,22 @@ export type ApiStreamEvent = {
   data: unknown
 }
 
+export type MailboxMessageReceivedEvent = {
+  type: 'mailbox.message_received'
+  mailboxId: string
+  messageId: string
+  receivedAt: string
+}
+
+export type MailboxEventSubscription = {
+  close(): void
+}
+
+export type MailboxEventHandlers = {
+  onMessageReceived(event: MailboxMessageReceivedEvent): void
+  onReconnect(): void
+}
+
 type ApiStreamRequestOptions = RequestInit & {
   onResponse?: (response: Response) => void
 }
@@ -223,6 +239,60 @@ function apiUrl(base: string, endpoint: string): string {
   return `${base.replace(/\/+$/, '')}/${endpoint.replace(/^\/+/, '')}`
 }
 
+function isMailboxMessageReceivedEvent(value: unknown): value is MailboxMessageReceivedEvent {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const event = value as Record<string, unknown>
+  return (
+    event.type === 'mailbox.message_received' &&
+    typeof event.mailboxId === 'string' &&
+    Boolean(event.mailboxId) &&
+    typeof event.messageId === 'string' &&
+    Boolean(event.messageId) &&
+    typeof event.receivedAt === 'string' &&
+    Boolean(event.receivedAt)
+  )
+}
+
+function subscribeMailboxEvents(handlers: MailboxEventHandlers): MailboxEventSubscription {
+  const source = new EventSource(apiUrl(API_BASE, '/mailbox/events'), {
+    withCredentials: true,
+  })
+  let opened = false
+  let disconnected = false
+
+  const handleOpen = () => {
+    if (opened || disconnected) handlers.onReconnect()
+    opened = true
+    disconnected = false
+  }
+  const handleError = () => {
+    disconnected = true
+  }
+  const handleMessageReceived = (rawEvent: Event) => {
+    const data = (() => {
+      try {
+        return JSON.parse((rawEvent as MessageEvent<string>).data)
+      } catch {
+        return null
+      }
+    })()
+    if (isMailboxMessageReceivedEvent(data)) handlers.onMessageReceived(data)
+  }
+
+  source.addEventListener('open', handleOpen)
+  source.addEventListener('error', handleError)
+  source.addEventListener('mailbox.message_received', handleMessageReceived)
+
+  return {
+    close() {
+      source.removeEventListener('open', handleOpen)
+      source.removeEventListener('error', handleError)
+      source.removeEventListener('mailbox.message_received', handleMessageReceived)
+      source.close()
+    },
+  }
+}
+
 export async function getUsernameAvailability(username: string): Promise<boolean> {
   const response = await fetch(
     apiUrl(
@@ -309,6 +379,8 @@ export const api = {
   },
 
   streamEvents,
+
+  subscribeMailboxEvents,
 
   put<T>(endpoint: string, body?: unknown): Promise<T> {
     return request<T>(endpoint, {

@@ -115,6 +115,81 @@ describe('api client', () => {
         })
       )
     })
+
+    it('keeps an authenticated mailbox event stream and reports reconnects', () => {
+      class FakeEventSource {
+        static instances: FakeEventSource[] = []
+        readonly listeners = new Map<string, Set<EventListener>>()
+        closed = false
+
+        constructor(
+          readonly url: string,
+          readonly options?: EventSourceInit
+        ) {
+          FakeEventSource.instances.push(this)
+        }
+
+        addEventListener(type: string, listener: EventListener) {
+          const listeners = this.listeners.get(type) || new Set<EventListener>()
+          listeners.add(listener)
+          this.listeners.set(type, listeners)
+        }
+
+        removeEventListener(type: string, listener: EventListener) {
+          this.listeners.get(type)?.delete(listener)
+        }
+
+        emit(type: string, event: Event) {
+          for (const listener of this.listeners.get(type) || []) listener(event)
+        }
+
+        close() {
+          this.closed = true
+        }
+      }
+      vi.stubGlobal('EventSource', FakeEventSource)
+      try {
+        const onMessageReceived = vi.fn()
+        const onReconnect = vi.fn()
+        const subscription = api.subscribeMailboxEvents({
+          onMessageReceived,
+          onReconnect,
+        })
+        const source = FakeEventSource.instances[0]!
+
+        expect(source.url).toBe('/api/mailbox/events')
+        expect(source.options).toEqual({ withCredentials: true })
+
+        source.emit('error', new Event('error'))
+        source.emit('open', new Event('open'))
+        expect(onReconnect).toHaveBeenCalledOnce()
+        source.emit(
+          'mailbox.message_received',
+          new MessageEvent('mailbox.message_received', {
+            data: JSON.stringify({
+              type: 'mailbox.message_received',
+              mailboxId: 'mailbox-1',
+              messageId: 'message-1',
+              receivedAt: '2026-09-03T09:00:00.000Z',
+            }),
+          })
+        )
+        expect(onMessageReceived).toHaveBeenCalledWith({
+          type: 'mailbox.message_received',
+          mailboxId: 'mailbox-1',
+          messageId: 'message-1',
+          receivedAt: '2026-09-03T09:00:00.000Z',
+        })
+
+        source.emit('open', new Event('open'))
+        expect(onReconnect).toHaveBeenCalledTimes(2)
+
+        subscription.close()
+        expect(source.closed).toBe(true)
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
   })
 
   describe('request methods', () => {

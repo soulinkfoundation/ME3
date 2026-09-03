@@ -46,11 +46,19 @@ beforeEach(() => {
 describe("managed email inbound contract", () => {
   it("accepts signed raw MIME durably and returns a stable duplicate", async () => {
     const db = new ManagedEmailTestDb();
+    const eventFetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const env = {
+      ...managedEnv(db),
+      ME3_USER_AGENT: {
+        idFromName: vi.fn(() => ({ owner: "owner" })),
+        get: vi.fn(() => ({ fetch: eventFetch })),
+      } as unknown as DurableObjectNamespace,
+    };
     stubJwks();
     const raw = rawEmail("Managed hello", "Stored once.");
     const first = await receiveManagedEmailInbound(
       await signedInboundRequest(raw),
-      managedEnv(db),
+      env,
     );
     const firstBody = (await first.json()) as Record<string, unknown>;
 
@@ -77,7 +85,7 @@ describe("managed email inbound contract", () => {
 
     const duplicate = await receiveManagedEmailInbound(
       await signedInboundRequest(raw),
-      managedEnv(db),
+      env,
     );
     const duplicateBody = (await duplicate.json()) as Record<string, unknown>;
     expect(duplicate.status).toBe(200);
@@ -87,6 +95,7 @@ describe("managed email inbound contract", () => {
       messageId: firstBody.messageId,
     });
     expect(db.mailboxMessages).toHaveLength(1);
+    expect(eventFetch).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a request-bound delivery ID reused for different content", async () => {

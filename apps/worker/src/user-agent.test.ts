@@ -15,6 +15,46 @@ beforeEach(() => {
 });
 
 describe("ME3 user agent streaming", () => {
+  it("delivers a safe mailbox invalidation to every connected owner session", async () => {
+    const agent = new Me3UserAgent(state(), {} as never, mocks.dispatch);
+    const subscribed = await agent.fetch(
+      new Request("https://agent.internal/events/mailbox/subscribe"),
+    );
+    const reader = subscribed.body!.getReader();
+    const secondSubscribed = await agent.fetch(
+      new Request("https://agent.internal/events/mailbox/subscribe"),
+    );
+    const secondReader = secondSubscribed.body!.getReader();
+    const decoder = new TextDecoder();
+
+    expect(decoder.decode((await reader.read()).value)).toContain(": connected");
+    expect(decoder.decode((await secondReader.read()).value)).toContain(": connected");
+
+    const event = {
+      type: "mailbox.message_received",
+      mailboxId: "mailbox-1",
+      messageId: "message-1",
+      receivedAt: "2026-09-03T09:00:00.000Z",
+    };
+    const published = await agent.fetch(
+      new Request("https://agent.internal/events/mailbox/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(event),
+      }),
+    );
+    const delivered = decoder.decode((await reader.read()).value);
+    const secondDelivered = decoder.decode((await secondReader.read()).value);
+
+    expect(published.status).toBe(204);
+    expect(delivered).toBe(
+      `event: mailbox.message_received\ndata: ${JSON.stringify(event)}\n\n`,
+    );
+    expect(secondDelivered).toBe(delivered);
+    await reader.cancel();
+    await secondReader.cancel();
+  });
+
   it("streams lifecycle events and one exact persisted final reply", async () => {
     mocks.dispatch.mockImplementation(async (_env, _storage, _input, options) => {
       await options.onEvent({ event: "status", data: { state: "model_started" } });

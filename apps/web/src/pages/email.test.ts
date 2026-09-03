@@ -4,6 +4,8 @@ import { defineComponent, h } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EmailPage from "./email.vue";
 import { api } from "../api";
+import { useAuthStore } from "../stores/auth";
+import { mailboxCacheScope, useMailboxCacheStore } from "../stores/mailbox";
 
 vi.mock("../api", () => ({
   API_BASE: "/api",
@@ -358,6 +360,32 @@ describe("EmailPage", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("No sent messages yet.");
+  });
+
+  it("refreshes the visible inbox after its owner-scoped cache is invalidated", async () => {
+    routeTab = "inbox";
+    useAuthStore().setSession({
+      id: "owner",
+      email: "owner@example.com",
+      name: "Owner",
+      username: "owner",
+      timezone: null,
+      locale: "en-US",
+      localeSource: "inferred",
+    });
+    mountEmailPage();
+    await flushPromises();
+    vi.mocked(api.get).mockClear();
+
+    useMailboxCacheStore().invalidateFolder(
+      mailboxCacheScope("owner"),
+      "inbox",
+    );
+    await flushPromises();
+
+    expect(api.get).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/mailbox\/threads\?.*folder=inbox/),
+    );
   });
 
   it("renders a cached folder immediately while revalidating it", async () => {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
 import { RouterView, useRoute, useRouter } from "vue-router";
@@ -3052,6 +3052,19 @@ onMounted(() => {
     void Promise.all([loadMailboxHealth(), loadFolderCounts(false)]);
   })();
 });
+
+watch(
+  () =>
+    mailboxCache.getFolderInvalidationVersion(
+      mailboxCacheScope(auth.user?.id),
+      "inbox",
+    ),
+  () => {
+    if (!isNestedEmailTool.value && activeTab.value === "inbox") {
+      void loadMessages();
+    }
+  },
+);
 
 onBeforeUnmount(() => {
   clearDeliveryStatusRefreshes();

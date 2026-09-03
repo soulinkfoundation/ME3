@@ -33,6 +33,8 @@ export type MailboxListCacheEntry<T> = {
   updatedAt: number;
 };
 
+export type MailboxInvalidationFolder = "inbox";
+
 function installationId(): string {
   return `${typeof window === "undefined" ? "server" : window.location.origin}${API_BASE}`;
 }
@@ -58,8 +60,10 @@ export const useMailboxCacheStore = defineStore("mailboxCache", () => {
     drafts: null,
   });
   const loadingFolderCounts = ref(false);
+  const folderInvalidationVersions = ref<Record<string, number>>({});
   let folderCountsLoadedAt = 0;
   let pendingFolderCounts: Promise<void> | null = null;
+  let queuedFolderCounts: Promise<void> | null = null;
 
   function getList<T>(
     scope: string,
@@ -86,8 +90,60 @@ export const useMailboxCacheStore = defineStore("mailboxCache", () => {
     };
   }
 
+  function folderInvalidationKey(
+    scope: string,
+    folder: MailboxInvalidationFolder,
+  ): string {
+    return JSON.stringify([scope, folder]);
+  }
+
+  function getFolderInvalidationVersion(
+    scope: string,
+    folder: MailboxInvalidationFolder,
+  ): number {
+    return folderInvalidationVersions.value[folderInvalidationKey(scope, folder)] || 0;
+  }
+
+  function invalidateFolder(
+    scope: string,
+    folder: MailboxInvalidationFolder,
+  ): void {
+    lists.value = Object.fromEntries(
+      Object.entries(lists.value).filter(([key]) => {
+        try {
+          const [cachedScope, request] = JSON.parse(key) as [
+            string,
+            MailboxListRequest,
+          ];
+          return cachedScope !== scope || request.folder !== folder;
+        } catch {
+          return true;
+        }
+      }),
+    );
+    const key = folderInvalidationKey(scope, folder);
+    folderInvalidationVersions.value = {
+      ...folderInvalidationVersions.value,
+      [key]: getFolderInvalidationVersion(scope, folder) + 1,
+    };
+  }
+
   async function loadFolderCounts(force = false): Promise<void> {
-    if (pendingFolderCounts) return pendingFolderCounts;
+    if (pendingFolderCounts) {
+      if (!force) return pendingFolderCounts;
+      if (!queuedFolderCounts) {
+        const activeLoad = pendingFolderCounts;
+        let queuedLoad: Promise<void>;
+        queuedLoad = activeLoad.then(() => {
+          if (queuedFolderCounts === queuedLoad) {
+            queuedFolderCounts = null;
+          }
+          return loadFolderCounts(true);
+        });
+        queuedFolderCounts = queuedLoad;
+      }
+      return queuedFolderCounts;
+    }
     if (
       !force &&
       folderCountsLoadedAt > 0 &&
@@ -145,6 +201,8 @@ export const useMailboxCacheStore = defineStore("mailboxCache", () => {
     loadingFolderCounts,
     getList,
     setList,
+    getFolderInvalidationVersion,
+    invalidateFolder,
     loadFolderCounts,
     setFolderCount,
   };

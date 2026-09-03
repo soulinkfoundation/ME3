@@ -45,6 +45,28 @@ describe("mailbox cache", () => {
     ]);
   });
 
+  it("invalidates only the requested owner's inbox cache", () => {
+    const cache = useMailboxCacheStore();
+    const ownerA = mailboxCacheScope("owner-a", "install-a");
+    const ownerB = mailboxCacheScope("owner-b", "install-a");
+    const archive = { ...inbox, folder: "archive" };
+    const searchedInbox = { ...inbox, search: "hello" };
+
+    cache.setList(ownerA, inbox, { messages: ["inbox-a"], total: 1 });
+    cache.setList(ownerA, searchedInbox, { messages: ["search-a"], total: 1 });
+    cache.setList(ownerA, archive, { messages: ["archive-a"], total: 1 });
+    cache.setList(ownerB, inbox, { messages: ["inbox-b"], total: 1 });
+
+    cache.invalidateFolder(ownerA, "inbox");
+
+    expect(cache.getList(ownerA, inbox)).toBeNull();
+    expect(cache.getList(ownerA, searchedInbox)).toBeNull();
+    expect(cache.getList<string>(ownerA, archive)?.messages).toEqual(["archive-a"]);
+    expect(cache.getList<string>(ownerB, inbox)?.messages).toEqual(["inbox-b"]);
+    expect(cache.getFolderInvalidationVersion(ownerA, "inbox")).toBe(1);
+    expect(cache.getFolderInvalidationVersion(ownerB, "inbox")).toBe(0);
+  });
+
   it("shares unread and draft counts and reuses a recent result", async () => {
     vi.mocked(api.get).mockImplementation(async (endpoint) => ({
       total: endpoint.includes("unread=1") ? 3 : 2,
@@ -62,4 +84,34 @@ describe("mailbox cache", () => {
     await mailbox.loadFolderCounts(true);
     expect(api.get).toHaveBeenCalledTimes(4);
   });
+
+  it("queues a forced count refresh behind an in-flight load", async () => {
+    const firstInbox = deferred<{ total: number }>();
+    const firstDrafts = deferred<{ total: number }>();
+    vi.mocked(api.get)
+      .mockImplementationOnce(() => firstInbox.promise)
+      .mockImplementationOnce(() => firstDrafts.promise)
+      .mockResolvedValue({ total: 3 });
+    const mailbox = useMailboxCacheStore();
+
+    const initial = mailbox.loadFolderCounts();
+    const forced = mailbox.loadFolderCounts(true);
+    expect(api.get).toHaveBeenCalledTimes(2);
+
+    firstInbox.resolve({ total: 1 });
+    firstDrafts.resolve({ total: 2 });
+    await initial;
+    await forced;
+
+    expect(api.get).toHaveBeenCalledTimes(4);
+    expect(mailbox.folderCounts).toEqual({ inbox: 3, drafts: 3 });
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}

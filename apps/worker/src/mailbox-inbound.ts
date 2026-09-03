@@ -1,5 +1,6 @@
 import type { AgentMailboxMessage } from "./agent-chat";
 import type { EmailProviderAttachment } from "./email-providers";
+import { publishMailboxMessageReceived } from "./mailbox-events";
 import { resolveMailboxThreadKey } from "./mailbox-threads";
 import { normalizeEmail } from "./sites";
 import type { DbMailboxAlias, Env } from "./types";
@@ -222,6 +223,13 @@ export async function deliverInboundEmail(
     } else {
       await messageStatement.run();
     }
+
+    await publishMailboxMessageReceived(env, {
+      ownerId: mailbox.user_id,
+      mailboxId: mailbox.id,
+      messageId: rowId,
+      receivedAt: now,
+    });
 
     if (
       options.allowNativeForwarding !== false &&

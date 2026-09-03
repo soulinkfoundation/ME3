@@ -33,6 +33,7 @@ import {
   sanitizeAttachmentFilename,
   type StoredMailboxAttachment,
 } from "../mailbox-inbound";
+import { subscribeToMailboxEvents } from "../mailbox-events";
 export {
   handleInboundEmail,
   type ForwardableEmailMessageLike,
@@ -199,6 +200,17 @@ export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
         configuredIdentity,
       }),
     );
+  });
+
+  app.get("/api/mailbox/events", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const response = await subscribeToMailboxEvents(c.env, ownerId);
+    if (!response) {
+      return c.json({ ok: false, error: "Mailbox events are unavailable" }, 503);
+    }
+    return response;
   });
 
   app.put("/api/mailbox", async (c) => {
